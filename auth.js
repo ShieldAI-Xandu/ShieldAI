@@ -10,7 +10,9 @@ import db from "./db.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "shieldai-test-secret-change-in-production";
 const TOKEN_EXPIRY = "7d";
-export const MAX_USERS = 3;
+// Account cap. Set high to effectively disable during the demo/build phase.
+// (Lower this later if you want to re-enforce a limit.)
+export const MAX_USERS = 9999;
 
 // The email that becomes admin. Set ADMIN_EMAIL in your .env file.
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
