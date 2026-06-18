@@ -9,6 +9,7 @@ import db from "./db.js";
 import { PIPELINE } from "./generators.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
+import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
 import {
   registerUser,
@@ -491,6 +492,130 @@ app.delete("/api/policies/:id", requireAuth, async (req, res) => {
   );
   if (db.data.policyDocs.length === before) {
     return res.status(404).json({ error: "Policy document not found" });
+  }
+  await db.write();
+  res.json({ ok: true, deleted: req.params.id });
+});
+
+// ─────────────────────────────────────────────────────────────
+//  TRAINING PROGRAM ROUTES
+// ─────────────────────────────────────────────────────────────
+
+// Expose the topic backbone + default schedule for the builder UI
+app.get("/api/training/catalog", requireAuth, (req, res) => {
+  res.json({ topics: TRAINING_TOPICS, managerTopics: MANAGER_TOPICS, schedule: DEFAULT_SCHEDULE });
+});
+
+// Generate a full, company-tailored curriculum (hybrid: fixed backbone + AI detail)
+app.post("/api/training/generate", requireAuth, async (req, res) => {
+  try {
+    const { companyContext, includeManagerTrack } = req.body || {};
+    const company = companyContext || {};
+    const companyText = `Company: ${company.name || "the business"}\nIndustry: ${company.industry || "general"}\nEmployees: ${company.employees || "small team"}`;
+
+    // Build the backbone we want the AI to tailor (don't let it invent the structure)
+    const backbone = DEFAULT_SCHEDULE.map(phase => ({
+      phase: phase.phase,
+      theme: phase.theme,
+      note: phase.note || null,
+      topics: phase.topicIds.map(id => {
+        const t = getTopic(id);
+        return { id: t.id, title: t.title, audience: t.audience, duration: t.duration, objectives: t.objectives, source: t.source };
+      }),
+    }));
+
+    const managerTrack = includeManagerTrack
+      ? MANAGER_TOPICS.map(t => ({ id: t.id, title: t.title, audience: t.audience, duration: t.duration, objectives: t.objectives, source: t.source }))
+      : [];
+
+    const system = `You are a cybersecurity awareness training designer for small businesses. You are given a FIXED curriculum backbone (CISA/NIST-aligned topics organized into a schedule). Your job is to TAILOR it to the specific company and enrich each topic — DO NOT change the topic list, schedule structure, or titles.
+
+For each topic, produce tailored content as JSON. Return ONLY valid JSON (no markdown, no trailing commas) in exactly this shape:
+{"overview":"2-3 sentence intro tailored to this company's industry and size","phases":[{"phase":"","theme":"","note":null,"modules":[{"id":"","title":"","audience":"","duration":"","objectives":["keep the provided objectives"],"tailoredIntro":"1-2 sentences on why this matters for THIS company","realWorldScenario":"a short, concrete scenario relevant to their industry","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}]}],"managerTrack":[{"id":"","title":"","audience":"","duration":"","objectives":[...],"tailoredIntro":"","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}],"deliveryTips":["3-4 practical tips for rolling this out in a small business"]}
+
+Rules: exactly 1 quiz question per module with exactly 4 options. Keep the objectives provided in the backbone. Tailor scenarios to the company's industry. Keep all text concise.`;
+
+    const userPrompt = `${companyText}\n\nFIXED BACKBONE (tailor each topic, keep structure):\n${JSON.stringify(backbone)}\n\n${includeManagerTrack ? `MANAGER TRACK to tailor:\n${JSON.stringify(managerTrack)}` : "No manager track requested."}`;
+
+    let curriculum;
+    try {
+      const text = await callClaudeText({
+        system,
+        messages: [{ role: "user", content: userPrompt }],
+        max_tokens: 6000,
+      });
+      curriculum = extractJson(text);
+    } catch (aiErr) {
+      // Fallback: build a usable curriculum from the backbone with generic quizzes
+      console.warn("Training AI failed, using backbone fallback:", aiErr.message);
+      curriculum = {
+        overview: `A CISA/NIST-aligned security awareness program tailored for ${company.name || "your business"}${company.industry ? ` in the ${company.industry} sector` : ""}. Delivered over three months with quarterly refreshers.`,
+        phases: backbone.map(ph => ({
+          phase: ph.phase, theme: ph.theme, note: ph.note,
+          modules: ph.topics.map(t => ({
+            id: t.id, title: t.title, audience: t.audience, duration: t.duration,
+            objectives: t.objectives,
+            tailoredIntro: `Essential for ${company.name || "your team"}: ${t.objectives[0].toLowerCase()}.`,
+            realWorldScenario: "An employee receives an unexpected request that looks legitimate but isn't — recognizing the warning signs prevents a costly mistake.",
+            quiz: [{ question: `What is the most important takeaway from "${t.title}"?`, options: [t.objectives[0], "Ignore it", "Forward to everyone", "Delete all email"], correct: 0 }],
+          })),
+        })),
+        managerTrack: managerTrack.map(t => ({
+          id: t.id, title: t.title, audience: t.audience, duration: t.duration,
+          objectives: t.objectives,
+          tailoredIntro: `Leadership responsibility: ${t.objectives[0].toLowerCase()}.`,
+          quiz: [{ question: `What is a manager's key role in "${t.title}"?`, options: [t.objectives[0], "Delegate entirely", "Avoid involvement", "Wait for an incident"], correct: 0 }],
+        })),
+        deliveryTips: [
+          "Keep sessions short (15-30 min) and schedule them during work hours.",
+          "Run a simulated phishing test after Month 1 to reinforce learning.",
+          "Track completion and follow up with anyone who misses a module.",
+          "Refresh quarterly and whenever a policy changes.",
+        ],
+      };
+    }
+
+    const record = {
+      id: randomUUID(),
+      userId: req.userId,
+      createdAt: new Date().toISOString(),
+      companyContext: company,
+      includeManagerTrack: !!includeManagerTrack,
+      curriculum,
+    };
+    db.data.trainingPrograms.push(record);
+    await db.write();
+    res.json(record);
+  } catch (err) {
+    console.error("Training generation error:", err.message);
+    res.status(500).json({ error: "Failed to generate training program" });
+  }
+});
+
+// List the user's saved training programs
+app.get("/api/training", requireAuth, (req, res) => {
+  const list = (db.data.trainingPrograms || [])
+    .filter(t => t.userId === req.userId)
+    .map(t => ({ id: t.id, createdAt: t.createdAt, companyContext: t.companyContext,
+      moduleCount: (t.curriculum?.phases || []).reduce((s, p) => s + (p.modules?.length || 0), 0) }));
+  res.json(list);
+});
+
+// Fetch one full training program
+app.get("/api/training/:id", requireAuth, (req, res) => {
+  const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Training program not found" });
+  res.json(record);
+});
+
+// Delete a training program
+app.delete("/api/training/:id", requireAuth, async (req, res) => {
+  const before = (db.data.trainingPrograms || []).length;
+  db.data.trainingPrograms = (db.data.trainingPrograms || []).filter(
+    t => !(t.id === req.params.id && t.userId === req.userId)
+  );
+  if (db.data.trainingPrograms.length === before) {
+    return res.status(404).json({ error: "Training program not found" });
   }
   await db.write();
   res.json({ ok: true, deleted: req.params.id });

@@ -14,6 +14,7 @@ const defaultData = {
   assessments: [],   // { id, userId, createdAt, data }
   programs: [],      // { id, userId, assessmentId, createdAt, status, sections: {...} }
   policyDocs: [],    // { id, userId, policyId, policyName, createdAt, companyContext, answers, content }
+  trainingPrograms: [], // { id, userId, createdAt, companyContext, curriculum: {...} }
 };
 
 const adapter = new JSONFile(file);
@@ -26,6 +27,7 @@ db.data.users ||= [];
 db.data.assessments ||= [];
 db.data.programs ||= [];
 db.data.policyDocs ||= [];
+db.data.trainingPrograms ||= [];
 await db.write();
 
 export default db;

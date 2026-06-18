@@ -1242,89 +1242,404 @@ function ToolsSection({ results }) {
   );
 }
 
-function TrainingSection({ results }) {
+function TrainingSection({ results, assessment }) {
   const [activeModule, setActiveModule] = useState(0);
   const prog = results?.training?.trainingProgram;
-  if (!prog) return <div style={{color:C.textSec,padding:20}}>Training program not loaded.</div>;
-  const mod = prog.modules?.[activeModule];
+
+  // Full curriculum builder state
+  const [saved, setSaved] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [includeManager, setIncludeManager] = useState(true);
+  const [curriculum, setCurriculum] = useState(null); // the open full program
+  const [openingId, setOpeningId] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function loadSaved() {
+    setLoadingSaved(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training`);
+      if (res.ok) {
+        const list = await res.json();
+        list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        setSaved(list);
+      }
+    } catch (e) { console.error(e); } finally { setLoadingSaved(false); }
+  }
+  useEffect(() => { loadSaved(); }, []);
+
+  async function buildProgram() {
+    setGenerating(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyContext: assessment?.company || null, includeManagerTrack: includeManager }),
+      });
+      if (!res.ok) throw new Error(`Generation failed: ${res.status}`);
+      const data = await res.json();
+      setCurriculum(data.curriculum);
+      loadSaved();
+    } catch (e) { setError(e.message); } finally { setGenerating(false); }
+  }
+
+  async function openProgram(id) {
+    setOpeningId(id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/${id}`);
+      if (!res.ok) throw new Error("Could not load program");
+      const data = await res.json();
+      setCurriculum(data.curriculum);
+    } catch (e) { setError(e.message); } finally { setOpeningId(null); }
+  }
+
+  async function deleteProgram(id) {
+    if (!window.confirm("Delete this training program?")) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/${id}`, { method: "DELETE" });
+      if (res.ok) { if (curriculum) setCurriculum(null); loadSaved(); }
+    } catch (e) { setError(e.message); }
+  }
+
+  // ── Viewing a full curriculum ──
+  if (curriculum) {
+    return <FullCurriculumView curriculum={curriculum} company={assessment?.company}
+      onBack={() => setCurriculum(null)}/>;
+  }
 
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-        <SectionLabel text="Security Awareness Training Program"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gpt4"/></div>
+      {/* ── Full Program Builder ── */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+        <SectionLabel text="Training Program Builder"/>
+        <span style={{fontSize:11,color:C.textMut,padding:"2px 10px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:20}}>CISA / NIST aligned</span>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14}}>
-        <div>
-          {(prog.modules||[]).map((m,i)=>(
-            <button key={i} onClick={()=>setActiveModule(i)}
-              style={{display:"block",width:"100%",padding:"10px 14px",marginBottom:6,
-                background:activeModule===i?`${C.accent}15`:C.surface,
-                border:`1px solid ${activeModule===i?C.accent:C.border}`,
-                borderRadius:8,color:activeModule===i?C.accent:C.textSec,
-                cursor:"pointer",textAlign:"left",fontSize:12}}>
-              <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
-              <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
-            </button>
-          ))}
-          {prog.phishingSimulation && (
-            <div style={{marginTop:10,padding:"10px 14px",background:`${C.amber}11`,
-              border:`1px solid ${C.amber}33`,borderRadius:8}}>
-              <div style={{color:C.amber,fontSize:12,fontWeight:600,marginBottom:4}}>
-                🎣 Phishing Simulation
-              </div>
-              <div style={{color:C.textSec,fontSize:11}}>
-                Frequency: {prog.phishingSimulation.frequency}
-              </div>
+      <p style={{color:C.textSec,fontSize:13,marginBottom:14,lineHeight:1.6}}>
+        Generate a complete, company-tailored security awareness curriculum — a 3-month
+        schedule of modules with objectives, real-world scenarios, and quizzes, built on
+        the CISA and NIST small-business frameworks.
+      </p>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,fontSize:13}}>{error}</div>
+      )}
+
+      <Card style={{marginBottom:20,padding:"18px 20px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{color:C.text,fontWeight:600,fontSize:14,marginBottom:4}}>
+              Build a full curriculum{assessment?.company?.name ? ` for ${assessment.company.name}` : ""}
             </div>
-          )}
+            <div style={{color:C.textMut,fontSize:12}}>
+              12 core modules across 3 months + quarterly refresher{includeManager ? " + manager track" : ""}.
+            </div>
+          </div>
+          <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",
+            color:C.textSec,fontSize:12}}>
+            <input type="checkbox" checked={includeManager}
+              onChange={e=>setIncludeManager(e.target.checked)} style={{cursor:"pointer"}}/>
+            Include manager / owner track
+          </label>
+          <button onClick={buildProgram} disabled={generating}
+            style={{padding:"10px 20px",background:generating?C.surface:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:generating?C.textMut:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+              cursor:generating?"wait":"pointer"}}>
+            {generating ? "Building curriculum…" : "✦ Generate Full Program"}
+          </button>
         </div>
-        {mod && (
-          <Card>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
-              <div style={{display:"flex",gap:6}}>
-                <Badge label={mod.duration} color={C.accent}/>
-                <Badge label={mod.audience} color={C.purple}/>
-              </div>
-            </div>
-            <SectionLabel text="Topics Covered"/>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
-              {(mod.topics||[]).map((t,i)=>(
-                <span key={i} style={{padding:"4px 12px",background:C.surface,
-                  border:`1px solid ${C.border}`,borderRadius:20,
-                  color:C.textSec,fontSize:12}}>{t}</span>
+        {generating && (
+          <div style={{marginTop:12,fontSize:12,color:C.textMut}}>
+            Tailoring CISA/NIST modules to {assessment?.company?.industry || "your business"} — this takes a moment.
+          </div>
+        )}
+      </Card>
+
+      {/* Saved programs */}
+      {loadingSaved ? <Spinner/> : saved.length > 0 && (
+        <div style={{marginBottom:24}}>
+          <SectionLabel text="Saved Training Programs"/>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:10}}>
+            {saved.map(s=>(
+              <Card key={s.id} style={{padding:"13px 16px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:14}}>
+                  <span style={{fontSize:18}}>🎓</span>
+                  <div style={{flex:1}}>
+                    <div style={{color:C.text,fontWeight:600,fontSize:14}}>
+                      {s.companyContext?.name || "Training Program"}
+                    </div>
+                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
+                      {s.moduleCount} modules · {new Date(s.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <button onClick={()=>openProgram(s.id)} disabled={openingId===s.id}
+                    style={{padding:"7px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                      color:C.bg,border:"none",borderRadius:7,fontSize:12,fontWeight:700,
+                      cursor:openingId===s.id?"wait":"pointer"}}>
+                    {openingId===s.id?"Opening…":"View"}
+                  </button>
+                  <button onClick={()=>deleteProgram(s.id)}
+                    style={{padding:"7px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
+                      borderRadius:7,color:C.red,fontSize:12,cursor:"pointer"}}>Delete</button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Auto-generated preview (from the program pipeline) ── */}
+      {prog && (
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,marginTop:8}}>
+            <SectionLabel text="Quick Preview (from your assessment)"/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14}}>
+            <div>
+              {(prog.modules||[]).map((m,i)=>(
+                <button key={i} onClick={()=>setActiveModule(i)}
+                  style={{display:"block",width:"100%",padding:"10px 14px",marginBottom:6,
+                    background:activeModule===i?`${C.accent}15`:C.surface,
+                    border:`1px solid ${activeModule===i?C.accent:C.border}`,
+                    borderRadius:8,color:activeModule===i?C.accent:C.textSec,
+                    cursor:"pointer",textAlign:"left",fontSize:12}}>
+                  <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
+                  <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+                </button>
               ))}
             </div>
-            <SectionLabel text="Key Takeaways"/>
-            {(mod.keyTakeaways||[]).map((t,i)=>(
+            {prog.modules?.[activeModule] && (() => {
+              const mod = prog.modules[activeModule];
+              return (
+                <Card>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
+                    <div style={{display:"flex",gap:6}}>
+                      <Badge label={mod.duration} color={C.accent}/>
+                      <Badge label={mod.audience} color={C.purple}/>
+                    </div>
+                  </div>
+                  {(mod.keyTakeaways||[]).map((t,i)=>(
+                    <div key={i} style={{display:"flex",gap:10,marginBottom:8}}>
+                      <span style={{color:C.green,fontSize:14}}>✓</span>
+                      <span style={{color:C.textSec,fontSize:13}}>{t}</span>
+                    </div>
+                  ))}
+                </Card>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Full curriculum viewer
+function FullCurriculumView({ curriculum, company, onBack }) {
+  const [openPhase, setOpenPhase] = useState(0);
+  const [openModule, setOpenModule] = useState(0);
+
+  function downloadCurriculum() {
+    let html = `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>Security Awareness Training Program</title>
+<style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1a1a1a;line-height:1.5}h1{font-size:20pt;color:#0b3d91}h2{font-size:14pt;color:#0b3d91;border-bottom:1px solid #ccc;padding-bottom:3pt;margin-top:16pt}h3{font-size:12pt;margin-top:10pt}.meta{color:#555;font-size:10pt}.obj{margin:2pt 0}</style></head><body>`;
+    html += `<h1>Security Awareness Training Program</h1>`;
+    html += `<p class="meta">${company?.name || "Your Business"}${company?.industry ? " · " + company.industry : ""} · Generated ${new Date().toLocaleDateString()}</p>`;
+    html += `<p>${curriculum.overview || ""}</p>`;
+    (curriculum.phases || []).forEach(ph => {
+      html += `<h2>${ph.phase}: ${ph.theme}</h2>`;
+      if (ph.note) html += `<p class="meta">${ph.note}</p>`;
+      (ph.modules || []).forEach(m => {
+        html += `<h3>${m.title}</h3><p class="meta">${m.duration} · ${m.audience}</p>`;
+        if (m.tailoredIntro) html += `<p>${m.tailoredIntro}</p>`;
+        if (m.objectives?.length) { html += `<p><b>Objectives:</b></p><ul>`; m.objectives.forEach(o=>html+=`<li>${o}</li>`); html += `</ul>`; }
+        if (m.realWorldScenario) html += `<p><b>Scenario:</b> ${m.realWorldScenario}</p>`;
+        if (m.quiz?.[0]) {
+          html += `<p><b>Knowledge check:</b> ${m.quiz[0].question}</p><ul>`;
+          m.quiz[0].options.forEach((o,i)=>html+=`<li>${String.fromCharCode(65+i)}. ${o}${i===m.quiz[0].correct?" ✓":""}</li>`);
+          html += `</ul>`;
+        }
+      });
+    });
+    if (curriculum.managerTrack?.length) {
+      html += `<h2>Manager / Owner Track</h2>`;
+      curriculum.managerTrack.forEach(m => {
+        html += `<h3>${m.title}</h3><p class="meta">${m.duration} · ${m.audience}</p>`;
+        if (m.tailoredIntro) html += `<p>${m.tailoredIntro}</p>`;
+        if (m.objectives?.length) { html += `<ul>`; m.objectives.forEach(o=>html+=`<li>${o}</li>`); html += `</ul>`; }
+      });
+    }
+    if (curriculum.deliveryTips?.length) {
+      html += `<h2>Delivery Tips</h2><ul>`; curriculum.deliveryTips.forEach(t=>html+=`<li>${t}</li>`); html += `</ul>`;
+    }
+    html += `</body></html>`;
+    const blob = new Blob([html], { type: "application/msword" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `Training_Program_${(company?.name||"Company").replace(/\s+/g,"_")}.doc`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+  const phase = curriculum.phases?.[openPhase];
+  const mod = phase?.modules?.[openModule];
+
+  return (
+    <div>
+      <button onClick={onBack} style={{marginBottom:14,padding:"7px 14px",background:C.surface,
+        border:`1px solid ${C.border}`,borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+        ← Back to Training
+      </button>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+        <SectionLabel text="Security Awareness Training Program"/>
+        <button onClick={downloadCurriculum} style={{marginLeft:"auto",padding:"7px 16px",
+          background:`${C.accent}15`,border:`1px solid ${C.accent}33`,borderRadius:7,
+          color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>⬇ Download Word</button>
+      </div>
+      {curriculum.overview && (
+        <Card style={{marginBottom:16,padding:"16px 18px"}}>
+          <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{curriculum.overview}</p>
+        </Card>
+      )}
+
+      {/* Phase tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        {(curriculum.phases||[]).map((ph,i)=>(
+          <button key={i} onClick={()=>{setOpenPhase(i);setOpenModule(0);}}
+            style={{padding:"8px 16px",background:openPhase===i?`${C.accent}22`:C.surface,
+              border:`1px solid ${openPhase===i?C.accent:C.border}`,borderRadius:8,
+              color:openPhase===i?C.accent:C.textSec,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            <div>{ph.phase}</div>
+            <div style={{fontSize:10,color:C.textMut,fontWeight:400}}>{ph.theme}</div>
+          </button>
+        ))}
+        {curriculum.managerTrack?.length > 0 && (
+          <button onClick={()=>{setOpenPhase("mgr");setOpenModule(0);}}
+            style={{padding:"8px 16px",background:openPhase==="mgr"?`${C.purple}22`:C.surface,
+              border:`1px solid ${openPhase==="mgr"?C.purple:C.border}`,borderRadius:8,
+              color:openPhase==="mgr"?C.purple:C.textSec,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            <div>Manager Track</div>
+            <div style={{fontSize:10,color:C.textMut,fontWeight:400}}>Owners & managers</div>
+          </button>
+        )}
+      </div>
+
+      {openPhase === "mgr" ? (
+        <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14}}>
+          <div>
+            {curriculum.managerTrack.map((m,i)=>(
+              <button key={i} onClick={()=>setOpenModule(i)}
+                style={{display:"block",width:"100%",padding:"10px 14px",marginBottom:6,
+                  background:openModule===i?`${C.purple}15`:C.surface,
+                  border:`1px solid ${openModule===i?C.purple:C.border}`,borderRadius:8,
+                  color:openModule===i?C.purple:C.textSec,cursor:"pointer",textAlign:"left",fontSize:12}}>
+                <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
+                <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+              </button>
+            ))}
+          </div>
+          <ModuleCard mod={curriculum.managerTrack[openModule]} accent={C.purple}/>
+        </div>
+      ) : (
+        <>
+          {phase?.note && (
+            <div style={{marginBottom:12,padding:"10px 14px",background:`${C.amber}11`,
+              border:`1px solid ${C.amber}33`,borderRadius:8,color:C.textSec,fontSize:12}}>
+              💡 {phase.note}
+            </div>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14}}>
+            <div>
+              {(phase?.modules||[]).map((m,i)=>(
+                <button key={i} onClick={()=>setOpenModule(i)}
+                  style={{display:"block",width:"100%",padding:"10px 14px",marginBottom:6,
+                    background:openModule===i?`${C.accent}15`:C.surface,
+                    border:`1px solid ${openModule===i?C.accent:C.border}`,borderRadius:8,
+                    color:openModule===i?C.accent:C.textSec,cursor:"pointer",textAlign:"left",fontSize:12}}>
+                  <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
+                  <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+                </button>
+              ))}
+            </div>
+            <ModuleCard mod={mod} accent={C.accent}/>
+          </div>
+        </>
+      )}
+
+      {curriculum.deliveryTips?.length > 0 && (
+        <div style={{marginTop:20}}>
+          <SectionLabel text="Delivery Tips"/>
+          <Card style={{padding:"14px 18px",marginTop:8}}>
+            {curriculum.deliveryTips.map((t,i)=>(
               <div key={i} style={{display:"flex",gap:10,marginBottom:8}}>
-                <span style={{color:C.green,fontSize:14}}>✓</span>
+                <span style={{color:C.accent,fontSize:14}}>→</span>
                 <span style={{color:C.textSec,fontSize:13}}>{t}</span>
               </div>
             ))}
-            {mod.quiz?.length > 0 && (
-              <div style={{marginTop:14}}>
-                <SectionLabel text="Sample Quiz Question"/>
-                <div style={{padding:"14px",background:C.surface,borderRadius:8}}>
-                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
-                    {mod.quiz[0].question}
-                  </div>
-                  {mod.quiz[0].options.map((opt,j)=>(
-                    <div key={j} style={{padding:"7px 12px",marginBottom:5,borderRadius:6,
-                      background:j===mod.quiz[0].correct?`${C.green}22`:C.card,
-                      border:`1px solid ${j===mod.quiz[0].correct?C.green:C.border}`,
-                      color:j===mod.quiz[0].correct?C.green:C.textSec,fontSize:12}}>
-                      {String.fromCharCode(65+j)}. {opt}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </Card>
-        )}
-      </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// A single training module card (shared by phase + manager views)
+function ModuleCard({ mod, accent }) {
+  const [showAnswer, setShowAnswer] = useState(false);
+  useEffect(() => { setShowAnswer(false); }, [mod]);
+  if (!mod) return <Card><div style={{color:C.textSec,fontSize:13}}>Select a module.</div></Card>;
+  return (
+    <Card>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
+        <div style={{display:"flex",gap:6}}>
+          <Badge label={mod.duration} color={accent}/>
+          <Badge label={mod.audience} color={C.purple}/>
+        </div>
+      </div>
+      {mod.tailoredIntro && (
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{mod.tailoredIntro}</p>
+      )}
+      {mod.objectives?.length > 0 && (
+        <>
+          <SectionLabel text="Learning Objectives"/>
+          <div style={{marginBottom:14,marginTop:6}}>
+            {mod.objectives.map((o,i)=>(
+              <div key={i} style={{display:"flex",gap:10,marginBottom:7}}>
+                <span style={{color:C.green,fontSize:14}}>✓</span>
+                <span style={{color:C.textSec,fontSize:13}}>{o}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {mod.realWorldScenario && (
+        <div style={{marginBottom:14,padding:"12px 14px",background:C.surface,borderRadius:8,
+          borderLeft:`3px solid ${accent}`}}>
+          <div style={{color:accent,fontSize:11,fontWeight:700,marginBottom:5,letterSpacing:0.5}}>REAL-WORLD SCENARIO</div>
+          <div style={{color:C.textSec,fontSize:13,lineHeight:1.6}}>{mod.realWorldScenario}</div>
+        </div>
+      )}
+      {mod.quiz?.[0] && (
+        <div>
+          <SectionLabel text="Knowledge Check"/>
+          <div style={{padding:"14px",background:C.surface,borderRadius:8,marginTop:6}}>
+            <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>{mod.quiz[0].question}</div>
+            {mod.quiz[0].options.map((opt,j)=>(
+              <div key={j} onClick={()=>setShowAnswer(true)}
+                style={{padding:"8px 12px",marginBottom:5,borderRadius:6,cursor:"pointer",
+                  background:showAnswer&&j===mod.quiz[0].correct?`${C.green}22`:C.card,
+                  border:`1px solid ${showAnswer&&j===mod.quiz[0].correct?C.green:C.border}`,
+                  color:showAnswer&&j===mod.quiz[0].correct?C.green:C.textSec,fontSize:12}}>
+                {String.fromCharCode(65+j)}. {opt}
+                {showAnswer&&j===mod.quiz[0].correct?"  ✓":""}
+              </div>
+            ))}
+            {!showAnswer && <div style={{color:C.textMut,fontSize:11,marginTop:6}}>Click an option to reveal the answer.</div>}
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -2010,7 +2325,7 @@ function Dashboard({ assessment, results, onReset }) {
     compliance: <ComplianceSection results={results}/>,
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
-    training:   <TrainingSection results={results}/>,
+    training:   <TrainingSection results={results} assessment={assessment}/>,
     report:     <ExecReportSection assessment={assessment} results={results}/>,
     library:    <PolicyLibrarySection assessment={assessment}/>,
   };
