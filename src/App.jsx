@@ -1252,6 +1252,7 @@ function TrainingSection({ results, assessment }) {
   const [generating, setGenerating] = useState(false);
   const [includeManager, setIncludeManager] = useState(true);
   const [curriculum, setCurriculum] = useState(null); // the open full program
+  const [currentProgramId, setCurrentProgramId] = useState(null);
   const [openingId, setOpeningId] = useState(null);
   const [error, setError] = useState(null);
 
@@ -1279,6 +1280,7 @@ function TrainingSection({ results, assessment }) {
       if (!res.ok) throw new Error(`Generation failed: ${res.status}`);
       const data = await res.json();
       setCurriculum(data.curriculum);
+      setCurrentProgramId(data.id);
       loadSaved();
     } catch (e) { setError(e.message); } finally { setGenerating(false); }
   }
@@ -1290,6 +1292,7 @@ function TrainingSection({ results, assessment }) {
       if (!res.ok) throw new Error("Could not load program");
       const data = await res.json();
       setCurriculum(data.curriculum);
+      setCurrentProgramId(data.id);
     } catch (e) { setError(e.message); } finally { setOpeningId(null); }
   }
 
@@ -1304,7 +1307,7 @@ function TrainingSection({ results, assessment }) {
   // ── Viewing a full curriculum ──
   if (curriculum) {
     return <FullCurriculumView curriculum={curriculum} company={assessment?.company}
-      onBack={() => setCurriculum(null)}/>;
+      programId={currentProgramId} onBack={() => setCurriculum(null)}/>;
   }
 
   return (
@@ -1437,7 +1440,7 @@ function TrainingSection({ results, assessment }) {
 }
 
 // Full curriculum viewer
-function FullCurriculumView({ curriculum, company, onBack }) {
+function FullCurriculumView({ curriculum, company, programId, onBack }) {
   const [openPhase, setOpenPhase] = useState(0);
   const [openModule, setOpenModule] = useState(0);
 
@@ -1538,7 +1541,8 @@ function FullCurriculumView({ curriculum, company, onBack }) {
               </button>
             ))}
           </div>
-          <ModuleCard mod={curriculum.managerTrack[openModule]} accent={C.purple}/>
+          <ModuleCard mod={curriculum.managerTrack[openModule]} accent={C.purple}
+            programId={programId} phaseIndex="mgr" moduleIndex={openModule}/>
         </div>
       ) : (
         <>
@@ -1561,7 +1565,8 @@ function FullCurriculumView({ curriculum, company, onBack }) {
                 </button>
               ))}
             </div>
-            <ModuleCard mod={mod} accent={C.accent}/>
+            <ModuleCard mod={mod} accent={C.accent}
+              programId={programId} phaseIndex={openPhase} moduleIndex={openModule}/>
           </div>
         </>
       )}
@@ -1584,10 +1589,38 @@ function FullCurriculumView({ curriculum, company, onBack }) {
 }
 
 // A single training module card (shared by phase + manager views)
-function ModuleCard({ mod, accent }) {
+function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
   const [showAnswer, setShowAnswer] = useState(false);
-  useEffect(() => { setShowAnswer(false); }, [mod]);
+  const [content, setContent] = useState(null);   // { slides, fullQuiz }
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [mode, setMode] = useState(null);          // null | "slides" | "quiz"
+
+  useEffect(() => {
+    setShowAnswer(false);
+    // pick up cached content already attached to the module
+    setContent(mod && (mod.slides || mod.fullQuiz) ? { slides: mod.slides, fullQuiz: mod.fullQuiz } : null);
+    setMode(null); setErr(null);
+  }, [mod]);
+
   if (!mod) return <Card><div style={{color:C.textSec,fontSize:13}}>Select a module.</div></Card>;
+
+  async function generateContent(targetMode) {
+    if (content?.slides && content?.fullQuiz) { setMode(targetMode); return; }
+    setLoading(true); setErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/module-content`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ programId, phaseIndex, moduleIndex }),
+      });
+      if (!res.ok) throw new Error("Could not generate content");
+      const data = await res.json();
+      setContent({ slides: data.slides, fullQuiz: data.fullQuiz });
+      setMode(targetMode);
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }
+
   return (
     <Card>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -1597,49 +1630,226 @@ function ModuleCard({ mod, accent }) {
           <Badge label={mod.audience} color={C.purple}/>
         </div>
       </div>
-      {mod.tailoredIntro && (
-        <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{mod.tailoredIntro}</p>
+
+      {/* Action buttons */}
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        <button onClick={()=>mode==="slides"?setMode(null):generateContent("slides")} disabled={loading}
+          style={{padding:"7px 14px",background:mode==="slides"?accent:`${accent}15`,
+            color:mode==="slides"?C.bg:accent,border:`1px solid ${accent}44`,borderRadius:7,
+            fontSize:12,fontWeight:600,cursor:loading?"wait":"pointer"}}>
+          🖥 {content?.slides ? "View Slides" : "Generate Slides"}
+        </button>
+        <button onClick={()=>mode==="quiz"?setMode(null):generateContent("quiz")} disabled={loading}
+          style={{padding:"7px 14px",background:mode==="quiz"?C.purple:`${C.purple}15`,
+            color:mode==="quiz"?C.bg:C.purple,border:`1px solid ${C.purple}44`,borderRadius:7,
+            fontSize:12,fontWeight:600,cursor:loading?"wait":"pointer"}}>
+          📝 {content?.fullQuiz ? "Take Quiz" : "Generate Quiz"}
+        </button>
+        {loading && <span style={{fontSize:12,color:C.textMut,alignSelf:"center"}}>Generating…</span>}
+      </div>
+      {err && <div style={{marginBottom:12,color:C.red,fontSize:12}}>{err}</div>}
+
+      {/* Slides viewer */}
+      {mode==="slides" && content?.slides && (
+        <SlideViewer slides={content.slides} title={mod.title} accent={accent}/>
       )}
-      {mod.objectives?.length > 0 && (
+
+      {/* Interactive quiz */}
+      {mode==="quiz" && content?.fullQuiz && (
+        <QuizRunner questions={content.fullQuiz} accent={C.purple}/>
+      )}
+
+      {/* Default detail view (when not in slides/quiz mode) */}
+      {!mode && (
         <>
-          <SectionLabel text="Learning Objectives"/>
-          <div style={{marginBottom:14,marginTop:6}}>
-            {mod.objectives.map((o,i)=>(
-              <div key={i} style={{display:"flex",gap:10,marginBottom:7}}>
-                <span style={{color:C.green,fontSize:14}}>✓</span>
-                <span style={{color:C.textSec,fontSize:13}}>{o}</span>
+          {mod.tailoredIntro && (
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{mod.tailoredIntro}</p>
+          )}
+          {mod.objectives?.length > 0 && (
+            <>
+              <SectionLabel text="Learning Objectives"/>
+              <div style={{marginBottom:14,marginTop:6}}>
+                {mod.objectives.map((o,i)=>(
+                  <div key={i} style={{display:"flex",gap:10,marginBottom:7}}>
+                    <span style={{color:C.green,fontSize:14}}>✓</span>
+                    <span style={{color:C.textSec,fontSize:13}}>{o}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
+          {mod.realWorldScenario && (
+            <div style={{marginBottom:14,padding:"12px 14px",background:C.surface,borderRadius:8,
+              borderLeft:`3px solid ${accent}`}}>
+              <div style={{color:accent,fontSize:11,fontWeight:700,marginBottom:5,letterSpacing:0.5}}>REAL-WORLD SCENARIO</div>
+              <div style={{color:C.textSec,fontSize:13,lineHeight:1.6}}>{mod.realWorldScenario}</div>
+            </div>
+          )}
+          {mod.quiz?.[0] && (
+            <div>
+              <SectionLabel text="Knowledge Check"/>
+              <div style={{padding:"14px",background:C.surface,borderRadius:8,marginTop:6}}>
+                <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>{mod.quiz[0].question}</div>
+                {mod.quiz[0].options.map((opt,j)=>(
+                  <div key={j} onClick={()=>setShowAnswer(true)}
+                    style={{padding:"8px 12px",marginBottom:5,borderRadius:6,cursor:"pointer",
+                      background:showAnswer&&j===mod.quiz[0].correct?`${C.green}22`:C.card,
+                      border:`1px solid ${showAnswer&&j===mod.quiz[0].correct?C.green:C.border}`,
+                      color:showAnswer&&j===mod.quiz[0].correct?C.green:C.textSec,fontSize:12}}>
+                    {String.fromCharCode(65+j)}. {opt}
+                    {showAnswer&&j===mod.quiz[0].correct?"  ✓":""}
+                  </div>
+                ))}
+                {!showAnswer && <div style={{color:C.textMut,fontSize:11,marginTop:6}}>Click an option to reveal the answer. Use “Generate Quiz” for the full scored quiz.</div>}
+              </div>
+            </div>
+          )}
         </>
       )}
-      {mod.realWorldScenario && (
-        <div style={{marginBottom:14,padding:"12px 14px",background:C.surface,borderRadius:8,
-          borderLeft:`3px solid ${accent}`}}>
-          <div style={{color:accent,fontSize:11,fontWeight:700,marginBottom:5,letterSpacing:0.5}}>REAL-WORLD SCENARIO</div>
-          <div style={{color:C.textSec,fontSize:13,lineHeight:1.6}}>{mod.realWorldScenario}</div>
-        </div>
-      )}
-      {mod.quiz?.[0] && (
-        <div>
-          <SectionLabel text="Knowledge Check"/>
-          <div style={{padding:"14px",background:C.surface,borderRadius:8,marginTop:6}}>
-            <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>{mod.quiz[0].question}</div>
-            {mod.quiz[0].options.map((opt,j)=>(
-              <div key={j} onClick={()=>setShowAnswer(true)}
-                style={{padding:"8px 12px",marginBottom:5,borderRadius:6,cursor:"pointer",
-                  background:showAnswer&&j===mod.quiz[0].correct?`${C.green}22`:C.card,
-                  border:`1px solid ${showAnswer&&j===mod.quiz[0].correct?C.green:C.border}`,
-                  color:showAnswer&&j===mod.quiz[0].correct?C.green:C.textSec,fontSize:12}}>
-                {String.fromCharCode(65+j)}. {opt}
-                {showAnswer&&j===mod.quiz[0].correct?"  ✓":""}
-              </div>
-            ))}
-            {!showAnswer && <div style={{color:C.textMut,fontSize:11,marginTop:6}}>Click an option to reveal the answer.</div>}
-          </div>
-        </div>
-      )}
     </Card>
+  );
+}
+
+// In-app slide viewer with PowerPoint download
+function SlideViewer({ slides, title, accent }) {
+  const [i, setI] = useState(0);
+  const s = slides[i];
+
+  function downloadPptxHtml() {
+    // Build an HTML deck that opens/prints cleanly; named .pptx-friendly via Word/PP import.
+    // (We export a self-contained HTML slideshow the customer can present or import.)
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+  body{margin:0;font-family:Arial,sans-serif;background:#111}
+  .slide{width:960px;height:540px;margin:20px auto;background:#fff;color:#0b2545;
+    padding:60px 70px;box-sizing:border-box;page-break-after:always;box-shadow:0 4px 20px rgba(0,0,0,.4)}
+  .slide h1{font-size:40px;color:#0b2545;margin:0 0 30px}
+  .slide ul{font-size:24px;line-height:1.6;color:#333}
+  .notes{font-size:14px;color:#888;font-style:italic;margin-top:30px;border-top:1px solid #eee;padding-top:12px}
+  @media print{.slide{margin:0;box-shadow:none}}
+</style></head><body>`;
+    slides.forEach(sl => {
+      html += `<div class="slide"><h1>${(sl.title||"").replace(/</g,"&lt;")}</h1><ul>`;
+      (sl.bullets||[]).forEach(b => html += `<li>${(b||"").replace(/</g,"&lt;")}</li>`);
+      html += `</ul>`;
+      if (sl.speakerNotes) html += `<div class="notes">Speaker notes: ${sl.speakerNotes.replace(/</g,"&lt;")}</div>`;
+      html += `</div>`;
+    });
+    html += `</body></html>`;
+    const blob = new Blob([html], { type: "application/vnd.ms-powerpoint" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${title.replace(/\s+/g,"_")}_Slides.ppt`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div>
+      {/* Slide stage */}
+      <div style={{background:"#fff",borderRadius:10,padding:"30px 34px",minHeight:230,
+        border:`1px solid ${C.border}`,display:"flex",flexDirection:"column"}}>
+        <div style={{fontSize:11,color:"#8090a5",marginBottom:8}}>Slide {i+1} of {slides.length}</div>
+        <div style={{fontSize:20,fontWeight:800,color:"#0b2545",marginBottom:16}}>{s.title}</div>
+        <ul style={{margin:0,paddingLeft:22,color:"#333",fontSize:14,lineHeight:1.8,flex:1}}>
+          {(s.bullets||[]).map((b,bi)=><li key={bi}>{b}</li>)}
+        </ul>
+        {s.speakerNotes && (
+          <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid #eee",
+            fontSize:12,color:"#8090a5",fontStyle:"italic"}}>
+            Speaker notes: {s.speakerNotes}
+          </div>
+        )}
+      </div>
+      {/* Controls */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12}}>
+        <button onClick={()=>setI(Math.max(0,i-1))} disabled={i===0}
+          style={{padding:"7px 14px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:7,color:i===0?C.textMut:C.textSec,fontSize:12,cursor:i===0?"default":"pointer"}}>‹ Prev</button>
+        <div style={{display:"flex",gap:4,flex:1,justifyContent:"center"}}>
+          {slides.map((_,si)=>(
+            <span key={si} onClick={()=>setI(si)} style={{width:8,height:8,borderRadius:"50%",cursor:"pointer",
+              background:si===i?accent:C.border}}/>
+          ))}
+        </div>
+        <button onClick={()=>setI(Math.min(slides.length-1,i+1))} disabled={i===slides.length-1}
+          style={{padding:"7px 14px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:7,color:i===slides.length-1?C.textMut:C.textSec,fontSize:12,
+            cursor:i===slides.length-1?"default":"pointer"}}>Next ›</button>
+        <button onClick={downloadPptxHtml}
+          style={{padding:"7px 14px",background:`${accent}15`,border:`1px solid ${accent}44`,
+            borderRadius:7,color:accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>⬇ Download Slides</button>
+      </div>
+    </div>
+  );
+}
+
+// Interactive, scored quiz
+function QuizRunner({ questions, accent }) {
+  const [answers, setAnswers] = useState({});   // qIndex -> optionIndex
+  const [submitted, setSubmitted] = useState(false);
+
+  const score = questions.reduce((s,q,i)=> s + (answers[i]===q.correct?1:0), 0);
+  const pct = Math.round((score/questions.length)*100);
+  const passed = pct >= 80;
+
+  function reset() { setAnswers({}); setSubmitted(false); }
+
+  return (
+    <div>
+      {questions.map((q,qi)=>(
+        <div key={qi} style={{marginBottom:16,padding:"14px 16px",background:C.surface,borderRadius:8}}>
+          <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
+            {qi+1}. {q.question}
+          </div>
+          {q.options.map((opt,oi)=>{
+            const chosen = answers[qi]===oi;
+            const isCorrect = oi===q.correct;
+            let bg = C.card, bc = C.border, col = C.textSec;
+            if (submitted) {
+              if (isCorrect) { bg = `${C.green}22`; bc = C.green; col = C.green; }
+              else if (chosen) { bg = `${C.red}22`; bc = C.red; col = C.red; }
+            } else if (chosen) { bg = `${accent}22`; bc = accent; col = accent; }
+            return (
+              <div key={oi} onClick={()=>!submitted && setAnswers(a=>({...a,[qi]:oi}))}
+                style={{padding:"8px 12px",marginBottom:5,borderRadius:6,fontSize:12,
+                  cursor:submitted?"default":"pointer",background:bg,border:`1px solid ${bc}`,color:col}}>
+                {String.fromCharCode(65+oi)}. {opt}
+                {submitted && isCorrect ? "  ✓" : ""}
+                {submitted && chosen && !isCorrect ? "  ✗" : ""}
+              </div>
+            );
+          })}
+          {submitted && q.explanation && (
+            <div style={{marginTop:8,fontSize:11,color:C.textMut,fontStyle:"italic"}}>{q.explanation}</div>
+          )}
+        </div>
+      ))}
+
+      {!submitted ? (
+        <button onClick={()=>setSubmitted(true)}
+          disabled={Object.keys(answers).length < questions.length}
+          style={{padding:"10px 20px",background:Object.keys(answers).length<questions.length?C.surface:accent,
+            color:Object.keys(answers).length<questions.length?C.textMut:C.bg,border:"none",borderRadius:8,
+            fontSize:13,fontWeight:700,cursor:Object.keys(answers).length<questions.length?"default":"pointer"}}>
+          Submit Quiz ({Object.keys(answers).length}/{questions.length} answered)
+        </button>
+      ) : (
+        <div style={{padding:"16px 18px",borderRadius:10,
+          background:passed?`${C.green}15`:`${C.amber}15`,
+          border:`1px solid ${passed?C.green:C.amber}44`}}>
+          <div style={{fontSize:22,fontWeight:800,color:passed?C.green:C.amber}}>
+            {pct}% — {passed?"Passed":"Review needed"}
+          </div>
+          <div style={{fontSize:13,color:C.textSec,marginTop:4}}>
+            {score} of {questions.length} correct. {passed?"Meets the 80% pass mark.":"A passing score is 80%."}
+          </div>
+          <button onClick={reset} style={{marginTop:12,padding:"7px 16px",background:C.card,
+            border:`1px solid ${C.border}`,borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            Retake Quiz
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

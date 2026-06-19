@@ -528,52 +528,76 @@ app.post("/api/training/generate", requireAuth, async (req, res) => {
       ? MANAGER_TOPICS.map(t => ({ id: t.id, title: t.title, audience: t.audience, duration: t.duration, objectives: t.objectives, source: t.source }))
       : [];
 
-    const system = `You are a cybersecurity awareness training designer for small businesses. You are given a FIXED curriculum backbone (CISA/NIST-aligned topics organized into a schedule). Your job is to TAILOR it to the specific company and enrich each topic — DO NOT change the topic list, schedule structure, or titles.
+    // Per-phase fallback builder (used if a phase's AI call fails)
+    const phaseFallback = (ph) => ({
+      phase: ph.phase, theme: ph.theme, note: ph.note,
+      modules: ph.topics.map(t => ({
+        id: t.id, title: t.title, audience: t.audience, duration: t.duration,
+        objectives: t.objectives,
+        tailoredIntro: `Essential for ${company.name || "your team"}: ${t.objectives[0].toLowerCase()}.`,
+        realWorldScenario: "An employee receives an unexpected request that looks legitimate but isn't — recognizing the warning signs prevents a costly mistake.",
+        quiz: [{ question: `What is the most important takeaway from "${t.title}"?`, options: [t.objectives[0], "Ignore it", "Forward to everyone", "Delete all email"], correct: 0 }],
+      })),
+    });
 
-For each topic, produce tailored content as JSON. Return ONLY valid JSON (no markdown, no trailing commas) in exactly this shape:
-{"overview":"2-3 sentence intro tailored to this company's industry and size","phases":[{"phase":"","theme":"","note":null,"modules":[{"id":"","title":"","audience":"","duration":"","objectives":["keep the provided objectives"],"tailoredIntro":"1-2 sentences on why this matters for THIS company","realWorldScenario":"a short, concrete scenario relevant to their industry","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}]}],"managerTrack":[{"id":"","title":"","audience":"","duration":"","objectives":[...],"tailoredIntro":"","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}],"deliveryTips":["3-4 practical tips for rolling this out in a small business"]}
+    // Generate ONE phase at a time so each response stays small (avoids truncation)
+    async function generatePhase(ph) {
+      const sys = `You are a cybersecurity awareness training designer for small businesses. Tailor the given CISA/NIST training modules to this specific company. DO NOT change the module titles, audiences, or objectives — only enrich them.
 
-Rules: exactly 1 quiz question per module with exactly 4 options. Keep the objectives provided in the backbone. Tailor scenarios to the company's industry. Keep all text concise.`;
+Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly this shape:
+{"modules":[{"id":"","title":"","audience":"","duration":"","objectives":["keep provided objectives"],"tailoredIntro":"1-2 sentences on why this matters for THIS company","realWorldScenario":"a short concrete scenario for their industry","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}]}
 
-    const userPrompt = `${companyText}\n\nFIXED BACKBONE (tailor each topic, keep structure):\n${JSON.stringify(backbone)}\n\n${includeManagerTrack ? `MANAGER TRACK to tailor:\n${JSON.stringify(managerTrack)}` : "No manager track requested."}`;
+Exactly 1 quiz question per module with exactly 4 options. Keep every field concise.`;
+      const usr = `${companyText}\n\nModules to tailor for the "${ph.theme}" phase:\n${JSON.stringify(ph.topics)}`;
+      try {
+        const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
+        const parsed = extractJson(text);
+        if (!parsed.modules || !Array.isArray(parsed.modules) || parsed.modules.length === 0) throw new Error("no modules");
+        return { phase: ph.phase, theme: ph.theme, note: ph.note, modules: parsed.modules };
+      } catch (e) {
+        console.warn(`Training phase "${ph.phase}" fell back: ${e.message}`);
+        return phaseFallback(ph);
+      }
+    }
 
-    let curriculum;
-    try {
-      const text = await callClaudeText({
-        system,
-        messages: [{ role: "user", content: userPrompt }],
-        max_tokens: 6000,
-      });
-      curriculum = extractJson(text);
-    } catch (aiErr) {
-      // Fallback: build a usable curriculum from the backbone with generic quizzes
-      console.warn("Training AI failed, using backbone fallback:", aiErr.message);
-      curriculum = {
-        overview: `A CISA/NIST-aligned security awareness program tailored for ${company.name || "your business"}${company.industry ? ` in the ${company.industry} sector` : ""}. Delivered over three months with quarterly refreshers.`,
-        phases: backbone.map(ph => ({
-          phase: ph.phase, theme: ph.theme, note: ph.note,
-          modules: ph.topics.map(t => ({
-            id: t.id, title: t.title, audience: t.audience, duration: t.duration,
-            objectives: t.objectives,
-            tailoredIntro: `Essential for ${company.name || "your team"}: ${t.objectives[0].toLowerCase()}.`,
-            realWorldScenario: "An employee receives an unexpected request that looks legitimate but isn't — recognizing the warning signs prevents a costly mistake.",
-            quiz: [{ question: `What is the most important takeaway from "${t.title}"?`, options: [t.objectives[0], "Ignore it", "Forward to everyone", "Delete all email"], correct: 0 }],
-          })),
-        })),
-        managerTrack: managerTrack.map(t => ({
+    // Build all phases (sequentially to be gentle on rate limits)
+    const phases = [];
+    for (const ph of backbone) {
+      phases.push(await generatePhase(ph));
+    }
+
+    // Manager track (one small call, or fallback)
+    let mgrOut = [];
+    if (includeManagerTrack && managerTrack.length) {
+      try {
+        const sys = `Tailor these manager/owner cybersecurity training modules to the company. Keep titles, audiences, and objectives. Return ONLY valid minified JSON: {"modules":[{"id":"","title":"","audience":"","duration":"","objectives":[...],"tailoredIntro":"","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}]}. Exactly 1 quiz question, 4 options each. Be concise.`;
+        const usr = `${companyText}\n\nManager modules:\n${JSON.stringify(managerTrack)}`;
+        const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 2500 });
+        const parsed = extractJson(text);
+        mgrOut = parsed.modules || [];
+        if (!mgrOut.length) throw new Error("no manager modules");
+      } catch (e) {
+        console.warn(`Manager track fell back: ${e.message}`);
+        mgrOut = managerTrack.map(t => ({
           id: t.id, title: t.title, audience: t.audience, duration: t.duration,
           objectives: t.objectives,
           tailoredIntro: `Leadership responsibility: ${t.objectives[0].toLowerCase()}.`,
           quiz: [{ question: `What is a manager's key role in "${t.title}"?`, options: [t.objectives[0], "Delegate entirely", "Avoid involvement", "Wait for an incident"], correct: 0 }],
-        })),
-        deliveryTips: [
-          "Keep sessions short (15-30 min) and schedule them during work hours.",
-          "Run a simulated phishing test after Month 1 to reinforce learning.",
-          "Track completion and follow up with anyone who misses a module.",
-          "Refresh quarterly and whenever a policy changes.",
-        ],
-      };
+        }));
+      }
     }
+
+    const curriculum = {
+      overview: `A CISA/NIST-aligned security awareness program tailored for ${company.name || "your business"}${company.industry ? ` in the ${company.industry} sector` : ""}. Delivered over three months with quarterly refreshers.`,
+      phases,
+      managerTrack: mgrOut,
+      deliveryTips: [
+        "Keep sessions short (15-30 min) and schedule them during work hours.",
+        "Run a simulated phishing test after Month 1 to reinforce learning.",
+        "Track completion and follow up with anyone who misses a module.",
+        "Refresh quarterly and whenever a policy changes.",
+      ],
+    };
 
     const record = {
       id: randomUUID(),
@@ -619,6 +643,77 @@ app.delete("/api/training/:id", requireAuth, async (req, res) => {
   }
   await db.write();
   res.json({ ok: true, deleted: req.params.id });
+});
+
+// Generate (and cache) slides + a full quiz for ONE module within a saved program.
+// Body: { programId, phaseIndex | "mgr", moduleIndex }
+app.post("/api/training/module-content", requireAuth, async (req, res) => {
+  try {
+    const { programId, phaseIndex, moduleIndex } = req.body || {};
+    const program = (db.data.trainingPrograms || []).find(t => t.id === programId && t.userId === req.userId);
+    if (!program) return res.status(404).json({ error: "Training program not found" });
+
+    // Locate the module (in a phase or the manager track)
+    let mod;
+    if (phaseIndex === "mgr") {
+      mod = program.curriculum?.managerTrack?.[moduleIndex];
+    } else {
+      mod = program.curriculum?.phases?.[phaseIndex]?.modules?.[moduleIndex];
+    }
+    if (!mod) return res.status(404).json({ error: "Module not found" });
+
+    // If already generated, return cached content
+    if (mod.slides && mod.fullQuiz) {
+      return res.json({ slides: mod.slides, fullQuiz: mod.fullQuiz, cached: true });
+    }
+
+    const company = program.companyContext || {};
+    const companyText = `Company: ${company.name || "the business"} | Industry: ${company.industry || "general"} | Employees: ${company.employees || "small team"}`;
+
+    const sys = `You are a cybersecurity trainer creating presentable employee-training material for a small business. For the given module, produce (1) a set of teaching SLIDES and (2) a full scored QUIZ.
+
+Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly this shape:
+{"slides":[{"title":"","bullets":["point 1","point 2","point 3"],"speakerNotes":"1-2 sentences the presenter can say"}],"fullQuiz":[{"question":"","options":["a","b","c","d"],"correct":0,"explanation":"why this is correct"}]}
+
+Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each slide has 2-4 bullets. Produce exactly 6 quiz questions, each with 4 options and a one-sentence explanation. Tailor examples to the company's industry. Keep text concise and presentation-friendly.`;
+
+    const usr = `${companyText}\n\nModule: ${mod.title}\nAudience: ${mod.audience}\nLearning objectives:\n${(mod.objectives||[]).map(o=>"- "+o).join("\n")}\n${mod.realWorldScenario ? "Scenario: "+mod.realWorldScenario : ""}`;
+
+    let content;
+    try {
+      const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
+      content = extractJson(text);
+      if (!Array.isArray(content.slides) || !Array.isArray(content.fullQuiz) || !content.slides.length || !content.fullQuiz.length) {
+        throw new Error("incomplete content");
+      }
+    } catch (e) {
+      console.warn(`Module content fell back for "${mod.title}": ${e.message}`);
+      // Fallback: build slides from objectives + a simple quiz
+      content = {
+        slides: [
+          { title: mod.title, bullets: [`Audience: ${mod.audience}`, `Duration: ${mod.duration}`, "Security awareness training"], speakerNotes: "Introduce the topic and why it matters for our business." },
+          ...(mod.objectives||[]).map((o,i)=>({ title: `Key Point ${i+1}`, bullets: [o], speakerNotes: "Explain this objective with a relatable example." })),
+          { title: "Recap", bullets: (mod.objectives||[]).slice(0,3), speakerNotes: "Summarize and open the floor for questions." },
+        ],
+        fullQuiz: (mod.objectives||[]).slice(0,3).map((o,i)=>({
+          question: `Which statement best reflects good practice regarding: ${o}?`,
+          options: [o, "Ignore established policy", "Share credentials freely", "Skip reporting incidents"],
+          correct: 0,
+          explanation: "Following the stated objective is the secure choice.",
+        })),
+      };
+    }
+
+    // Cache back into the saved program
+    mod.slides = content.slides;
+    mod.fullQuiz = content.fullQuiz;
+    await db.write();
+
+    res.json({ slides: content.slides, fullQuiz: content.fullQuiz, cached: false });
+  } catch (err) {
+    console.error("Module content error:", err.message);
+    res.status(500).json({ error: "Failed to generate module content" });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
