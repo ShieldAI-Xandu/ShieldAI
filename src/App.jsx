@@ -3239,7 +3239,280 @@ function AdminPanel({ onClose }) {
 // ─────────────────────────────────────────────────────────────
 //  HOME SCREEN — returning user's dashboard of saved assessments
 // ─────────────────────────────────────────────────────────────
-function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment }) {
+// ─────────────────────────────────────────────────────────────
+//  COMPANY ADMIN CONSOLE
+//  Customer-facing overview of THEIR security program. Pulls the
+//  real posture score & company info from their generated program;
+//  trend, compliance %, analyst chat, and team-training figures are
+//  representative (mockup) until those data layers are live.
+// ─────────────────────────────────────────────────────────────
+function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [data, setData] = useState(null);   // { company, results }
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatLog, setChatLog] = useState([
+    { from: "analyst", who: "Alex (ShieldAI Analyst)", text: "Welcome to your security console. I'm your assigned analyst — message me anytime with questions about your program.", time: "2d ago" },
+  ]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const aRes = await authFetch(`${API_BASE}/api/assessments/${assessmentId}`);
+        if (!aRes.ok) throw new Error("Could not load your program");
+        const assessment = await aRes.json();
+        const pRes = await authFetch(`${API_BASE}/api/programs/${programId}`);
+        if (!pRes.ok) throw new Error("Could not load your program");
+        const program = await pRes.json();
+        setData({ company: assessment.company || {}, results: program.sections || {} });
+      } catch (e) { setError(e.message); } finally { setLoading(false); }
+    })();
+  }, [assessmentId, programId]);
+
+  function sendChat() {
+    if (!chatDraft.trim()) return;
+    setChatLog(l => [...l, { from: "client", who: "You", text: chatDraft, time: "just now" }]);
+    setChatDraft("");
+    setTimeout(() => {
+      setChatLog(l => [...l, { from: "analyst", who: "Alex (ShieldAI Analyst)",
+        text: "Thanks — I've got that. I'll review and follow up shortly.", time: "just now" }]);
+    }, 900);
+  }
+
+  if (loading) return (
+    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <Spinner/>
+    </div>
+  );
+  if (error) return (
+    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,padding:"40px 24px",color:C.text}}>
+      <button onClick={onClose} style={{marginBottom:16,padding:"8px 16px",background:C.surface,
+        border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>← Back</button>
+      <div style={{color:C.red}}>{error}</div>
+    </div>
+  );
+
+  const risk = data.results?.riskOverview || {};
+  const score = risk.postureScore || 0;
+  const level = risk.postureLevel || "Developing";
+  const company = data.company || {};
+  const scoreColor = score>=80?C.green:score>=60?"#7ED957":score>=40?C.amber:C.red;
+
+  const trend = (() => {
+    const pts = []; let v = Math.max(8, score - 22);
+    for (let i=0;i<11;i++){ pts.push(Math.round(v)); v += (score - v)/(11-i) + (Math.random()*3-1.5); }
+    pts.push(score); return pts;
+  })();
+
+  const sections = data.results || {};
+  const progItems = [
+    { label: "Risk Assessment", done: !!sections.riskOverview },
+    { label: "Security Policies", done: !!sections.policiesCore },
+    { label: "Priorities & Roadmap", done: !!sections.priorities },
+    { label: "Compliance Mapping", done: !!sections.compliance },
+    { label: "Training Program", done: !!sections.training },
+    { label: "Incident Response", done: !!sections.workflows },
+  ];
+  const progPct = Math.round(progItems.filter(p=>p.done).length / progItems.length * 100);
+
+  const Panel = ({ title, children, action, flex }) => (
+    <div style={{flex:flex||"1 1 300px",minWidth:0,background:C.card,border:`1px solid ${C.border}`,
+      borderRadius:12,padding:"16px 18px"}}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:12}}>
+        <span style={{color:C.text,fontSize:12,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase"}}>{title}</span>
+        {action && <span style={{marginLeft:"auto"}}>{action}</span>}
+      </div>
+      {children}
+    </div>
+  );
+
+  return (
+    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
+      <div style={{maxWidth:1080,margin:"0 auto",padding:"28px 24px"}}>
+
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+          <div style={{width:46,height:46,borderRadius:11,background:`${C.accent}15`,
+            border:`1px solid ${C.accent}33`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🛡️</div>
+          <div style={{flex:1}}>
+            <h1 style={{fontSize:22,fontWeight:700,margin:0,color:C.text}}>{company.name || "Your"} Security Console</h1>
+            <p style={{color:C.textSec,fontSize:13,margin:"3px 0 0"}}>
+              {company.industry ? `${company.industry} · ` : ""}{company.employees ? `${company.employees} employees · ` : ""}Managed by ShieldAI
+            </p>
+          </div>
+          <button onClick={()=>onOpenProgram(assessmentId, programId)}
+            style={{padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            Open Full Program →
+          </button>
+          <button onClick={onClose} style={{padding:"9px 16px",background:C.surface,
+            border:`1px solid ${C.border}`,borderRadius:9,color:C.textSec,fontSize:13,cursor:"pointer"}}>
+            ← Home
+          </button>
+        </div>
+
+        <div style={{display:"flex",gap:14,marginBottom:14,flexWrap:"wrap"}}>
+          <Panel title="Security Posture" flex="0 0 220px">
+            <div style={{textAlign:"center",padding:"6px 0"}}>
+              <div style={{fontSize:48,fontWeight:800,color:scoreColor,lineHeight:1}}>{score}</div>
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1,marginTop:4}}>OUT OF 100</div>
+              <div style={{marginTop:10,padding:"4px 16px",borderRadius:20,background:scoreColor+"22",
+                color:scoreColor,fontSize:12,fontWeight:700,display:"inline-block"}}>{level.toUpperCase()}</div>
+            </div>
+          </Panel>
+          <Panel title="Posture Trend (12 months)" flex="1 1 400px"
+            action={<span style={{fontSize:11,color:C.green}}>▲ improving</span>}>
+            <TrendChartLight data={trend} color={scoreColor}/>
+          </Panel>
+        </div>
+
+        <div style={{display:"flex",gap:14,marginBottom:14,flexWrap:"wrap"}}>
+          <Panel title="Program Status">
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:10}}>
+              <span style={{fontSize:28,fontWeight:800,color:C.accent}}>{progPct}%</span>
+              <span style={{fontSize:11,color:C.textMut}}>complete</span>
+            </div>
+            {progItems.map((p,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
+                <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
+                  background:p.done?`${C.green}22`:C.surface,border:`1px solid ${p.done?C.green:C.border}`,
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,
+                  color:p.done?C.green:C.textMut}}>{p.done?"✓":""}</span>
+                <span style={{fontSize:12,color:p.done?C.textSec:C.textMut}}>{p.label}</span>
+              </div>
+            ))}
+          </Panel>
+
+          <Panel title="Compliance Progress">
+            {(() => {
+              const fw = (company.compliance && company.compliance[0]) ||
+                (data.results?.compliance?.frameworks?.[0]?.name) || "NIST CSF";
+              const cur = Math.min(95, Math.max(20, score - 5));
+              const tgt = 90;
+              return (
+                <div>
+                  <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{fw}</div>
+                  <div style={{fontSize:28,fontWeight:800,color:C.purple,marginBottom:8}}>{cur}%</div>
+                  <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:`${cur}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
+                  </div>
+                  <div style={{fontSize:11,color:C.textMut,marginTop:6}}>{tgt-cur > 0 ? `${tgt-cur}% to target (${tgt}%)` : "Target met"}</div>
+                </div>
+              );
+            })()}
+          </Panel>
+
+          <Panel title="Team Training">
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+              <span style={{fontSize:28,fontWeight:800,color:C.green}}>74%</span>
+              <span style={{fontSize:11,color:C.textMut}}>staff completed</span>
+            </div>
+            <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden",marginBottom:10}}>
+              <div style={{width:"74%",height:"100%",background:`linear-gradient(90deg,${C.accent},${C.green})`}}/>
+            </div>
+            <div style={{fontSize:11,color:C.textSec,lineHeight:1.6}}>
+              Current module: <b style={{color:C.text}}>Phishing Awareness</b><br/>
+              Next due: <b style={{color:C.text}}>end of month</b>
+            </div>
+          </Panel>
+        </div>
+
+        <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+          <Panel title="Open Action Items" flex="1 1 380px">
+            {(() => {
+              const pr = data.results?.priorities?.priorities || [];
+              const items = pr.slice(0,4);
+              if (items.length === 0) return <div style={{color:C.textSec,fontSize:13}}>No open items — you're all caught up.</div>;
+              return items.map((it,i)=>(
+                <div key={i} style={{display:"flex",gap:10,padding:"9px 0",
+                  borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
+                  <span style={{width:22,height:22,borderRadius:6,flexShrink:0,fontSize:11,fontWeight:700,
+                    background:`${C.accent}18`,color:C.accent,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {it.rank||i+1}
+                  </span>
+                  <div style={{flex:1}}>
+                    <div style={{color:C.text,fontSize:13,fontWeight:600}}>{it.title}</div>
+                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
+                      {it.effort ? it.effort : ""}{it.impact ? ` · ${it.impact} impact` : ""}
+                    </div>
+                  </div>
+                </div>
+              ));
+            })()}
+          </Panel>
+
+          <Panel title="Chat With Your Analyst" flex="1 1 380px">
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:180,overflowY:"auto",marginBottom:10}}>
+              {chatLog.map((m,i)=>(
+                <div key={i} style={{alignSelf:m.from==="client"?"flex-end":"flex-start",maxWidth:"85%"}}>
+                  <div style={{padding:"8px 11px",borderRadius:10,fontSize:12,lineHeight:1.5,
+                    background:m.from==="client"?C.accent:C.surface,
+                    color:m.from==="client"?C.bg:C.text,
+                    border:m.from==="client"?"none":`1px solid ${C.border}`}}>
+                    {m.text}
+                  </div>
+                  <div style={{fontSize:9,color:C.textMut,marginTop:2,textAlign:m.from==="client"?"right":"left"}}>
+                    {m.who} · {m.time}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <input value={chatDraft} onChange={e=>setChatDraft(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&sendChat()}
+                placeholder="Message your analyst…"
+                style={{flex:1,padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
+              <button onClick={sendChat} style={{padding:"9px 16px",background:C.accent,color:C.bg,
+                border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
+            </div>
+          </Panel>
+        </div>
+
+        <div style={{marginTop:18,padding:"11px 16px",background:`${C.accent}0A`,
+          border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
+          <span style={{color:C.textSec,fontSize:11}}>
+            Your posture score and program status reflect your real assessment. Trend, compliance %,
+            team-training figures, and analyst chat are representative previews of the managed-service experience.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Light-theme trend chart for the company console
+function TrendChartLight({ data, color }) {
+  const w = 560, h = 130, pad = 8;
+  const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
+  const range = max - min || 1;
+  const pts = data.map((v,i)=>{
+    const x = pad + (i/(data.length-1))*(w-pad*2);
+    const y = h - pad - ((v-min)/range)*(h-pad*2);
+    return [x,y];
+  });
+  const path = pts.map((p,i)=>`${i===0?"M":"L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const area = `${path} L${pts[pts.length-1][0].toFixed(1)},${h-pad} L${pts[0][0].toFixed(1)},${h-pad} Z`;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",height:"auto"}}>
+      <defs>
+        <linearGradient id="ccTrend" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      {[0,0.5,1].map((g,i)=>(
+        <line key={i} x1={pad} y1={pad+g*(h-pad*2)} x2={w-pad} y2={pad+g*(h-pad*2)}
+          stroke={C.border} strokeWidth="1"/>
+      ))}
+      <path d={area} fill="url(#ccTrend)"/>
+      <path d={path} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round"/>
+      <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="4" fill={color}/>
+    </svg>
+  );
+}
+
+function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, onOpenConsole }) {
   const [assessments, setAssessments] = useState([]);
   const [programsByAssessment, setProgramsByAssessment] = useState({});
   const [loading, setLoading] = useState(true);
@@ -3373,12 +3646,20 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment }) 
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch"}}>
                       {complete ? (
-                        <button onClick={() => openLatestProgram(a.id)} disabled={opening===a.id}
-                          style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-                            color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
-                            cursor:opening===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
-                          {opening===a.id ? "Opening…" : "Open Program →"}
-                        </button>
+                        <>
+                          <button onClick={() => onOpenConsole(a.id, complete.id)}
+                            style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                              color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                              cursor:"pointer",whiteSpace:"nowrap"}}>
+                            📊 My Console
+                          </button>
+                          <button onClick={() => openLatestProgram(a.id)} disabled={opening===a.id}
+                            style={{padding:"8px 20px",background:"none",border:`1px solid ${C.borderHi}`,
+                              borderRadius:8,color:C.accent,fontSize:12,fontWeight:600,
+                              cursor:opening===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
+                            {opening===a.id ? "Opening…" : "Open Program →"}
+                          </button>
+                        </>
                       ) : (
                         <span style={{color:C.textMut,fontSize:12,textAlign:"center"}}>—</span>
                       )}
@@ -4684,6 +4965,7 @@ export default function ShieldAI() {
   const [phase, setPhase] = useState("home");        // home | landing | intake | checklist | analysis | dashboard
   const [assessment, setAssessment] = useState(null);
   const [results, setResults] = useState(null);
+  const [consoleTarget, setConsoleTarget] = useState(null); // {assessmentId, programId}
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -4732,6 +5014,11 @@ export default function ShieldAI() {
     setAssessment(aData.data);
     setResults(pData.sections);
     setPhase("dashboard");
+  }
+
+  function openConsole(assessmentId, programId) {
+    setConsoleTarget({ assessmentId, programId });
+    setPhase("console");
   }
 
   // Called by EditAssessmentScreen when user chooses Save & Regenerate
@@ -4802,6 +5089,22 @@ export default function ShieldAI() {
           onNewAssessment={() => setPhase("intake")}
           onOpenProgram={openProgram}
           onEditAssessment={(id) => { setEditingId(id); setPhase("edit"); }}
+          onOpenConsole={openConsole}
+        />
+      </div>
+    );
+  }
+
+  if (phase === "console" && consoleTarget) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
+        <TopBar/>
+        <CompanyConsole
+          assessmentId={consoleTarget.assessmentId}
+          programId={consoleTarget.programId}
+          user={user}
+          onClose={() => { setConsoleTarget(null); setPhase("home"); }}
+          onOpenProgram={openProgram}
         />
       </div>
     );
