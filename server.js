@@ -114,6 +114,42 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// Public lead-capture form (prospective customers requesting info)
+app.post("/api/leads", async (req, res) => {
+  try {
+    const { name, email, company, employees, message } = req.body || {};
+    if (!name || !email) {
+      return res.status(400).json({ error: "Name and email are required." });
+    }
+    // Basic email sanity check
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ error: "Please enter a valid email address." });
+    }
+    const lead = {
+      id: randomUUID(),
+      name: String(name).slice(0, 200),
+      email: String(email).slice(0, 200),
+      company: company ? String(company).slice(0, 200) : "",
+      employees: employees ? String(employees).slice(0, 50) : "",
+      message: message ? String(message).slice(0, 2000) : "",
+      createdAt: new Date().toISOString(),
+    };
+    db.data.leads ||= [];
+    db.data.leads.push(lead);
+    await db.write();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Lead capture error:", err.message);
+    res.status(500).json({ error: "Could not submit your request. Please try again." });
+  }
+});
+
+// Admin: view captured leads
+app.get("/api/admin/leads", requireAdmin, (req, res) => {
+  const leads = [...(db.data.leads || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(leads);
+});
+
 // How many registration slots remain (used by the UI)
 app.get("/api/auth/capacity", (req, res) => {
   const used = (db.data.users || []).length;
@@ -714,6 +750,43 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
     console.error("Module content error:", err.message);
     res.status(500).json({ error: "Failed to generate module content" });
   }
+});
+
+// ─────────────────────────────────────────────────────────────
+//  LEADS (public marketing form)
+// ─────────────────────────────────────────────────────────────
+
+// Public: anyone can submit an info request from the marketing page
+app.post("/api/leads", async (req, res) => {
+  try {
+    const { name, email, company, employees, message } = req.body || {};
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email is required." });
+    }
+    const lead = {
+      id: randomUUID(),
+      name: (name || "").slice(0, 200),
+      email: email.slice(0, 200),
+      company: (company || "").slice(0, 200),
+      employees: (employees || "").slice(0, 50),
+      message: (message || "").slice(0, 2000),
+      createdAt: new Date().toISOString(),
+      status: "new",
+    };
+    db.data.leads ||= [];
+    db.data.leads.push(lead);
+    await db.write();
+    res.json({ ok: true, id: lead.id });
+  } catch (err) {
+    console.error("Lead submission error:", err.message);
+    res.status(500).json({ error: "Could not submit your request. Please try again." });
+  }
+});
+
+// Admin: view collected leads
+app.get("/api/admin/leads", requireAdmin, (req, res) => {
+  const leads = [...(db.data.leads || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(leads);
 });
 
 // ─────────────────────────────────────────────────────────────

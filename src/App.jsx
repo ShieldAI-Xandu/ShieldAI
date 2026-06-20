@@ -483,7 +483,7 @@ const inputStyle = {
 // ─────────────────────────────────────────────────────────────
 //  AUTH SCREEN
 // ─────────────────────────────────────────────────────────────
-function AuthScreen({ onAuthenticated }) {
+function AuthScreen({ onAuthenticated, onBack }) {
   const [mode, setMode] = useState("login"); // "login" | "register"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -533,10 +533,16 @@ function AuthScreen({ onAuthenticated }) {
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",
       justifyContent:"center",fontFamily:"Inter,system-ui,sans-serif",padding:24}}>
       <div style={{width:"100%",maxWidth:420}}>
+        {onBack && (
+          <button onClick={onBack} style={{marginBottom:16,padding:"7px 14px",background:"none",
+            border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            ← Back to home
+          </button>
+        )}
         <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{fontSize:40,marginBottom:8}}>🛡️</div>
-          <div style={{fontWeight:800,fontSize:24,color:C.text}}>ShieldAI</div>
-          <div style={{fontSize:11,color:C.textMut,letterSpacing:2,marginTop:4}}>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:12}}><ShieldLogo size={48} glow/></div>
+          <ShieldWordmark size={24} ink={C.text}/>
+          <div style={{fontSize:11,color:C.textMut,letterSpacing:2,marginTop:8}}>
             VIRTUAL CISO PLATFORM
           </div>
         </div>
@@ -2595,6 +2601,387 @@ function Dashboard({ assessment, results, onReset }) {
 // ─────────────────────────────────────────────────────────────
 //  LANDING PAGE
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  MARKETING FRONT PAGE  (public-facing)
+// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  BRAND  — official ShieldAI logo (shield + neural node) & wordmark
+// ─────────────────────────────────────────────────────────────
+function ShieldLogo({ size = 28, glow = false }) {
+  return (
+    <svg viewBox="0 0 64 80" width={size} height={size * (80/64)}
+      style={{ display:"block", filter: glow ? "drop-shadow(0 0 8px rgba(0,229,255,0.5))" : "none" }}>
+      <defs>
+        <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#0EA5E9"/>
+          <stop offset="100%" stopColor="#0284C7"/>
+        </linearGradient>
+      </defs>
+      <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z" fill="url(#shieldGrad)"/>
+      <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 L32 4 Z" fill="#00E5FF" opacity="0.2"/>
+      <path d="M22 28 L32 38 L42 28 M32 38 L32 54" stroke="#FFFFFF" strokeWidth="2.5"
+        strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <circle cx="22" cy="28" r="3.5" fill="#FFFFFF"/>
+      <circle cx="42" cy="28" r="3.5" fill="#FFFFFF"/>
+      <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/>
+      <circle cx="32" cy="38" r="4.5" fill="#00E5FF"/>
+      <circle cx="32" cy="38" r="2" fill="#FFFFFF"/>
+    </svg>
+  );
+}
+
+// Wordmark: "Shield" in the current ink color + "AI" in brand cyan
+function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
+  return (
+    <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
+      <span style={{ color: ink }}>Shield</span>
+      <span style={{ color: "#00C8FF" }}>AI</span>
+    </span>
+  );
+}
+
+// Logo + wordmark lockup
+function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap }}>
+      <ShieldLogo size={logoSize} glow={glow}/>
+      <ShieldWordmark size={textSize} ink={ink}/>
+    </span>
+  );
+}
+
+function MarketingPage({ onEnterApp, onLogin }) {
+  const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [formErr, setFormErr] = useState(null);
+
+  async function submitLead() {
+    if (!form.email.includes("@")) { setFormErr("Please enter a valid email address."); return; }
+    setSubmitting(true); setFormErr(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/leads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) throw new Error("Submission failed");
+      setSubmitted(true);
+    } catch (e) {
+      setFormErr("Something went wrong. Please try again.");
+    } finally { setSubmitting(false); }
+  }
+
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const navy = "#0A1428";
+
+  const Eyebrow = ({ children }) => (
+    <div style={{fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",
+      color:cyan,marginBottom:14}}>{children}</div>
+  );
+  const Section = ({ children, style }) => (
+    <section style={{maxWidth:1080,margin:"0 auto",padding:"0 24px",...style}}>{children}</section>
+  );
+
+  const steps = [
+    { n:"01", t:"Assess", d:"Answer a short, structured assessment about your business and current security posture." },
+    { n:"02", t:"Score", d:"Our deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork." },
+    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training." },
+    { n:"04", t:"Manage", d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
+  ];
+
+  const tiers = [
+    { name:"Self-Serve", tag:"Get started", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+  ];
+
+  const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
+
+  return (
+    <div style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
+      {/* NAV */}
+      <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
+        background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
+        <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+          <span style={{fontSize:11,color:dim,marginLeft:4}}>Virtual CISO</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}}>
+            <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
+            <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
+            <a href="#contact" style={{color:dim,fontSize:13,textDecoration:"none"}}>Contact</a>
+            <button onClick={onLogin} style={{padding:"8px 16px",background:"none",
+              border:`1px solid ${line}`,borderRadius:8,color:ink,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+              Client Login
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* HERO */}
+      <Section style={{paddingTop:64,paddingBottom:70,textAlign:"center"}}>
+        <div style={{display:"flex",justifyContent:"center",marginBottom:28}}>
+          <ShieldLogo size={64} glow/>
+        </div>
+        <div style={{display:"inline-block",padding:"6px 14px",borderRadius:20,
+          background:`${cyan}15`,border:`1px solid ${cyan}33`,color:cyan,fontSize:12,fontWeight:600,marginBottom:24}}>
+          Security leadership your business can actually afford
+        </div>
+        <h1 style={{fontSize:52,fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
+          maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
+          The cybersecurity expert<br/>your business is required to have.
+        </h1>
+        <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 auto 36px"}}>
+          A full-time CISO costs $200,000 a year. ShieldAI gives you the same protection —
+          AI-powered, expert-reviewed — for the price of a subscription.
+        </p>
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+            style={{padding:"14px 28px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
+              color:deep,border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:"pointer",
+              boxShadow:`0 0 40px ${cyan}44`}}>
+            Request information
+          </button>
+          <button onClick={onEnterApp}
+            style={{padding:"14px 28px",background:"none",border:`1px solid ${line}`,
+              borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+            Try the assessment →
+          </button>
+        </div>
+
+        {/* Signature: posture score motif */}
+        <div style={{marginTop:60,display:"inline-flex",alignItems:"center",gap:28,
+          padding:"24px 36px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:46,fontWeight:800,color:C.green,lineHeight:1}}>91</div>
+            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE</div>
+          </div>
+          <div style={{width:1,height:48,background:line}}/>
+          <div style={{textAlign:"left",maxWidth:280}}>
+            <div style={{fontSize:13,color:ink,fontWeight:600,marginBottom:3}}>A score you can prove</div>
+            <div style={{fontSize:12,color:dim,lineHeight:1.5}}>
+              Every point traces to a specific control — the kind of evidence insurers and auditors trust.
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* PROBLEM */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+        <Section>
+          <Eyebrow>The problem</Eyebrow>
+          <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 30px",maxWidth:680}}>
+            Too big to ignore security. Too small to afford it.
+          </h2>
+          <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+            {[
+              { stat:"47%", label:"of small businesses have no cybersecurity budget at all." },
+              { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most." },
+              { stat:"43%", label:"of all cyberattacks target small businesses." },
+            ].map((b,i)=>(
+              <div key={i} style={{flex:"1 1 240px",background:C.card,border:`1px solid ${line}`,
+                borderRadius:14,padding:"26px 24px"}}>
+                <div style={{fontSize:40,fontWeight:800,color:cyan,lineHeight:1,marginBottom:10}}>{b.stat}</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.5}}>{b.label}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      </div>
+
+      {/* HOW IT WORKS */}
+      <Section style={{paddingTop:72,paddingBottom:72}}>
+        <div id="how" style={{position:"relative",top:-70}}/>
+        <Eyebrow>How it works</Eyebrow>
+        <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 40px",maxWidth:620}}>
+          From assessment to managed program in four steps.
+        </h2>
+        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+          {steps.map((s,i)=>(
+            <div key={i} style={{flex:"1 1 220px",position:"relative"}}>
+              <div style={{fontSize:13,fontWeight:800,color:cyan,marginBottom:10,letterSpacing:1}}>{s.n}</div>
+              <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>{s.t}</div>
+              <div style={{fontSize:14,color:dim,lineHeight:1.6}}>{s.d}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* WHY NOW */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+        <Section>
+          <Eyebrow>Why now</Eyebrow>
+          <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px",maxWidth:680}}>
+            You may already be required to have this.
+          </h2>
+          <p style={{fontSize:16,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 0 30px"}}>
+            Security is no longer optional for small businesses — three forces are making it mandatory.
+          </p>
+          <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+            {[
+              { icon:"🛡️", t:"Cyber insurance", d:"Insurers now require proof of controls — MFA, incident response, monitoring — before they'll issue or renew a policy." },
+              { icon:"🤝", t:"Customer requirements", d:"Larger customers push security questionnaires down to their vendors. No program can mean no contract." },
+              { icon:"⚖️", t:"Regulation", d:"HIPAA, CMMC, the FTC Safeguards Rule and state privacy laws now reach deep into the small-business tier." },
+            ].map((b,i)=>(
+              <div key={i} style={{flex:"1 1 260px",background:C.card,border:`1px solid ${line}`,borderRadius:14,padding:"24px"}}>
+                <div style={{fontSize:24,marginBottom:12}}>{b.icon}</div>
+                <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>{b.t}</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.6}}>{b.d}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      </div>
+
+      {/* PRICING */}
+      <Section style={{paddingTop:72,paddingBottom:72}}>
+        <div id="pricing" style={{position:"relative",top:-70}}/>
+        <Eyebrow>Plans</Eyebrow>
+        <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 12px"}}>
+          Start self-serve. Grow into a managed program.
+        </h2>
+        <p style={{fontSize:16,color:dim,margin:"0 0 40px",maxWidth:560}}>
+          Three tiers that scale with your needs. Contact us for pricing tailored to your size and obligations.
+        </p>
+        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+          {tiers.map((t,i)=>(
+            <div key={i} style={{flex:"1 1 280px",background:t.featured?`${cyan}0C`:C.card,
+              border:`1px solid ${t.featured?cyan:line}`,borderRadius:16,padding:"28px 26px",position:"relative"}}>
+              {t.featured && (
+                <div style={{position:"absolute",top:-11,left:26,padding:"3px 12px",borderRadius:20,
+                  background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
+              )}
+              <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:18}}>{t.name}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
+                {t.points.map((p,j)=>(
+                  <div key={j} style={{display:"flex",gap:9,fontSize:14,color:dim,lineHeight:1.4}}>
+                    <span style={{color:C.green,flexShrink:0}}>✓</span>{p}
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=> t.cta==="Start free" ? onEnterApp() : document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+                style={{width:"100%",padding:"11px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",
+                  background:t.featured?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
+                  color:t.featured?deep:ink,border:t.featured?"none":`1px solid ${line}`}}>
+                {t.cta}
+              </button>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* TRUST */}
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"40px 0",background:navy}}>
+        <Section>
+          <div style={{fontSize:12,color:dim,letterSpacing:1.5,textTransform:"uppercase",textAlign:"center",marginBottom:20}}>
+            Built on the standards that matter
+          </div>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap",justifyContent:"center"}}>
+            {trust.map((t,i)=>(
+              <div key={i} style={{padding:"8px 18px",border:`1px solid ${line}`,borderRadius:8,
+                color:dim,fontSize:13,fontWeight:600}}>{t}</div>
+            ))}
+          </div>
+        </Section>
+      </div>
+
+      {/* CONTACT FORM */}
+      <Section style={{paddingTop:72,paddingBottom:72}}>
+        <div id="contact" style={{position:"relative",top:-70}}/>
+        <div style={{display:"flex",gap:48,flexWrap:"wrap",alignItems:"flex-start"}}>
+          <div style={{flex:"1 1 320px"}}>
+            <Eyebrow>Get in touch</Eyebrow>
+            <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px"}}>
+              See what ShieldAI can do for your business.
+            </h2>
+            <p style={{fontSize:15,color:dim,lineHeight:1.7,margin:"0 0 24px"}}>
+              Tell us a little about your business and we'll show you where you stand and how we can help.
+              No pressure, no jargon.
+            </p>
+            <div style={{fontSize:14,color:dim,lineHeight:2}}>
+              <div>✓ A clear picture of your security posture</div>
+              <div>✓ Guidance tailored to your industry & obligations</div>
+              <div>✓ Pricing matched to your size</div>
+            </div>
+          </div>
+
+          <div style={{flex:"1 1 360px",background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"28px"}}>
+            {submitted ? (
+              <div style={{textAlign:"center",padding:"30px 10px"}}>
+                <div style={{fontSize:40,marginBottom:14}}>✓</div>
+                <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Thanks — we'll be in touch.</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.6}}>
+                  Your request is in. A member of our team will reach out to {form.email} shortly.
+                </div>
+              </div>
+            ) : (
+              <>
+                {[
+                  { k:"name", label:"Your name", ph:"Jane Smith" },
+                  { k:"email", label:"Work email *", ph:"jane@company.com" },
+                  { k:"company", label:"Company", ph:"Acme Inc." },
+                ].map(f=>(
+                  <div key={f.k} style={{marginBottom:14}}>
+                    <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>{f.label}</label>
+                    <input value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})}
+                      placeholder={f.ph}
+                      style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:deep,
+                        border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,
+                        fontFamily:"Inter,system-ui,sans-serif"}}/>
+                  </div>
+                ))}
+                <div style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>Company size</label>
+                  <select value={form.employees} onChange={e=>setForm({...form,employees:e.target.value})}
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:deep,
+                      border:`1px solid ${line}`,borderRadius:9,color:form.employees?ink:dim,fontSize:14}}>
+                    <option value="">Select…</option>
+                    <option value="1-10">1–10 employees</option>
+                    <option value="11-50">11–50 employees</option>
+                    <option value="51-200">51–200 employees</option>
+                    <option value="200+">200+ employees</option>
+                  </select>
+                </div>
+                <div style={{marginBottom:18}}>
+                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>How can we help?</label>
+                  <textarea value={form.message} onChange={e=>setForm({...form,message:e.target.value})}
+                    rows={3} placeholder="Tell us about your situation…"
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:deep,
+                      border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,resize:"vertical",
+                      fontFamily:"Inter,system-ui,sans-serif"}}/>
+                </div>
+                {formErr && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{formErr}</div>}
+                <button onClick={submitLead} disabled={submitting}
+                  style={{width:"100%",padding:"13px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
+                    color:deep,border:"none",borderRadius:9,fontSize:15,fontWeight:700,
+                    cursor:submitting?"wait":"pointer"}}>
+                  {submitting ? "Sending…" : "Request information"}
+                </button>
+                <div style={{fontSize:11,color:dim,textAlign:"center",marginTop:10}}>
+                  We'll only use your details to follow up. No spam.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      {/* FOOTER */}
+      <div style={{borderTop:`1px solid ${line}`,padding:"32px 0",background:navy}}>
+        <Section style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
+          <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
+          <span style={{fontSize:12,color:dim}}>Virtual CISO for small business</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center"}}>
+            <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Client Login</button>
+            <span style={{fontSize:12,color:dim}}>© 2026 Xandu Ltd</span>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
 function Landing({ onStart }) {
   const features = [
     { icon:"🤖", title:"Multi-AI Architecture", desc:"Claude handles risk & policy, Gemini powers threat intel, GPT-4o writes executive reports." },
@@ -4966,6 +5353,7 @@ export default function ShieldAI() {
   const [assessment, setAssessment] = useState(null);
   const [results, setResults] = useState(null);
   const [consoleTarget, setConsoleTarget] = useState(null); // {assessmentId, programId}
+  const [publicView, setPublicView] = useState("marketing"); // marketing | auth (when logged out)
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -5028,9 +5416,14 @@ export default function ShieldAI() {
     setPhase("analysis");
   }
 
-  // Not logged in → show auth screen
+  // Not logged in → marketing front page, then auth
   if (!user) {
-    return <AuthScreen onAuthenticated={handleAuthenticated}/>;
+    if (publicView === "auth") {
+      return <AuthScreen onAuthenticated={handleAuthenticated} onBack={() => setPublicView("marketing")}/>;
+    }
+    return <MarketingPage
+      onEnterApp={() => setPublicView("auth")}
+      onLogin={() => setPublicView("auth")}/>;
   }
 
   // Admin panel (admins only)
@@ -5047,10 +5440,9 @@ export default function ShieldAI() {
   const TopBar = () => (
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
-      <span onClick={() => setPhase("home")}
-        style={{fontSize:18,cursor:"pointer"}}>🛡️</span>
-      <span onClick={() => setPhase("home")}
-        style={{fontWeight:700,color:C.text,fontSize:14,cursor:"pointer"}}>ShieldAI</span>
+      <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
+        <ShieldLockup logoSize={22} textSize={15} ink={C.text}/>
+      </span>
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
         <span style={{fontSize:12,color:C.textSec}}>
           {user.companyName || user.email}
