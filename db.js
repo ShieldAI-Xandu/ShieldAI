@@ -15,8 +15,12 @@ const defaultData = {
   programs: [],      // { id, userId, assessmentId, createdAt, status, sections: {...} }
   policyDocs: [],    // { id, userId, policyId, policyName, createdAt, companyContext, answers, content }
   trainingPrograms: [], // { id, userId, createdAt, companyContext, curriculum: {...} }
-  leads: [],         // { id, name, email, company, employees, message, createdAt }
-  leads: [],         // { id, name, email, company, employees, message, createdAt }
+  leads: [],         // { id, name, email, company, employees, message, status, createdAt }
+  agents: [],        // { id, ownerUserId, hostname, os, tokenHash, status, createdAt, lastSeen }
+  enrollTokens: [],  // { tokenHash, ownerUserId, createdAt, expiresAt, usedAt }
+  agentReports: [],  // { id, agentId, ownerUserId, receivedAt, report }
+  agentEvents: [],   // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
+  recommendations: [], // { id, ownerUserId, agentId, origin, title, detail, severity, status, history[] }
 };
 
 const adapter = new JSONFile(file);
@@ -31,7 +35,11 @@ db.data.programs ||= [];
 db.data.policyDocs ||= [];
 db.data.trainingPrograms ||= [];
 db.data.leads ||= [];
-db.data.leads ||= [];
+db.data.agents ||= [];
+db.data.enrollTokens ||= [];
+db.data.agentReports ||= [];
+db.data.agentEvents ||= [];
+db.data.recommendations ||= [];
 await db.write();
 
 export default db;

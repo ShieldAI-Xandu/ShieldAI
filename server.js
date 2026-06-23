@@ -7,6 +7,8 @@ import dotenv from "dotenv";
 import { randomUUID } from "crypto";
 import db from "./db.js";
 import { PIPELINE } from "./generators.js";
+import { registerAgentRoutes } from "./agentRoutes.js";
+import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
@@ -132,6 +134,7 @@ app.post("/api/leads", async (req, res) => {
       company: company ? String(company).slice(0, 200) : "",
       employees: employees ? String(employees).slice(0, 50) : "",
       message: message ? String(message).slice(0, 2000) : "",
+      status: "new",
       createdAt: new Date().toISOString(),
     };
     db.data.leads ||= [];
@@ -148,6 +151,31 @@ app.post("/api/leads", async (req, res) => {
 app.get("/api/admin/leads", requireAdmin, (req, res) => {
   const leads = [...(db.data.leads || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json(leads);
+});
+
+// Admin: update a lead's status (new | contacted | qualified | closed)
+app.patch("/api/admin/leads/:id", requireAdmin, async (req, res) => {
+  const lead = (db.data.leads || []).find(l => l.id === req.params.id);
+  if (!lead) return res.status(404).json({ error: "Lead not found." });
+  const allowed = ["new", "contacted", "qualified", "closed"];
+  const { status } = req.body || {};
+  if (status !== undefined) {
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: `Status must be one of: ${allowed.join(", ")}.` });
+    }
+    lead.status = status;
+  }
+  await db.write();
+  res.json(lead);
+});
+
+// Admin: delete a lead
+app.delete("/api/admin/leads/:id", requireAdmin, async (req, res) => {
+  const before = (db.data.leads || []).length;
+  db.data.leads = (db.data.leads || []).filter(l => l.id !== req.params.id);
+  if (db.data.leads.length === before) return res.status(404).json({ error: "Lead not found." });
+  await db.write();
+  res.json({ deleted: req.params.id });
 });
 
 // How many registration slots remain (used by the UI)
@@ -329,6 +357,60 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
         };
 
         program.sections[step.key] = aiResult;
+      } else if (step.key === "compliance") {
+        // Framework-aware compliance mapping. The user selected which
+        // frameworks apply in the assessment; honor that selection instead
+        // of letting the AI guess. When CIS Controls is selected, inject the
+        // real v8.1 control list for the chosen Implementation Group.
+        const selected = Array.isArray(assessmentData.selectedFrameworks)
+          ? assessmentData.selectedFrameworks : [];
+        const cisEntry = selected.find(f => f.id === "cis");
+        const userNamedFrameworks = selected
+          .map(f => f.name + (f.id === "cis" && f.implementationGroup ? ` (${f.implementationGroup})` : ""))
+          .filter(Boolean);
+
+        let frameworkInstruction;
+        if (userNamedFrameworks.length > 0) {
+          frameworkInstruction =
+            `The business has explicitly selected these compliance frameworks to be assessed against: ${userNamedFrameworks.join(", ")}. Produce a gap analysis for EACH selected framework — do not substitute or omit any.`;
+        } else {
+          frameworkInstruction =
+            `Limit to the 2-3 most relevant frameworks for this business based on its industry and stated compliance needs.`;
+        }
+
+        let cisBlock = "";
+        if (cisEntry) {
+          const ig = cisEntry.implementationGroup || "IG1";
+          const grp = CIS_IMPLEMENTATION_GROUPS[ig] || CIS_IMPLEMENTATION_GROUPS.IG1;
+          cisBlock =
+            `\n\nFor the CIS Controls framework, assess against CIS Controls v8.1 at ${ig} (${grp.tagline}). ` +
+            `For the "name" field use exactly "CIS Controls v8.1 (${ig})". ` +
+            `Draw the gap analysis "control" values from this authoritative control list (use the real control names):\n` +
+            buildCISPromptBlock(ig);
+        }
+
+        const userContent =
+          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}\n\n` +
+          `Generate the "compliance" section. Return ONLY valid JSON matching the schema in your instructions. Limit gaps to 3 per framework.`;
+
+        let parsed = null;
+        try {
+          const text = await callClaudeText({
+            system: step.system,
+            messages: [{ role: "user", content: userContent }],
+            max_tokens: step.maxTokens,
+          });
+          parsed = extractJson(text);
+        } catch (firstErr) {
+          console.warn(`Step "compliance" first attempt failed (${firstErr.message}); retrying…`);
+          const retryText = await callClaudeText({
+            system: step.system,
+            messages: [{ role: "user", content: userContent + " Return strictly valid, minified JSON — no trailing commas, no text before or after." }],
+            max_tokens: step.maxTokens,
+          });
+          parsed = extractJson(retryText);
+        }
+        program.sections[step.key] = parsed;
       } else {
         // All other steps: try once, and on parse failure retry with a
         // stricter "valid JSON only" nudge before giving up.
@@ -753,41 +835,10 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
 });
 
 // ─────────────────────────────────────────────────────────────
-//  LEADS (public marketing form)
+//  LEADS — routes defined earlier (public POST /api/leads,
+//  admin GET/PATCH/DELETE /api/admin/leads). Duplicate definitions
+//  removed: Express uses the first-registered route, so these never ran.
 // ─────────────────────────────────────────────────────────────
-
-// Public: anyone can submit an info request from the marketing page
-app.post("/api/leads", async (req, res) => {
-  try {
-    const { name, email, company, employees, message } = req.body || {};
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ error: "A valid email is required." });
-    }
-    const lead = {
-      id: randomUUID(),
-      name: (name || "").slice(0, 200),
-      email: email.slice(0, 200),
-      company: (company || "").slice(0, 200),
-      employees: (employees || "").slice(0, 50),
-      message: (message || "").slice(0, 2000),
-      createdAt: new Date().toISOString(),
-      status: "new",
-    };
-    db.data.leads ||= [];
-    db.data.leads.push(lead);
-    await db.write();
-    res.json({ ok: true, id: lead.id });
-  } catch (err) {
-    console.error("Lead submission error:", err.message);
-    res.status(500).json({ error: "Could not submit your request. Please try again." });
-  }
-});
-
-// Admin: view collected leads
-app.get("/api/admin/leads", requireAdmin, (req, res) => {
-  const leads = [...(db.data.leads || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(leads);
-});
 
 // ─────────────────────────────────────────────────────────────
 //  ADMIN ROUTES (admin only)
@@ -918,6 +969,11 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
     totalPolicies: (db.data.policyDocs || []).length,
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+//  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
+// ─────────────────────────────────────────────────────────────
+registerAgentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

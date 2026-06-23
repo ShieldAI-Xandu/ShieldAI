@@ -1,0 +1,354 @@
+// agentRoutes.js
+// ShieldAI monitoring-agent backend: enrollment, report ingestion, fleet views,
+// and the recommendation lifecycle.
+//
+// BOUNDARY (enforced here): the agent and the AI never perform actions. These
+// routes only (a) receive read-only posture data from agents and (b) record a
+// human-driven recommendation lifecycle. There is NO route that sends a command
+// to an endpoint, because no such capability exists by design.
+//
+// Mount from server.js:
+//   import { registerAgentRoutes } from "./agentRoutes.js";
+//   registerAgentRoutes(app, { db, requireAuth, requireAdmin });
+
+import { randomUUID, randomBytes, createHash } from "crypto";
+
+// ── small helpers ─────────────────────────────────────────────
+const nowIso = () => new Date().toISOString();
+const sha256 = (s) => createHash("sha256").update(s).digest("hex");
+const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 chars
+
+// Ensure all agent collections exist on the lowdb instance.
+function ensureCollections(db) {
+  db.data.agents          ||= []; // { id, ownerUserId, hostname, os, tokenHash, status, createdAt, lastSeen, revokedAt }
+  db.data.enrollTokens    ||= []; // { tokenHash, ownerUserId, createdAt, expiresAt, usedAt }
+  db.data.agentReports    ||= []; // { id, agentId, ownerUserId, receivedAt, report }
+  db.data.agentEvents     ||= []; // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
+  db.data.recommendations ||= []; // { id, ownerUserId, agentId?, origin, title, detail, severity, status, history[] }
+}
+
+// Map a posture report's worst finding to an overall host status.
+function summarizeReport(report) {
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const order = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+  let worst = "info", fails = 0, warns = 0;
+  for (const c of checks) {
+    if (c.status === "fail") fails++;
+    if (c.status === "warn") warns++;
+    const sev = (c.status === "fail" || c.status === "warn") ? (c.severity || "info") : "info";
+    if ((order[sev] ?? 0) > (order[worst] ?? 0)) worst = sev;
+  }
+  const posture = fails > 0 ? "at_risk" : warns > 0 ? "needs_attention" : "healthy";
+  return { posture, worstSeverity: worst, failCount: fails, warnCount: warns, checkCount: checks.length };
+}
+
+// Public view of an agent (never leaks the token hash).
+function publicAgent(a, latest) {
+  return {
+    id: a.id, hostname: a.hostname, os: a.os, status: a.status,
+    createdAt: a.createdAt, lastSeen: a.lastSeen, revokedAt: a.revokedAt || null,
+    summary: latest ? summarizeReport(latest.report) : null,
+    lastReportAt: latest ? latest.receivedAt : null,
+  };
+}
+
+export function registerAgentRoutes(app, { db, requireAuth, requireAdmin }) {
+  ensureCollections(db);
+
+  // ── middleware: authenticate an AGENT by its bearer token ───
+  function requireAgent(req, res, next) {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Agent token required." });
+    const agent = (db.data.agents || []).find(a => a.tokenHash === sha256(token));
+    if (!agent) return res.status(401).json({ error: "Invalid agent token." });
+    if (agent.status === "revoked") return res.status(403).json({ error: "Agent has been revoked." });
+    req.agent = agent;
+    next();
+  }
+
+  // ── middleware: require an analyst (or admin) human ─────────
+  function requireAnalyst(req, res, next) {
+    requireAuth(req, res, () => {
+      if (!req.isAnalyst && !req.isAdmin) {
+        return res.status(403).json({ error: "Analyst access required." });
+      }
+      next();
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════
+  //  AGENT-FACING ROUTES (no human session; agent token only)
+  // ════════════════════════════════════════════════════════════
+
+  // Enroll: exchange a one-time enrollment token for a durable agent token.
+  app.post("/api/agent/enroll", async (req, res) => {
+    try {
+      const { enrollmentToken, hostname, os } = req.body || {};
+      if (!enrollmentToken) return res.status(400).json({ error: "enrollmentToken is required." });
+
+      const rec = (db.data.enrollTokens || []).find(t => t.tokenHash === sha256(enrollmentToken));
+      if (!rec) return res.status(401).json({ error: "Invalid enrollment token." });
+      if (rec.usedAt) return res.status(409).json({ error: "Enrollment token already used." });
+      if (new Date(rec.expiresAt) < new Date()) return res.status(410).json({ error: "Enrollment token expired." });
+
+      // Issue durable agent token (store only its hash).
+      const agentToken = newToken();
+      const agent = {
+        id: randomUUID(),
+        ownerUserId: rec.ownerUserId,
+        hostname: (hostname || "unknown").slice(0, 200),
+        os: (os || "unknown").slice(0, 32),
+        tokenHash: sha256(agentToken),
+        status: "active",
+        createdAt: nowIso(),
+        lastSeen: null,
+        revokedAt: null,
+      };
+      db.data.agents.push(agent);
+      rec.usedAt = nowIso();
+      rec.agentId = agent.id;
+      await db.write();
+
+      // The plaintext token is returned exactly once; only its hash is stored.
+      res.json({ agentId: agent.id, agentToken });
+    } catch (err) {
+      console.error("Agent enroll error:", err.message);
+      res.status(500).json({ error: "Enrollment failed." });
+    }
+  });
+
+  // Ingest a posture report (read-only data from the endpoint).
+  app.post("/api/agent/report", requireAgent, async (req, res) => {
+    try {
+      const report = req.body || {};
+      if (!report || typeof report !== "object" || !Array.isArray(report.checks)) {
+        return res.status(400).json({ error: "Malformed report (expected checks[])." });
+      }
+
+      const stored = {
+        id: randomUUID(),
+        agentId: req.agent.id,
+        ownerUserId: req.agent.ownerUserId,
+        receivedAt: nowIso(),
+        report,
+      };
+      db.data.agentReports.push(stored);
+
+      // Fan out security events for analyst/admin visibility & action.
+      const events = Array.isArray(report.events) ? report.events : [];
+      for (const e of events.slice(0, 200)) {
+        db.data.agentEvents.push({
+          id: randomUUID(),
+          agentId: req.agent.id,
+          ownerUserId: req.agent.ownerUserId,
+          ts: e.ts || nowIso(),
+          source: String(e.source || "agent").slice(0, 64),
+          severity: String(e.severity || "info").slice(0, 16),
+          type: String(e.type || "event").slice(0, 64),
+          message: String(e.message || "").slice(0, 1000),
+          raw: e.raw ?? null,
+          ack: false,
+        });
+      }
+
+      // Update agent liveness + denormalized host metadata.
+      req.agent.lastSeen = nowIso();
+      if (report.host?.hostname) req.agent.hostname = String(report.host.hostname).slice(0, 200);
+      if (report.host?.os) req.agent.os = String(report.host.os).slice(0, 32);
+
+      // Cap stored reports per agent to keep the JSON db lean (keep last 50).
+      const mine = db.data.agentReports.filter(r => r.agentId === req.agent.id);
+      if (mine.length > 50) {
+        const excess = mine.sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt))
+                           .slice(0, mine.length - 50)
+                           .map(r => r.id);
+        const drop = new Set(excess);
+        db.data.agentReports = db.data.agentReports.filter(r => !drop.has(r.id));
+      }
+
+      await db.write();
+      res.json({ ok: true, summary: summarizeReport(report) });
+    } catch (err) {
+      console.error("Agent report error:", err.message);
+      res.status(500).json({ error: "Could not store report." });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════
+  //  CLIENT ADMIN ROUTES (their own fleet only)
+  // ════════════════════════════════════════════════════════════
+
+  // Issue a one-time enrollment token for a new endpoint.
+  app.post("/api/admin/endpoints/enroll-token", requireAuth, async (req, res) => {
+    try {
+      const token = newToken();
+      const ttlMin = 60; // enrollment window
+      db.data.enrollTokens.push({
+        tokenHash: sha256(token),
+        ownerUserId: req.userId,
+        createdAt: nowIso(),
+        expiresAt: new Date(Date.now() + ttlMin * 60000).toISOString(),
+        usedAt: null,
+      });
+      await db.write();
+      // Returned once; used by install.ps1 -EnrollmentToken.
+      res.json({ enrollmentToken: token, expiresInMinutes: ttlMin });
+    } catch (err) {
+      console.error("Enroll-token error:", err.message);
+      res.status(500).json({ error: "Could not create enrollment token." });
+    }
+  });
+
+  // List my endpoints (with latest posture summary).
+  app.get("/api/admin/endpoints", requireAuth, (req, res) => {
+    const mine = (db.data.agents || []).filter(a => a.ownerUserId === req.userId);
+    const out = mine.map(a => {
+      const latest = (db.data.agentReports || [])
+        .filter(r => r.agentId === a.id)
+        .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
+      return publicAgent(a, latest);
+    });
+    res.json(out);
+  });
+
+  // Full detail for one of my endpoints (latest report + recent events).
+  app.get("/api/admin/endpoints/:id", requireAuth, (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id && a.ownerUserId === req.userId);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found." });
+    const reports = (db.data.agentReports || [])
+      .filter(r => r.agentId === agent.id)
+      .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt));
+    const events = (db.data.agentEvents || [])
+      .filter(e => e.agentId === agent.id)
+      .sort((x, y) => new Date(y.ts) - new Date(x.ts))
+      .slice(0, 100);
+    res.json({
+      agent: publicAgent(agent, reports[0]),
+      latestReport: reports[0]?.report || null,
+      history: reports.slice(0, 20).map(r => ({ receivedAt: r.receivedAt, summary: summarizeReport(r.report) })),
+      events,
+    });
+  });
+
+  // Revoke one of my endpoints (its next upload returns 403).
+  app.post("/api/admin/endpoints/:id/revoke", requireAuth, async (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id && a.ownerUserId === req.userId);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found." });
+    agent.status = "revoked";
+    agent.revokedAt = nowIso();
+    await db.write();
+    res.json({ ok: true, id: agent.id, status: agent.status });
+  });
+
+  // ════════════════════════════════════════════════════════════
+  //  ANALYST ROUTES (across all clients' fleets)
+  // ════════════════════════════════════════════════════════════
+
+  // All endpoints across all clients, with owner + posture summary.
+  app.get("/api/analyst/endpoints", requireAnalyst, (req, res) => {
+    const out = (db.data.agents || []).map(a => {
+      const latest = (db.data.agentReports || [])
+        .filter(r => r.agentId === a.id)
+        .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
+      const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
+      return {
+        ...publicAgent(a, latest),
+        owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
+      };
+    });
+    res.json(out);
+  });
+
+  // ════════════════════════════════════════════════════════════
+  //  RECOMMENDATION LIFECYCLE (humans act; software only records)
+  //  suggested → proposed → permitted | client_performing | declined → completed
+  // ════════════════════════════════════════════════════════════
+
+  const REC_STATUSES = ["suggested", "proposed", "permitted", "client_performing", "declined", "completed"];
+
+  function pushHistory(rec, actorType, actorId, status, note) {
+    rec.history = rec.history || [];
+    rec.history.push({ at: nowIso(), actorType, actorId: actorId || null, status, note: note || "" });
+    rec.status = status;
+  }
+
+  // Analyst authors a recommendation for a client (optionally tied to an endpoint).
+  // NOTE: this records advice only. It does not and cannot perform anything.
+  app.post("/api/analyst/recommendations", requireAnalyst, async (req, res) => {
+    try {
+      const { ownerUserId, agentId, title, detail, severity, origin } = req.body || {};
+      if (!ownerUserId || !title) return res.status(400).json({ error: "ownerUserId and title are required." });
+      const owner = (db.data.users || []).find(u => u.id === ownerUserId);
+      if (!owner) return res.status(404).json({ error: "Client not found." });
+
+      const rec = {
+        id: randomUUID(),
+        ownerUserId,
+        agentId: agentId || null,
+        origin: origin === "ai" ? "ai" : "analyst", // "ai" = drafted by Mastermind AI, forwarded by analyst
+        title: String(title).slice(0, 300),
+        detail: String(detail || "").slice(0, 4000),
+        severity: String(severity || "medium").slice(0, 16),
+        status: "suggested",
+        createdAt: nowIso(),
+        history: [],
+      };
+      // Analyst forwarding it to the client moves it to "proposed".
+      pushHistory(rec, "analyst", req.userId, "suggested", "Authored.");
+      pushHistory(rec, "analyst", req.userId, "proposed", "Proposed to client.");
+      db.data.recommendations.push(rec);
+      await db.write();
+      res.json(rec);
+    } catch (err) {
+      console.error("Create recommendation error:", err.message);
+      res.status(500).json({ error: "Could not create recommendation." });
+    }
+  });
+
+  // A client sees recommendations proposed to them.
+  app.get("/api/admin/recommendations", requireAuth, (req, res) => {
+    const mine = (db.data.recommendations || [])
+      .filter(r => r.ownerUserId === req.userId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json(mine);
+  });
+
+  // Client decision on a recommendation. The client chooses WHO performs it:
+  //   decision: "self"    → client_performing (client will do it themselves)
+  //   decision: "permit"  → permitted (analyst may perform it, with this consent)
+  //   decision: "decline" → declined
+  app.post("/api/admin/recommendations/:id/decision", requireAuth, async (req, res) => {
+    const rec = (db.data.recommendations || []).find(r => r.id === req.params.id && r.ownerUserId === req.userId);
+    if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+    const { decision, note } = req.body || {};
+    const map = { self: "client_performing", permit: "permitted", decline: "declined" };
+    const status = map[decision];
+    if (!status) return res.status(400).json({ error: "decision must be 'self', 'permit', or 'decline'." });
+    pushHistory(rec, "client_admin", req.userId, status, note || "");
+    await db.write();
+    res.json(rec);
+  });
+
+  // Mark a recommendation completed. Allowed for the client (self-performed) or,
+  // when the client granted permission, the analyst who performed it.
+  app.post("/api/recommendations/:id/complete", requireAuth, async (req, res) => {
+    const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+
+    const isOwner = rec.ownerUserId === req.userId;
+    const isPermittedAnalyst = (req.isAnalyst || req.isAdmin) && rec.status === "permitted";
+    if (!isOwner && !isPermittedAnalyst) {
+      return res.status(403).json({ error: "Only the client, or an analyst the client permitted, may complete this." });
+    }
+    // Guard: an analyst may only complete what the client explicitly permitted.
+    if (!isOwner && rec.status !== "permitted") {
+      return res.status(409).json({ error: "Client permission is required before an analyst can complete this." });
+    }
+    pushHistory(rec, isOwner ? "client_admin" : "analyst", req.userId, "completed", req.body?.note || "");
+    await db.write();
+    res.json(rec);
+  });
+
+  console.log("ShieldAI agent routes registered.");
+}
