@@ -39,7 +39,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 1. Install scripts
 mkdir -p "$INSTALL_DIR"
 install -m 0755 "$HERE/collect.sh"   "$INSTALL_DIR/collect.sh"
-install -m 0755 "$HERE/agent-run.sh" "$INSTALL_DIR/agent-run.sh"
+install -m 0755 "$HERE/../shared/agent-run.sh" "$INSTALL_DIR/agent-run.sh"
 
 # 2. Write config (server URL + one-time enrollment token), root-only
 mkdir -p "$DATA_DIR"

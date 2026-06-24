@@ -41,7 +41,7 @@ INTERVAL_SEC=$(( INTERVAL * 60 ))
 # 1. Install scripts
 mkdir -p "$INSTALL_DIR"
 install -m 0755 "$HERE/collect.sh"   "$INSTALL_DIR/collect.sh"
-install -m 0755 "$HERE/agent-run.sh" "$INSTALL_DIR/agent-run.sh"
+install -m 0755 "$HERE/../shared/agent-run.sh" "$INSTALL_DIR/agent-run.sh"
 
 # 2. Write config (root-only)
 mkdir -p "$DATA_DIR"

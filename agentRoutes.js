@@ -9,7 +9,11 @@
 //
 // Mount from server.js:
 //   import { registerAgentRoutes } from "./agentRoutes.js";
-//   registerAgentRoutes(app, { db, requireAuth, requireAdmin });
+//   registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText });
+//
+// callClaudeText is optional: when provided, analysts can AI-enrich an
+// auto-drafted recommendation into client-friendly language. Without it, the
+// deterministic drafts (built directly from the failing checks) are still used.
 
 import { randomUUID, randomBytes, createHash } from "crypto";
 
@@ -52,7 +56,125 @@ function publicAgent(a, latest) {
   };
 }
 
-export function registerAgentRoutes(app, { db, requireAuth, requireAdmin }) {
+// ── Auto-draft: turn failing/warning checks into draft recommendations ──
+// The Mastermind AI layer drafts; it never acts. Drafts are "suggested" only
+// and sit in the analyst queue until a human reviews and forwards them.
+const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+
+// A stable key so the same finding on the same agent isn't re-drafted every
+// report cycle. Tied to agent + check id + status.
+function recDedupeKey(agentId, checkId, status) {
+  return `${agentId}::${checkId}::${status}`;
+}
+
+// Build draft recommendations from a report's actionable checks.
+function buildDraftsFromReport({ report, agent }) {
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  const drafts = [];
+  for (const c of checks) {
+    if (c.status !== "fail" && c.status !== "warn") continue;
+    // Only draft for things worth a human's attention.
+    if ((SEV_RANK[c.severity] ?? 0) < SEV_RANK.medium) continue;
+
+    const action = remediationHint(c.id);
+    drafts.push({
+      dedupeKey: recDedupeKey(agent.id, c.id, c.status),
+      agentId: agent.id,
+      checkId: c.id,
+      title: action.title || c.title,
+      detail: [
+        `On ${report?.host?.hostname || agent.hostname} (${agent.os}), the check "${c.title}" is ${c.status.toUpperCase()}.`,
+        c.detail ? `Finding: ${c.detail}` : "",
+        c.observed ? `Observed: ${c.observed}.` : "",
+        action.detail ? `Suggested action: ${action.detail}` : "",
+        c.cisControl ? `(CIS Control ${c.cisControl}.)` : "",
+      ].filter(Boolean).join(" "),
+      severity: c.severity || "medium",
+    });
+  }
+  return drafts;
+}
+
+// ── Mastermind AI enrichment ──────────────────────────────────
+// Takes the deterministic drafts + host context and asks the AI to rewrite
+// them into prioritized, business-aware recommendations. Returns a map of
+// dedupeKey → { title, detail, severity, priority, rationale }. On ANY failure
+// it returns null and the caller keeps the deterministic text. The AI only
+// drafts language for a human to review — it never performs or approves
+// anything.
+async function aiEnrichDrafts({ drafts, report, agent, owner, callClaudeText, extractJson }) {
+  if (!callClaudeText || !extractJson || drafts.length === 0) return null;
+
+  const findings = drafts.map(d => ({
+    key: d.dedupeKey, checkId: d.checkId, title: d.title,
+    severity: d.severity, detail: d.detail,
+  }));
+
+  const context = {
+    hostname: report?.host?.hostname || agent.hostname,
+    os: agent.os,
+    osVersion: report?.host?.osVersion || "",
+    company: owner?.companyName || "the client",
+    inventory: report?.inventory || {},
+  };
+
+  const system = `You are ShieldAI Mastermind, a senior virtual CISO. You turn raw endpoint security findings into clear, prioritized remediation recommendations for a small/medium business.
+
+You ONLY produce written recommendations for a human (the client's admin or their analyst) to act on. You never perform actions yourself. Be specific, practical, and concise; assume a non-expert reader.
+
+Return ONLY valid minified JSON, no markdown fences, exactly:
+{"recommendations":[{"key":"<echo the finding key>","title":"<short imperative title>","detail":"<2-4 sentences: what's wrong, why it matters for this business, and the concrete steps a human should take>","severity":"low|medium|high|critical","priority":1-5,"rationale":"<one sentence on urgency>"}]}
+Keep one entry per finding key provided. Do not invent findings.`;
+
+  const user = `Host context:\n${JSON.stringify(context)}\n\nFindings to turn into recommendations:\n${JSON.stringify(findings)}\n\nReturn the JSON now.`;
+
+  try {
+    const text = await callClaudeText({
+      system,
+      messages: [{ role: "user", content: user }],
+      max_tokens: 1800,
+    });
+    const parsed = extractJson(text);
+    const out = {};
+    for (const r of (parsed?.recommendations || [])) {
+      if (!r.key) continue;
+      out[r.key] = {
+        title: String(r.title || "").slice(0, 300),
+        detail: String(r.detail || "").slice(0, 4000),
+        severity: ["low","medium","high","critical"].includes(r.severity) ? r.severity : undefined,
+        priority: Number.isFinite(r.priority) ? r.priority : undefined,
+        rationale: String(r.rationale || "").slice(0, 500),
+      };
+    }
+    return Object.keys(out).length ? out : null;
+  } catch (err) {
+    console.warn("Mastermind AI draft enrichment failed; using deterministic text:", err.message);
+    return null;
+  }
+}
+// These are SUGGESTIONS for a human to perform — never executed by software.
+function remediationHint(checkId) {
+  const map = {
+    av_realtime:    { title: "Re-enable antivirus real-time protection", detail: "Turn real-time protection back on in the endpoint's security software." },
+    av_signatures:  { title: "Update antivirus definitions", detail: "Run a definition update so the AV has current signatures." },
+    av_tamper:      { title: "Enable tamper protection", detail: "Enable tamper protection so the AV can't be silently disabled." },
+    av_threats:     { title: "Review recent malware detections", detail: "Review the quarantined detections and confirm remediation; investigate the affected user/host." },
+    av_present:     { title: "Install endpoint protection", detail: "Install a reputable endpoint protection product on this host." },
+    firewall:       { title: "Enable the host firewall", detail: "Turn the firewall on for all network profiles." },
+    disk_encryption:{ title: "Enable disk encryption", detail: "Enable full-disk encryption (BitLocker/FileVault/LUKS) to protect data at rest." },
+    patches:        { title: "Apply pending updates", detail: "Install the pending OS/software updates and schedule a reboot if required." },
+    local_admins:   { title: "Reduce local administrator accounts", detail: "Remove unnecessary local admin rights, keeping the minimum required." },
+    admins:         { title: "Reduce privileged accounts", detail: "Trim sudo/admin group membership to the minimum required." },
+    screen_lock:    { title: "Enforce automatic screen lock", detail: "Set screens to auto-lock after a short idle period and require a password." },
+    ssh:            { title: "Harden SSH configuration", detail: "Disable direct root login and prefer key-based auth over passwords." },
+    gatekeeper:     { title: "Enable Gatekeeper", detail: "Re-enable Gatekeeper so only signed/notarized apps run." },
+    sip:            { title: "Enable System Integrity Protection", detail: "Re-enable SIP to protect macOS system files." },
+    auto_updates:   { title: "Enable automatic security updates", detail: "Configure automatic installation of security updates." },
+  };
+  return map[checkId] || {};
+}
+
+export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson }) {
   ensureCollections(db);
 
   // ── middleware: authenticate an AGENT by its bearer token ───
@@ -167,8 +289,53 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin }) {
         db.data.agentReports = db.data.agentReports.filter(r => !drop.has(r.id));
       }
 
+      // Mastermind auto-draft: turn actionable findings into draft
+      // recommendations (status "suggested"). Deduped so the same finding
+      // isn't re-drafted each cycle. Drafts only — a human reviews & forwards.
+      const drafts = buildDraftsFromReport({ report, agent: req.agent });
+
+      // Filter to drafts that aren't already open, so we only spend an AI call
+      // on genuinely new findings.
+      const newDrafts = drafts.filter(d => !(db.data.recommendations || []).some(r =>
+        r.dedupeKey === d.dedupeKey && !["completed", "declined"].includes(r.status)
+      ));
+
+      // Enrich the new ones with the Mastermind AI (best-effort; falls back to
+      // the deterministic wording if the AI is unavailable). The AI only writes
+      // recommendation language — it never acts.
+      let enriched = null;
+      if (newDrafts.length > 0) {
+        const owner = (db.data.users || []).find(u => u.id === req.agent.ownerUserId);
+        enriched = await aiEnrichDrafts({
+          drafts: newDrafts, report, agent: req.agent, owner, callClaudeText, extractJson,
+        });
+      }
+
+      for (const d of newDrafts) {
+        const ai = enriched?.[d.dedupeKey];
+        const rec = {
+          id: randomUUID(),
+          ownerUserId: req.agent.ownerUserId,
+          agentId: d.agentId,
+          dedupeKey: d.dedupeKey,
+          checkId: d.checkId,
+          origin: "ai",            // drafted by the Mastermind AI layer
+          aiAuthored: !!ai,        // true if AI wrote the language, false if deterministic fallback
+          title: ai?.title || d.title,
+          detail: ai?.detail || d.detail,
+          severity: ai?.severity || d.severity,
+          priority: ai?.priority ?? null,
+          rationale: ai?.rationale || "",
+          status: "suggested",     // sits in analyst queue; not yet shown to client
+          createdAt: nowIso(),
+          history: [{ at: nowIso(), actorType: "ai", actorId: null, status: "suggested",
+            note: ai ? "Auto-drafted by Mastermind AI from agent report." : "Auto-drafted (rule-based) from agent report." }],
+        };
+        db.data.recommendations.push(rec);
+      }
+
       await db.write();
-      res.json({ ok: true, summary: summarizeReport(report) });
+      res.json({ ok: true, summary: summarizeReport(report), draftsCreated: newDrafts.length });
     } catch (err) {
       console.error("Agent report error:", err.message);
       res.status(500).json({ error: "Could not store report." });
@@ -306,10 +473,89 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin }) {
     }
   });
 
-  // A client sees recommendations proposed to them.
+  // Analyst queue: AI-drafted + analyst-authored recommendations not yet
+  // forwarded to clients (status "suggested"), newest first, with context.
+  app.get("/api/analyst/recommendations", requireAnalyst, (req, res) => {
+    const onlySuggested = req.query.status === "suggested";
+    let recs = (db.data.recommendations || []);
+    if (onlySuggested) recs = recs.filter(r => r.status === "suggested");
+    const out = recs
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(r => {
+        const owner = (db.data.users || []).find(u => u.id === r.ownerUserId);
+        const agent = (db.data.agents || []).find(a => a.id === r.agentId);
+        return {
+          ...r,
+          owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
+          hostname: agent ? agent.hostname : null,
+        };
+      });
+    res.json(out);
+  });
+
+  // Analyst forwards a draft to the client (suggested → proposed). Optionally
+  // override title/detail/severity first (e.g. after AI-enrich or hand-editing).
+  app.post("/api/analyst/recommendations/:id/forward", requireAnalyst, async (req, res) => {
+    const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+    if (rec.status !== "suggested") {
+      return res.status(409).json({ error: "Only a suggested draft can be forwarded." });
+    }
+    const { title, detail, severity } = req.body || {};
+    if (title) rec.title = String(title).slice(0, 300);
+    if (detail) rec.detail = String(detail).slice(0, 4000);
+    if (severity) rec.severity = String(severity).slice(0, 16);
+    pushHistory(rec, "analyst", req.userId, "proposed", "Forwarded to client.");
+    await db.write();
+    res.json(rec);
+  });
+
+  // Analyst-triggered AI enrichment: rewrite a draft's detail into clear,
+  // client-friendly language. This only edits TEXT on a draft — it performs no
+  // action and changes no system. Requires callClaudeText to be wired in.
+  app.post("/api/analyst/recommendations/:id/enrich", requireAnalyst, async (req, res) => {
+    const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+    if (typeof callClaudeText !== "function") {
+      return res.status(503).json({ error: "AI enrichment is not configured on this server." });
+    }
+    try {
+      const owner = (db.data.users || []).find(u => u.id === rec.ownerUserId);
+      const system = "You are a security analyst assistant helping a managed-security provider. " +
+        "Rewrite the given security finding into a concise, client-friendly recommendation a small-business owner can understand. " +
+        "Explain the risk in plain language and give clear, numbered steps the client (or their IT) can follow. " +
+        "Do NOT invent specifics not present in the finding. Return ONLY the rewritten recommendation text, no preamble.";
+      const user = [
+        `Client: ${owner?.companyName || "the client"}.`,
+        `Finding title: ${rec.title}`,
+        `Finding detail: ${rec.detail}`,
+        `Severity: ${rec.severity}.`,
+      ].join("\n");
+      const text = await callClaudeText({
+        system,
+        messages: [{ role: "user", content: user }],
+        max_tokens: 600,
+      });
+      const enriched = String(text || "").trim();
+      if (enriched) {
+        rec.detail = enriched.slice(0, 4000);
+        rec.aiEnriched = true;
+        pushHistory(rec, "ai", null, rec.status, "AI-enriched the recommendation text.");
+        await db.write();
+      }
+      res.json(rec);
+    } catch (err) {
+      console.error("Enrich error:", err.message);
+      res.status(500).json({ error: "AI enrichment failed." });
+    }
+  });
+
+  // A client sees only recommendations that have been forwarded to them.
+  // "suggested" drafts live in the analyst queue and must not leak to clients
+  // until an analyst forwards them (status becomes "proposed" or later).
   app.get("/api/admin/recommendations", requireAuth, (req, res) => {
     const mine = (db.data.recommendations || [])
-      .filter(r => r.ownerUserId === req.userId)
+      .filter(r => r.ownerUserId === req.userId && r.status !== "suggested")
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json(mine);
   });

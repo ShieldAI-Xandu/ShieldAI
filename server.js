@@ -973,11 +973,30 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
-registerAgentRoutes(app, { db, requireAuth, requireAdmin });
+registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson });
 
 // ─────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
 });
+
+// Surface the real reason if the server can't stay up (e.g. port in use).
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`\n❌ Port ${PORT} is already in use — another server instance is probably still running.`);
+    console.error(`   On Windows:  netstat -ano | findstr :${PORT}   then   taskkill /PID <pid> /F`);
+  } else {
+    console.error("\n❌ Server failed to start:", err);
+  }
+  process.exit(1);
+});
+
+// If something drains the event loop and the process tries to exit unexpectedly,
+// log it so the cause is visible instead of a silent return to the prompt.
+process.on("exit", (code) => {
+  if (code === 0) console.error(`\n⚠️  Process exited (code 0). If this happened right after startup, the server did not stay alive — check for unhandled errors above.`);
+});
+process.on("uncaughtException", (err) => { console.error("\n❌ Uncaught exception:", err); process.exit(1); });
+process.on("unhandledRejection", (err) => { console.error("\n❌ Unhandled promise rejection:", err); process.exit(1); });
