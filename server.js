@@ -8,6 +8,10 @@ import { randomUUID } from "crypto";
 import db from "./db.js";
 import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
+import { registerAdminRoutes } from "./adminRoutes.js";
+import { registerBillingRoutes } from "./billingRoutes.js";
+import { registerMastermindRoutes } from "./mastermindRoutes.js";
+import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -30,7 +34,12 @@ const app = express();
 const PORT = 3001;
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+// The Stripe webhook needs the RAW body for signature verification, so exclude
+// just that path from the global JSON parser. Everything else parses JSON.
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/billing/webhook") return next();
+  return express.json({ limit: "5mb" })(req, res, next);
+});
 
 const progressStore = {};
 
@@ -853,6 +862,7 @@ app.get("/api/admin/users", requireAdmin, (req, res) => {
       email: u.email,
       companyName: u.companyName,
       isAdmin: !!u.isAdmin,
+      isAnalyst: !!u.isAnalyst,
       createdAt: u.createdAt,
       stats: {
         assessments: assessments.length,
@@ -890,6 +900,7 @@ app.get("/api/admin/users/:id", requireAdmin, (req, res) => {
     email: user.email,
     companyName: user.companyName,
     isAdmin: !!user.isAdmin,
+    isAnalyst: !!user.isAnalyst,
     createdAt: user.createdAt,
     assessments,
     programs,
@@ -973,7 +984,11 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
-registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson });
+registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
+registerAdminRoutes(app, { db, requireAdmin, registerUser });
+await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
+registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
+registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {

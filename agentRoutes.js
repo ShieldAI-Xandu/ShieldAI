@@ -174,7 +174,7 @@ function remediationHint(checkId) {
   return map[checkId] || {};
 }
 
-export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson }) {
+export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient }) {
   ensureCollections(db);
 
   // ── middleware: authenticate an AGENT by its bearer token ───
@@ -197,6 +197,19 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       }
       next();
     });
+  }
+
+  // Which client ids may this analyst/admin see? Admin = all clients; analyst =
+  // only assigned. Returns null to mean "no restriction" (admin).
+  function visibleClientIds(req) {
+    if (req.isAdmin) return null;                       // admins see everything
+    if (analystClientIds) return analystClientIds(db, req.userId);
+    return [];                                          // assignments unavailable → see nothing
+  }
+  function canSeeClient(req, clientId) {
+    if (req.isAdmin) return true;
+    if (analystOwnsClient) return analystOwnsClient(db, req.userId, clientId);
+    return false;
   }
 
   // ════════════════════════════════════════════════════════════
@@ -414,16 +427,19 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
 
   // All endpoints across all clients, with owner + posture summary.
   app.get("/api/analyst/endpoints", requireAnalyst, (req, res) => {
-    const out = (db.data.agents || []).map(a => {
-      const latest = (db.data.agentReports || [])
-        .filter(r => r.agentId === a.id)
-        .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
-      const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
-      return {
-        ...publicAgent(a, latest),
-        owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
-      };
-    });
+    const allowed = visibleClientIds(req); // null = all (admin)
+    const out = (db.data.agents || [])
+      .filter(a => allowed === null || allowed.includes(a.ownerUserId))
+      .map(a => {
+        const latest = (db.data.agentReports || [])
+          .filter(r => r.agentId === a.id)
+          .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
+        const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
+        return {
+          ...publicAgent(a, latest),
+          owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
+        };
+      });
     res.json(out);
   });
 
@@ -448,6 +464,9 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       if (!ownerUserId || !title) return res.status(400).json({ error: "ownerUserId and title are required." });
       const owner = (db.data.users || []).find(u => u.id === ownerUserId);
       if (!owner) return res.status(404).json({ error: "Client not found." });
+      if (!canSeeClient(req, ownerUserId)) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
 
       const rec = {
         id: randomUUID(),
@@ -477,7 +496,9 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   // forwarded to clients (status "suggested"), newest first, with context.
   app.get("/api/analyst/recommendations", requireAnalyst, (req, res) => {
     const onlySuggested = req.query.status === "suggested";
+    const allowed = visibleClientIds(req); // null = all (admin)
     let recs = (db.data.recommendations || []);
+    if (allowed !== null) recs = recs.filter(r => allowed.includes(r.ownerUserId));
     if (onlySuggested) recs = recs.filter(r => r.status === "suggested");
     const out = recs
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -572,6 +593,11 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     const status = map[decision];
     if (!status) return res.status(400).json({ error: "decision must be 'self', 'permit', or 'decline'." });
     pushHistory(rec, "client_admin", req.userId, status, note || "");
+    if (logClientAction) logClientAction(db, {
+      clientUserId: rec.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
+      action: `recommendation_${decision}`, recommendationId: rec.id,
+      detail: `"${rec.title}" → ${status}${note ? " · " + note : ""}`,
+    });
     await db.write();
     res.json(rec);
   });
@@ -592,6 +618,12 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       return res.status(409).json({ error: "Client permission is required before an analyst can complete this." });
     }
     pushHistory(rec, isOwner ? "client_admin" : "analyst", req.userId, "completed", req.body?.note || "");
+    if (logClientAction) logClientAction(db, {
+      clientUserId: rec.ownerUserId, actorUserId: req.userId,
+      actorRole: isOwner ? "client_admin" : "analyst",
+      action: "recommendation_completed", recommendationId: rec.id,
+      detail: `"${rec.title}" marked complete by ${isOwner ? "client" : "analyst"}.`,
+    });
     await db.write();
     res.json(rec);
   });

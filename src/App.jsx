@@ -3548,6 +3548,199 @@ function AdminPanel({ onClose }) {
   const [programData, setProgramData] = useState(null); // { program, assessment }
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // account-control state (Stage 3)
+  const [accountCtl, setAccountCtl] = useState(null);   // rich account record from /api/admin/accounts/:id
+  const [ctlBusy, setCtlBusy] = useState(false);
+  const [tierChoice, setTierChoice] = useState(null);
+  const [audit, setAudit] = useState([]);
+  const [auditLoaded, setAuditLoaded] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  // billing state (Stage 5)
+  const [billing, setBilling] = useState(null);          // portfolio overview
+  const [billingLoaded, setBillingLoaded] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [acctBilling, setAcctBilling] = useState(null);  // one account's billing detail
+
+  // assignments state
+  const [assignments, setAssignments] = useState(null);
+  const [assignLoaded, setAssignLoaded] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignAnalyst, setAssignAnalyst] = useState("");
+  const [assignClient, setAssignClient] = useState("");
+
+  // create-account state
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ email:"", companyName:"", role:"analyst", tempPassword:"" });
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createResult, setCreateResult] = useState(null); // { email, tempPassword? }
+
+  async function createAccount() {
+    const email = createForm.email.trim();
+    if (!email.includes("@")) { setError("Enter a valid email."); return; }
+    setCreateBusy(true); setError(null); setCreateResult(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          email, companyName: createForm.companyName,
+          role: createForm.role,
+          tempPassword: createForm.tempPassword || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setCreateResult({ email, tempPassword: data.tempPassword });
+      setCreateForm({ email:"", companyName:"", role:"analyst", tempPassword:"" });
+      load();
+    } catch (e) { setError(e.message); } finally { setCreateBusy(false); }
+  }
+
+  async function loadAssignments() {
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/assignments`);
+      if (!res.ok) throw new Error("Failed to load assignments.");
+      setAssignments(await res.json());
+      setAssignLoaded(true);
+    } catch (e) { setError(e.message); }
+  }
+  useEffect(() => { if (listTab === "assignments" && !assignLoaded) loadAssignments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listTab]);
+
+  async function assignClientToAnalyst(analystUserId, clientUserId) {
+    if (!analystUserId || !clientUserId) return;
+    setAssignBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/assignments`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ analystUserId, clientUserId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setAssignClient(""); setNotice("Client assigned."); loadAssignments();
+    } catch (e) { setError(e.message); } finally { setAssignBusy(false); }
+  }
+
+  async function unassign(analystUserId, clientUserId) {
+    setAssignBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/assignments`, {
+        method:"DELETE", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ analystUserId, clientUserId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      loadAssignments();
+    } catch (e) { setError(e.message); } finally { setAssignBusy(false); }
+  }
+
+  async function loadBilling() {
+    setBillingLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/billing/overview`);
+      if (!res.ok) throw new Error("Failed to load billing overview.");
+      setBilling(await res.json());
+      setBillingLoaded(true);
+    } catch (e) { setError(e.message); } finally { setBillingLoading(false); }
+  }
+  useEffect(() => { if (listTab === "billing" && !billingLoaded) loadBilling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listTab]);
+
+  async function loadAcctBilling(id) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}/billing`);
+      if (res.ok) setAcctBilling(await res.json());
+    } catch { /* ignore */ }
+  }
+
+  const money = (cents) => cents == null ? "—" : `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
+
+  const TIER_LIST = [
+    { id:"free", name:"Free", price:"$0" },
+    { id:"starter", name:"Starter", price:"$99/mo" },
+    { id:"pro", name:"Pro", price:"$299/mo" },
+    { id:"enterprise", name:"Enterprise", price:"Custom" },
+  ];
+
+  // Load the rich account-control record for a user.
+  async function loadAccountCtl(id) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}`);
+      if (res.ok) { const a = await res.json(); setAccountCtl(a); setTierChoice(a.tier); }
+    } catch { /* surfaced via banners on action */ }
+  }
+
+  async function setRole(id, role, value) {
+    setCtlBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}/role`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ role, value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setAccountCtl(data); setNotice("Role updated."); load();
+    } catch (e) { setError(e.message); } finally { setCtlBusy(false); }
+  }
+
+  async function changeTier(id, tier) {
+    setCtlBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}/tier`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ tier }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setAccountCtl(data); setNotice(`Tier changed to ${tier}.`);
+    } catch (e) { setError(e.message); } finally { setCtlBusy(false); }
+  }
+
+  async function setSuspended(id, suspended) {
+    setCtlBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}/suspend`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ suspended }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setAccountCtl(data); setNotice(suspended ? "Account suspended." : "Account reactivated.");
+    } catch (e) { setError(e.message); } finally { setCtlBusy(false); }
+  }
+
+  async function repairAccount(id, actions) {
+    if (!window.confirm(`Run repair actions (${actions.join(", ")})? This modifies the account's data.`)) return;
+    setCtlBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${id}/repair`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ actions }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const parts = Object.entries(data.result || {}).map(([k,v])=>`${k}: ${v}`).join(", ");
+      setNotice(`Repair complete. ${parts}`); load();
+    } catch (e) { setError(e.message); } finally { setCtlBusy(false); }
+  }
+
+  async function loadAudit() {
+    setAuditLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/audit`);
+      if (!res.ok) throw new Error("Failed to load audit log.");
+      const data = await res.json();
+      setAudit(Array.isArray(data) ? data : []);
+      setAuditLoaded(true);
+    } catch (e) { setError(e.message); } finally { setAuditLoading(false); }
+  }
+  useEffect(() => { if (listTab === "audit" && !auditLoaded) loadAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listTab]);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -3648,6 +3841,10 @@ function AdminPanel({ onClose }) {
     setDetailLoading(true);
     setError(null);
     setView("user");
+    setAccountCtl(null);
+    loadAccountCtl(id);
+    setAcctBilling(null);
+    loadAcctBilling(id);
     try {
       const res = await authFetch(`${API_BASE}/api/admin/users/${id}`);
       if (!res.ok) throw new Error("Failed to load user detail");
@@ -3842,6 +4039,7 @@ function AdminPanel({ onClose }) {
                         {u.companyName || "(no company name)"}
                       </span>
                       {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
+                          {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
                     </div>
                     <div style={{color:C.textSec,fontSize:13}}>{u.email}</div>
                     <div style={{color:C.textMut,fontSize:11,marginTop:4}}>
@@ -3875,6 +4073,189 @@ function AdminPanel({ onClose }) {
                         color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
                       Set Password
                     </button>
+                  </div>
+                )}
+              </Card>
+
+              {/* ── Account Controls (Stage 3) ───────────────── */}
+              <Card style={{marginBottom:20,border:`1px solid ${C.accent}33`}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                  <span style={{color:C.accent,fontSize:12,fontWeight:700,letterSpacing:1.2,
+                    textTransform:"uppercase"}}>Account Controls</span>
+                  {accountCtl?.suspended && <Badge label="SUSPENDED" color={C.red}/>}
+                </div>
+
+                {!accountCtl ? <div style={{color:C.textMut,fontSize:13}}>Loading controls…</div> : (
+                  <div style={{display:"flex",flexDirection:"column",gap:18}}>
+
+                    {/* Role */}
+                    <div>
+                      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Role & Access</div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>setRole(accountCtl.id,"admin",!accountCtl.isAdmin)} disabled={ctlBusy}
+                          style={{padding:"7px 14px",borderRadius:7,cursor:ctlBusy?"wait":"pointer",fontSize:12,fontWeight:600,
+                            background: accountCtl.isAdmin?`${C.purple}22`:"transparent",
+                            border:`1px solid ${accountCtl.isAdmin?C.purple:C.border}`,
+                            color: accountCtl.isAdmin?C.purple:C.textSec}}>
+                          {accountCtl.isAdmin?"✓ Admin":"Make Admin"}
+                        </button>
+                        <button onClick={()=>setRole(accountCtl.id,"analyst",!accountCtl.isAnalyst)} disabled={ctlBusy}
+                          style={{padding:"7px 14px",borderRadius:7,cursor:ctlBusy?"wait":"pointer",fontSize:12,fontWeight:600,
+                            background: accountCtl.isAnalyst?`${C.accent}22`:"transparent",
+                            border:`1px solid ${accountCtl.isAnalyst?C.accent:C.border}`,
+                            color: accountCtl.isAnalyst?C.accent:C.textSec}}>
+                          {accountCtl.isAnalyst?"✓ Analyst":"Make Analyst"}
+                        </button>
+                        {(accountCtl.isAdmin || accountCtl.isAnalyst) && (
+                          <button onClick={()=>setRole(accountCtl.id,"client",false)} disabled={ctlBusy}
+                            style={{padding:"7px 14px",borderRadius:7,cursor:"pointer",fontSize:12,
+                              background:"none",border:`1px solid ${C.border}`,color:C.textMut}}>
+                            Reset to standard client
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tier */}
+                    <div>
+                      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>
+                        Subscription Tier <span style={{color:C.textMut,fontWeight:400}}>· current: {accountCtl.tier}</span>
+                      </div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                        {TIER_LIST.map(t=>{
+                          const cur = accountCtl.tier===t.id;
+                          return (
+                            <button key={t.id} onClick={()=>setTierChoice(t.id)} disabled={ctlBusy}
+                              style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,fontWeight:600,textAlign:"left",
+                                background: tierChoice===t.id?`${C.accent}18`:"transparent",
+                                border:`1px solid ${tierChoice===t.id?C.accent:(cur?C.green:C.border)}`,
+                                color: tierChoice===t.id?C.accent:(cur?C.green:C.textSec)}}>
+                              {t.name} <span style={{opacity:0.7,fontWeight:400}}>{t.price}</span>{cur?" ·current":""}
+                            </button>
+                          );
+                        })}
+                        {tierChoice && tierChoice!==accountCtl.tier && (
+                          <button onClick={()=>changeTier(accountCtl.id,tierChoice)} disabled={ctlBusy}
+                            style={{padding:"7px 16px",borderRadius:7,cursor:"pointer",fontSize:12,fontWeight:700,
+                              background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,color:C.bg,border:"none"}}>
+                            Apply: {accountCtl.tier} → {tierChoice}
+                          </button>
+                        )}
+                      </div>
+                      {accountCtl.subscription && (
+                        <div style={{color:C.textMut,fontSize:11,marginTop:8}}>
+                          Billing status: {accountCtl.subscription.status}
+                          {accountCtl.subscription.stripeCustomerId ? " · Stripe-linked" : " · not yet linked to Stripe"}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Usage vs limits */}
+                    <div>
+                      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Current Usage</div>
+                      <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12.5,color:C.textSec}}>
+                        <span>Endpoints: <span style={{color:C.text,fontWeight:600}}>{accountCtl.counts.endpoints}</span></span>
+                        <span>Assessments: <span style={{color:C.text,fontWeight:600}}>{accountCtl.counts.assessments}</span></span>
+                        <span>Programs: <span style={{color:C.text,fontWeight:600}}>{accountCtl.counts.programs}</span></span>
+                        <span>Policies: <span style={{color:C.text,fontWeight:600}}>{accountCtl.counts.policies}</span></span>
+                      </div>
+                    </div>
+
+                    {/* Repair & state */}
+                    <div>
+                      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Repair & State</div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>repairAccount(accountCtl.id,["clear_stuck_programs"])} disabled={ctlBusy}
+                          style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                            background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+                          Clear stuck programs
+                        </button>
+                        <button onClick={()=>repairAccount(accountCtl.id,["clear_orphans"])} disabled={ctlBusy}
+                          style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                            background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+                          Remove orphaned data
+                        </button>
+                        <button onClick={()=>repairAccount(accountCtl.id,["reset_endpoints"])} disabled={ctlBusy}
+                          style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                            background:`${C.amber}12`,border:`1px solid ${C.amber}40`,color:C.amber}}>
+                          Reset endpoints (revoke all)
+                        </button>
+                        {!accountCtl.suspended ? (
+                          <button onClick={()=>setSuspended(accountCtl.id,true)} disabled={ctlBusy}
+                            style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                              background:`${C.red}12`,border:`1px solid ${C.red}33`,color:C.red}}>
+                            Suspend account
+                          </button>
+                        ) : (
+                          <button onClick={()=>setSuspended(accountCtl.id,false)} disabled={ctlBusy}
+                            style={{padding:"7px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                              background:`${C.green}12`,border:`1px solid ${C.green}40`,color:C.green}}>
+                            Reactivate account
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              {/* ── Billing detail (Stage 5) ─────────────────── */}
+              <Card style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                  <span style={{color:C.green,fontSize:12,fontWeight:700,letterSpacing:1.2,
+                    textTransform:"uppercase"}}>Billing</span>
+                </div>
+                {!acctBilling ? <div style={{color:C.textMut,fontSize:13}}>Loading billing…</div> : (
+                  <div>
+                    <div style={{display:"flex",gap:20,flexWrap:"wrap",marginBottom:14}}>
+                      <div>
+                        <div style={{color:C.textMut,fontSize:11}}>Tier</div>
+                        <div style={{color:C.text,fontSize:14,fontWeight:600}}>{acctBilling.tier}</div>
+                      </div>
+                      <div>
+                        <div style={{color:C.textMut,fontSize:11}}>Subscription status</div>
+                        <div style={{color:C.text,fontSize:14,fontWeight:600}}>
+                          {acctBilling.subscription?.status || "—"}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{color:C.textMut,fontSize:11}}>Lifetime collected</div>
+                        <div style={{color:C.green,fontSize:14,fontWeight:600}}>{money(acctBilling.lifetimePaidCents)}</div>
+                      </div>
+                      {acctBilling.subscription?.currentPeriodEnd && (
+                        <div>
+                          <div style={{color:C.textMut,fontSize:11}}>Renews</div>
+                          <div style={{color:C.text,fontSize:14,fontWeight:600}}>
+                            {new Date(acctBilling.subscription.currentPeriodEnd).toLocaleDateString()}
+                          </div>
+                        </div>
+                      )}
+                      {acctBilling.subscription?.stripeCustomerId && (
+                        <div>
+                          <div style={{color:C.textMut,fontSize:11}}>Stripe customer</div>
+                          <div style={{color:C.textSec,fontSize:12,fontFamily:"monospace"}}>{acctBilling.subscription.stripeCustomerId}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>
+                      Transactions ({acctBilling.transactions?.length || 0})
+                    </div>
+                    {(acctBilling.transactions || []).length === 0 ? (
+                      <div style={{color:C.textMut,fontSize:12.5}}>No transactions recorded.</div>
+                    ) : (
+                      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                        {acctBilling.transactions.map(t=>(
+                          <div key={t.id} style={{display:"flex",gap:10,padding:"8px 12px",
+                            background:C.surface,borderRadius:6,alignItems:"center"}}>
+                            <Badge label={t.status} color={t.status==="paid"?C.green:C.red}/>
+                            <span style={{flex:1,color:C.text,fontSize:12.5}}>{t.description}</span>
+                            <span style={{color:C.text,fontSize:12.5,fontWeight:600}}>{money(t.amountCents)}</span>
+                            <span style={{color:C.textMut,fontSize:11}}>{new Date(t.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </Card>
@@ -3987,7 +4368,10 @@ function AdminPanel({ onClose }) {
         <div style={{display:"flex",gap:8,marginBottom:16,borderBottom:`1px solid ${C.border}`}}>
           {[
             { id:"accounts", label:"Accounts" },
+            { id:"billing", label:"Billing" },
+            { id:"assignments", label:"Assignments" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
+            { id:"audit", label:"Audit Log" },
           ].map(t => {
             const on = listTab === t.id;
             return (
@@ -4005,7 +4389,88 @@ function AdminPanel({ onClose }) {
 
         {listTab === "accounts" && (
           <>
-            <SectionLabel text="All Accounts — Click to Inspect"/>
+            {/* Create account */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+              <SectionLabel text="All Accounts — Click to Inspect"/>
+              <button onClick={()=>{setShowCreate(s=>!s);setCreateResult(null);}}
+                style={{marginLeft:"auto",padding:"7px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                {showCreate ? "Close" : "+ Create Account"}
+              </button>
+            </div>
+
+            {showCreate && (
+              <Card style={{marginBottom:16,padding:"18px",border:`1px solid ${C.accent}33`}}>
+                <div style={{color:C.accent,fontSize:12,fontWeight:700,letterSpacing:1.2,
+                  textTransform:"uppercase",marginBottom:12}}>Create New Account</div>
+                {createResult ? (
+                  <div>
+                    <div style={{color:C.green,fontSize:14,fontWeight:600,marginBottom:8}}>
+                      ✓ Account created: {createResult.email}
+                    </div>
+                    {createResult.tempPassword ? (
+                      <div style={{padding:"12px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                        borderRadius:9,marginBottom:10}}>
+                        <div style={{color:C.amber,fontSize:12,fontWeight:600,marginBottom:6}}>
+                          Temporary password — shown once. Share it securely; the user must change it on first login.
+                        </div>
+                        <code style={{color:C.text,fontSize:14,fontWeight:700,letterSpacing:0.5}}>{createResult.tempPassword}</code>
+                        <button onClick={()=>{navigator.clipboard.writeText(createResult.tempPassword);setNotice("Copied.");}}
+                          style={{marginLeft:12,padding:"4px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                            borderRadius:6,color:C.textSec,fontSize:11,cursor:"pointer"}}>Copy</button>
+                      </div>
+                    ) : (
+                      <div style={{color:C.textSec,fontSize:13,marginBottom:10}}>
+                        The temp password you set is active. The user must change it on first login.
+                      </div>
+                    )}
+                    <button onClick={()=>setCreateResult(null)}
+                      style={{padding:"7px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>Create another</button>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <input value={createForm.email} onChange={e=>setCreateForm({...createForm,email:e.target.value})}
+                        placeholder="Email address"
+                        style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}/>
+                      <input value={createForm.companyName} onChange={e=>setCreateForm({...createForm,companyName:e.target.value})}
+                        placeholder="Name / company (optional)"
+                        style={{flex:"1 1 200px",padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                      <div style={{display:"flex",gap:6}}>
+                        {[{id:"analyst",label:"Analyst"},{id:"admin",label:"Admin"},{id:"client",label:"Client"}].map(rl=>(
+                          <button key={rl.id} onClick={()=>setCreateForm({...createForm,role:rl.id})}
+                            style={{padding:"8px 14px",borderRadius:7,cursor:"pointer",fontSize:12,fontWeight:600,
+                              background:createForm.role===rl.id?`${C.accent}18`:"transparent",
+                              border:`1px solid ${createForm.role===rl.id?C.accent:C.border}`,
+                              color:createForm.role===rl.id?C.accent:C.textSec}}>{rl.label}</button>
+                        ))}
+                      </div>
+                      <input value={createForm.tempPassword} onChange={e=>setCreateForm({...createForm,tempPassword:e.target.value})}
+                        placeholder="Temp password (blank = auto-generate)"
+                        style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}/>
+                      <button onClick={createAccount} disabled={createBusy||!createForm.email.includes("@")}
+                        style={{padding:"10px 20px",background:createForm.email.includes("@")?`linear-gradient(135deg,${C.accent},${C.accentDm})`:C.border,
+                          color:createForm.email.includes("@")?C.bg:C.textMut,border:"none",borderRadius:8,
+                          fontSize:13,fontWeight:700,cursor:createForm.email.includes("@")?"pointer":"default"}}>
+                        {createBusy?"Creating…":"Create"}
+                      </button>
+                    </div>
+                    {createForm.role==="admin" && (
+                      <div style={{color:C.amber,fontSize:12}}>
+                        ⚠ Admins have full platform control (accounts, billing, tiers). Grant sparingly.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+            )}
+
             {loading ? <Spinner/> : (
               <div style={{display:"flex",flexDirection:"column",gap:12}}>
                 {users.map(u => (
@@ -4018,6 +4483,7 @@ function AdminPanel({ onClose }) {
                             {u.companyName || "(no company name)"}
                           </span>
                           {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
+                          {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
                         </div>
                         <div style={{color:C.textSec,fontSize:12,marginBottom:8}}>{u.email}</div>
                         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -4048,6 +4514,210 @@ function AdminPanel({ onClose }) {
             onSetStatus={setLeadStatus}
             onDelete={deleteLead}
           />
+        )}
+
+        {listTab === "audit" && (
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+              <SectionLabel text="Admin Audit Log"/>
+              <button onClick={loadAudit}
+                style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>↻ Refresh</button>
+            </div>
+            {auditLoading ? <Spinner/> : audit.length === 0 ? (
+              <Card style={{textAlign:"center",padding:"36px 24px"}}>
+                <div style={{color:C.textSec,fontSize:13}}>No admin actions recorded yet.</div>
+              </Card>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {audit.map(a=>{
+                  const actColor = a.action==="role_change"?C.purple
+                    : a.action==="tier_change"?C.accent
+                    : a.action==="repair"?C.amber
+                    : a.action==="suspend"?C.red
+                    : a.action==="reactivate"?C.green : C.textSec;
+                  const target = users.find(u=>u.id===a.targetUserId);
+                  return (
+                    <div key={a.id} style={{display:"flex",gap:12,padding:"10px 14px",
+                      background:C.surface,borderRadius:8,alignItems:"flex-start"}}>
+                      <Badge label={a.action.replace("_"," ")} color={actColor}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:C.text,fontSize:13}}>{a.detail}</div>
+                        <div style={{color:C.textMut,fontSize:11,marginTop:3}}>
+                          by {a.actorEmail || a.actorUserId}
+                          {target && ` · on ${target.companyName || target.email}`}
+                          {" · "}{new Date(a.at).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {listTab === "billing" && (
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+              <SectionLabel text="Financial Overview"/>
+              <button onClick={loadBilling}
+                style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>↻ Refresh</button>
+            </div>
+
+            {billingLoading ? <Spinner/> : !billing ? (
+              <Card style={{textAlign:"center",padding:"36px"}}>
+                <div style={{color:C.textSec,fontSize:13}}>No billing data.</div>
+              </Card>
+            ) : (
+              <>
+                {!billing.configured && (
+                  <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}12`,
+                    border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
+                    Stripe is not yet configured — figures below reflect internal tiers and any
+                    manually-recorded transactions. See BILLING_SETUP.md to connect Stripe.
+                  </div>
+                )}
+
+                {/* KPI cards */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",
+                  gap:12,marginBottom:22}}>
+                  <Card style={{padding:"16px 18px"}}>
+                    <div style={{color:C.textMut,fontSize:11,textTransform:"uppercase",letterSpacing:1,fontWeight:700}}>Est. MRR</div>
+                    <div style={{color:C.green,fontSize:26,fontWeight:700,marginTop:4}}>{money(billing.mrrCents)}</div>
+                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>monthly recurring</div>
+                  </Card>
+                  <Card style={{padding:"16px 18px"}}>
+                    <div style={{color:C.textMut,fontSize:11,textTransform:"uppercase",letterSpacing:1,fontWeight:700}}>Lifetime Collected</div>
+                    <div style={{color:C.text,fontSize:26,fontWeight:700,marginTop:4}}>{money(billing.totalPaidCents)}</div>
+                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>all paid invoices</div>
+                  </Card>
+                  <Card style={{padding:"16px 18px"}}>
+                    <div style={{color:C.textMut,fontSize:11,textTransform:"uppercase",letterSpacing:1,fontWeight:700}}>Paying Clients</div>
+                    <div style={{color:C.text,fontSize:26,fontWeight:700,marginTop:4}}>
+                      {billing.rows.filter(r=>r.priceCents>0 && ["active","trialing","manual","past_due"].includes(r.status)).length}
+                    </div>
+                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>of {billing.rows.length} accounts</div>
+                  </Card>
+                </div>
+
+                {/* Per-client rollup */}
+                <SectionLabel text="Per-Client Billing"/>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {billing.rows.sort((a,b)=>b.priceCents-a.priceCents).map(r=>{
+                    const tierColor = r.tier==="enterprise"?C.purple:r.tier==="pro"?C.accent
+                      :r.tier==="starter"?C.green:C.textMut;
+                    const stColor = ["active","manual","trialing"].includes(r.status)?C.green
+                      :r.status==="past_due"?C.amber:r.status==="free"?C.textMut:C.red;
+                    return (
+                      <div key={r.id} onClick={()=>{ const u=users.find(x=>x.id===r.id); if(u) openUser(r.id); }}
+                        style={{display:"flex",gap:12,padding:"11px 14px",background:C.surface,
+                          borderRadius:8,alignItems:"center",cursor:"pointer"}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:C.text,fontSize:13,fontWeight:600}}>{r.companyName || r.email}</div>
+                          <div style={{color:C.textMut,fontSize:11,marginTop:2}}>{r.email}</div>
+                        </div>
+                        <Badge label={r.tier} color={tierColor}/>
+                        <Badge label={r.status} color={stColor}/>
+                        <div style={{textAlign:"right",minWidth:90}}>
+                          <div style={{color:C.text,fontSize:13,fontWeight:600}}>{r.priceCents?money(r.priceCents)+"/mo":"—"}</div>
+                          <div style={{color:C.textMut,fontSize:11}}>lifetime {money(r.lifetimePaidCents)}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {listTab === "assignments" && (
+          <div>
+            <SectionLabel text="Analyst Assignments"/>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
+              Assign clients to analysts. An analyst has full control over the security work of
+              their assigned clients (endpoints, recommendations, analysis, action history) but not
+              administrative functions, which stay with admins.
+            </p>
+
+            {!assignments ? <Spinner/> : (
+              <>
+                {/* Assign form */}
+                <Card style={{marginBottom:18,padding:"16px 18px"}}>
+                  <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:10}}>New Assignment</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <select value={assignAnalyst} onChange={e=>setAssignAnalyst(e.target.value)}
+                      style={{flex:"1 1 200px",padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:8,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}>
+                      <option value="">Select analyst…</option>
+                      {assignments.analysts.map(a=>(
+                        <option key={a.analystUserId} value={a.analystUserId}>{a.analyst} ({a.clients.length} clients)</option>
+                      ))}
+                    </select>
+                    <select value={assignClient} onChange={e=>setAssignClient(e.target.value)}
+                      style={{flex:"1 1 200px",padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:8,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}>
+                      <option value="">Select client…</option>
+                      {/* unassigned + already-assigned-to-others both selectable */}
+                      {[...assignments.unassigned, ...assignments.analysts.flatMap(a=>a.clients)]
+                        .filter((c,i,arr)=>arr.findIndex(x=>x.id===c.id)===i)
+                        .map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+                    </select>
+                    <button onClick={()=>assignClientToAnalyst(assignAnalyst,assignClient)}
+                      disabled={assignBusy||!assignAnalyst||!assignClient}
+                      style={{padding:"10px 20px",background:(assignAnalyst&&assignClient)?`linear-gradient(135deg,${C.accent},${C.accentDm})`:C.border,
+                        color:(assignAnalyst&&assignClient)?C.bg:C.textMut,border:"none",borderRadius:8,
+                        fontSize:13,fontWeight:700,cursor:(assignAnalyst&&assignClient)?"pointer":"default"}}>
+                      Assign
+                    </button>
+                  </div>
+                </Card>
+
+                {/* Per-analyst rollup */}
+                {assignments.analysts.map(a=>(
+                  <Card key={a.analystUserId} style={{marginBottom:12,padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <Badge label="ANALYST" color={C.accent}/>
+                      <span style={{color:C.text,fontWeight:600,fontSize:14}}>{a.analyst}</span>
+                      <span style={{color:C.textMut,fontSize:12}}>{a.email}</span>
+                      <span style={{marginLeft:"auto",color:C.textMut,fontSize:12}}>{a.clients.length} client(s)</span>
+                    </div>
+                    {a.clients.length===0 ? (
+                      <div style={{color:C.textMut,fontSize:12.5}}>No clients assigned.</div>
+                    ) : (
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {a.clients.map(c=>(
+                          <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,
+                            padding:"6px 10px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:20}}>
+                            <span style={{color:C.text,fontSize:12.5}}>{c.name}</span>
+                            <button onClick={()=>unassign(a.analystUserId,c.id)} disabled={assignBusy}
+                              title="Unassign"
+                              style={{background:"none",border:"none",color:C.red,fontSize:14,cursor:"pointer",lineHeight:1}}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                ))}
+
+                {assignments.unassigned.length>0 && (
+                  <Card style={{padding:"14px 16px",border:`1px solid ${C.amber}33`}}>
+                    <div style={{color:C.amber,fontSize:12,fontWeight:600,marginBottom:8}}>
+                      Unassigned Clients ({assignments.unassigned.length})
+                    </div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                      {assignments.unassigned.map(c=>(
+                        <span key={c.id} style={{padding:"6px 10px",background:C.surface,
+                          border:`1px solid ${C.border}`,borderRadius:20,color:C.textSec,fontSize:12.5}}>{c.name}</span>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -5401,8 +6071,30 @@ function AnalystConsole({ user, onExit }) {
   const [mmThinking, setMmThinking] = useState(false);
   const [trainingClient, setTrainingClient] = useState(null); // client whose training mgmt is open
   const [fleet, setFleet] = useState(null);          // live endpoints from backend
+  const [myClients, setMyClients] = useState(null);
+  const [actionsFor, setActionsFor] = useState(null); // { client, actions }
+  const [actionsLoading, setActionsLoading] = useState(false);
+
+  async function loadMyClients() {
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients`);
+      if (res.ok) setMyClients(await res.json());
+    } catch { /* ignore */ }
+  }
+  async function loadClientActions(clientId) {
+    setActionsLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/actions`);
+      if (res.ok) setActionsFor(await res.json());
+    } catch { /* ignore */ } finally { setActionsLoading(false); }
+  }
+  useEffect(() => { if (view === "myclients" && myClients === null) loadMyClients();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState(null);
+  const [drafts, setDrafts] = useState([]);          // AI-drafted suggestions awaiting review
+  const [draftBusy, setDraftBusy] = useState(null);
   const [recTarget, setRecTarget] = useState(null);  // endpoint we're drafting a rec for
   const [recForm, setRecForm] = useState({ title:"", detail:"", severity:"medium", origin:"analyst" });
   const [recSaving, setRecSaving] = useState(false);
@@ -5410,12 +6102,31 @@ function AnalystConsole({ user, onExit }) {
   async function loadFleet() {
     setFleetLoading(true); setFleetError(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/analyst/endpoints`);
-      if (!res.ok) throw new Error("Could not load fleet (analyst access required).");
-      setFleet(await res.json());
+      const [eRes, dRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/analyst/endpoints`),
+        authFetch(`${API_BASE}/api/analyst/recommendations?status=suggested`),
+      ]);
+      if (!eRes.ok) throw new Error("Could not load fleet (analyst access required).");
+      setFleet(await eRes.json());
+      if (dRes.ok) setDrafts(await dRes.json());
     } catch (e) { setFleetError(e.message); } finally { setFleetLoading(false); }
   }
   useEffect(() => { if (view === "livefleet" && fleet === null) loadFleet(); }, [view]);
+
+  async function enrichDraft(id) {
+    setDraftBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/recommendations/${id}/enrich`, { method: "POST" });
+      if (res.ok) { const updated = await res.json(); setDrafts(ds => ds.map(d => d.id === id ? { ...d, ...updated } : d)); }
+    } finally { setDraftBusy(null); }
+  }
+  async function forwardDraft(id) {
+    setDraftBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/recommendations/${id}/forward`, { method: "POST" });
+      if (res.ok) setDrafts(ds => ds.filter(d => d.id !== id)); // leaves the suggested queue
+    } finally { setDraftBusy(null); }
+  }
 
   async function submitRecommendation() {
     if (!recTarget || !recForm.title.trim()) return;
@@ -5478,6 +6189,12 @@ function AnalystConsole({ user, onExit }) {
         border:`1px solid ${SOC.border}`,borderRadius:4}}>VISION MOCKUP</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
         <span style={{fontSize:11,color:SOC.textSec}}>{user.email}</span>
+        <button onClick={()=>setView(view==="myclients"?"portfolio":"myclients")}
+          style={{padding:"6px 14px",background:view==="myclients"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="myclients"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          👥 My Clients
+        </button>
         <button onClick={()=>setView(view==="livefleet"?"portfolio":"livefleet")}
           style={{padding:"6px 14px",background:view==="livefleet"?SOC.cyan:`${SOC.cyan}18`,
             color:view==="livefleet"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
@@ -5587,6 +6304,92 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
+  if (view === "myclients") {
+    const list = myClients || [];
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="My Clients"/>
+        <Mastermind/>
+        <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
+          {actionsFor ? (
+            <div>
+              <button onClick={()=>setActionsFor(null)}
+                style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+                  borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← Back to clients</button>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                <span style={{fontSize:11,color:SOC.textMut,letterSpacing:1,textTransform:"uppercase",fontWeight:700}}>
+                  Action History · {actionsFor.client}
+                </span>
+                <span style={{fontSize:11,color:SOC.textMut}}>
+                  Ask Mastermind about this client's behavior via the 🧠 button above.
+                </span>
+              </div>
+              {actionsLoading ? <div style={{color:SOC.textMut,padding:20}}>Loading…</div> :
+               actionsFor.actions.length===0 ? (
+                <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"36px",textAlign:"center",color:SOC.textMut}}>
+                  No recorded actions for this client yet.
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {actionsFor.actions.map(ac=>{
+                    const c = ac.action.includes("declined")?SOC.red
+                      : ac.action.includes("completed")?SOC.green
+                      : ac.action.includes("permit")?SOC.cyan
+                      : ac.action.includes("assigned")?SOC.purple : SOC.textSec;
+                    return (
+                      <div key={ac.id} style={{display:"flex",gap:12,padding:"10px 14px",background:SOC.panel,
+                        border:`1px solid ${SOC.border}`,borderRadius:8,alignItems:"flex-start"}}>
+                        <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,
+                          background:`${c}22`,color:c,whiteSpace:"nowrap"}}>{ac.action.replace(/_/g," ")}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:SOC.text,fontSize:13}}>{ac.detail}</div>
+                          <div style={{color:SOC.textMut,fontSize:11,marginTop:3}}>
+                            {ac.actorRole} · {new Date(ac.at).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:11,color:SOC.textMut,letterSpacing:1,textTransform:"uppercase",fontWeight:700,marginBottom:14}}>
+                {list.length} client{list.length!==1?"s":""} assigned to you
+              </div>
+              {list.length===0 ? (
+                <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"40px",textAlign:"center"}}>
+                  <div style={{color:SOC.text,fontWeight:600,marginBottom:6}}>No clients assigned yet</div>
+                  <div style={{color:SOC.textMut,fontSize:13}}>An admin assigns clients to you from the Assignments tab.</div>
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {list.map(c=>(
+                    <div key={c.id} style={{background:SOC.panel,border:`1px solid ${SOC.border}`,
+                      borderRadius:10,padding:"14px 16px",display:"flex",alignItems:"center",gap:14}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{c.name}</div>
+                        <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>
+                          {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
+                        </div>
+                      </div>
+                      <button onClick={()=>loadClientActions(c.id)}
+                        style={{padding:"7px 14px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
+                          borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                        Action History →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (view === "livefleet") {
     const list = fleet || [];
     const online = list.filter(e => isOnline(e.lastSeen)).length;
@@ -5606,6 +6409,62 @@ function AnalystConsole({ user, onExit }) {
           </div>
 
           {fleetError && <div style={{color:SOC.red,fontSize:13,marginBottom:14}}>{fleetError}</div>}
+
+          {/* Mastermind AI draft queue — auto-drafted from incoming reports.
+              Drafts are reviewed here; nothing reaches a client until forwarded. */}
+          {drafts.length > 0 && (
+            <div style={{marginBottom:20,padding:"16px 18px",background:`${SOC.purple}10`,
+              border:`1px solid ${SOC.purple}44`,borderRadius:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                <span style={{fontSize:14}}>✦</span>
+                <span style={{color:SOC.purple,fontSize:12,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>
+                  Mastermind AI · Draft Recommendations ({drafts.length})
+                </span>
+              </div>
+              <p style={{color:SOC.textMut,fontSize:12,lineHeight:1.5,margin:"0 0 14px"}}>
+                Auto-drafted from incoming agent reports. Review, optionally enrich into client-friendly
+                language, then forward to the client. Nothing is sent until you forward it — and the client
+                still decides who acts.
+              </p>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {drafts.map(d=>{
+                  const sm = SEV_META[d.severity] || SEV_META.medium;
+                  return (
+                    <div key={d.id} style={{background:SOC.panel,border:`1px solid ${SOC.border}`,
+                      borderRadius:9,padding:"13px 15px"}}>
+                      <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:8}}>
+                        <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,
+                          background:`${sm.color}22`,color:sm.color,textTransform:"uppercase"}}>{sm.label}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:SOC.text,fontSize:13.5,fontWeight:600}}>{d.title}</div>
+                          <div style={{color:SOC.textMut,fontSize:11,marginTop:2}}>
+                            {d.owner?.companyName || d.owner?.email || "—"}{d.hostname?` · ${d.hostname}`:""}
+                            {d.aiEnriched && <span style={{color:SOC.purple,marginLeft:6}}>· AI-enriched</span>}
+                          </div>
+                          <div style={{color:SOC.textSec,fontSize:12.5,marginTop:6,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{d.detail}</div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>enrichDraft(d.id)} disabled={draftBusy===d.id}
+                          style={{padding:"6px 13px",background:`${SOC.purple}18`,border:`1px solid ${SOC.purple}55`,
+                            borderRadius:6,color:SOC.purple,fontSize:12,fontWeight:600,
+                            cursor:draftBusy===d.id?"wait":"pointer"}}>
+                          {draftBusy===d.id?"Working…":"✦ Enrich with AI"}
+                        </button>
+                        <button onClick={()=>forwardDraft(d.id)} disabled={draftBusy===d.id}
+                          style={{padding:"6px 13px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
+                            borderRadius:6,color:SOC.cyan,fontSize:12,fontWeight:600,
+                            cursor:draftBusy===d.id?"wait":"pointer"}}>
+                          Forward to client →
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {fleetLoading ? <div style={{padding:40,textAlign:"center",color:SOC.textMut}}>Loading fleet…</div> :
            list.length === 0 ? (
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,
@@ -6571,6 +7430,263 @@ function EndpointsScreen({ onBack }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  MASTERMIND CONSOLE (admin) — chat, oversight, on-demand analyze
+// ─────────────────────────────────────────────────────────────
+function MastermindConsole({ onClose }) {
+  const [tab, setTab] = useState("chat");        // chat | oversight | analyze
+  const [error, setError] = useState(null);
+
+  // chat
+  const [msgs, setMsgs] = useState([
+    { role: "assistant", content: "I'm Mastermind. I can see your whole portfolio's posture and recommendations. Ask me what to prioritize, which clients are at risk, or how to handle a finding. I advise only — your team and clients take the actions." },
+  ]);
+  const [input, setInput] = useState("");
+  const [thinking, setThinking] = useState(false);
+
+  // oversight
+  const [recs, setRecs] = useState([]);
+  const [recsLoaded, setRecsLoaded] = useState(false);
+
+  // analyze
+  const [accounts, setAccounts] = useState([]);
+  const [analyzeTarget, setAnalyzeTarget] = useState("");
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [promoted, setPromoted] = useState({});
+
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/admin/accounts`).then(r=>r.ok&&r.json()).then(d=>d&&setAccounts(d)).catch(()=>{});
+  }, []);
+  useEffect(() => {
+    if (tab === "oversight" && !recsLoaded) {
+      authFetch(`${API_BASE}/api/admin/mastermind/recommendations`)
+        .then(r=>r.ok?r.json():[]).then(d=>{setRecs(Array.isArray(d)?d:[]);setRecsLoaded(true);}).catch(()=>{});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || thinking) return;
+    const next = [...msgs, { role:"user", content:text }];
+    setMsgs(next); setInput(""); setThinking(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/mastermind/chat`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ messages: next.filter(m=>m.role!=="system") }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Mastermind error.");
+      setMsgs(m => [...m, { role:"assistant", content: data.reply }]);
+    } catch (e) {
+      setError(e.message);
+      setMsgs(m => [...m, { role:"assistant", content: "(I couldn't respond — "+e.message+")" }]);
+    } finally { setThinking(false); }
+  }
+
+  async function runAnalysis() {
+    if (!analyzeTarget) return;
+    setAnalyzing(true); setAnalysis(null); setError(null); setPromoted({});
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/mastermind/analyze`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ userId: analyzeTarget }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Analysis failed.");
+      setAnalysis(data);
+    } catch (e) { setError(e.message); } finally { setAnalyzing(false); }
+  }
+
+  async function promote(rec, idx) {
+    if (!analysis?.ownerUserId) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/mastermind/promote`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ ownerUserId: analysis.ownerUserId, title: rec.title, detail: rec.detail, severity: rec.severity }),
+      });
+      if (res.ok) setPromoted(p => ({ ...p, [idx]: true }));
+    } catch { /* ignore */ }
+  }
+
+  const sevColor = (s) => s==="critical"||s==="high"?C.red:s==="medium"?C.amber:s==="low"?C.green:C.textSec;
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
+      <div style={{padding:"12px 20px",background:`linear-gradient(135deg,${C.purple}22,${C.accent}11)`,
+        borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:18}}>🧠</span>
+        <span style={{fontWeight:800,fontSize:16}}>Mastermind <span style={{color:C.purple}}>Console</span></span>
+        <span style={{fontSize:11,color:C.textMut,padding:"2px 8px",border:`1px solid ${C.border}`,borderRadius:20}}>Advisory only</span>
+        <button onClick={onClose} style={{marginLeft:"auto",padding:"6px 14px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>← Back</button>
+      </div>
+
+      <div style={{display:"flex",gap:8,padding:"12px 20px 0",borderBottom:`1px solid ${C.border}`}}>
+        {[{id:"chat",label:"💬 Chat"},{id:"oversight",label:"📋 Oversight"},{id:"analyze",label:"🔎 Analyze"}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{padding:"9px 16px",background:"none",border:"none",cursor:"pointer",
+              borderBottom:`2px solid ${tab===t.id?C.purple:"transparent"}`,marginBottom:-1,
+              color:tab===t.id?C.text:C.textSec,fontSize:13,fontWeight:tab===t.id?700:500,
+              fontFamily:"Inter,system-ui,sans-serif"}}>{t.label}</button>
+        ))}
+      </div>
+
+      <div style={{maxWidth:900,margin:"0 auto",padding:"20px"}}>
+        {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+        {/* CHAT */}
+        {tab==="chat" && (
+          <div>
+            <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+              {msgs.map((m,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                  <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
+                    whiteSpace:"pre-wrap",
+                    background:m.role==="user"?`${C.accent}1F`:C.card,
+                    border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,
+                    color:C.text}}>{m.content}</div>
+                </div>
+              ))}
+              {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
+            </div>
+            <div style={{display:"flex",gap:8,position:"sticky",bottom:16}}>
+              <input value={input} onChange={e=>setInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter")send();}}
+                placeholder="Ask Mastermind about your portfolio…"
+                style={{flex:1,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:10,color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+              <button onClick={send} disabled={thinking||!input.trim()}
+                style={{padding:"12px 22px",background:input.trim()?`linear-gradient(135deg,${C.purple},${C.accent})`:C.border,
+                  color:input.trim()?"#fff":C.textMut,border:"none",borderRadius:10,fontSize:13,fontWeight:700,
+                  cursor:input.trim()?"pointer":"default"}}>Send</button>
+            </div>
+          </div>
+        )}
+
+        {/* OVERSIGHT */}
+        {tab==="oversight" && (
+          <div>
+            <SectionLabel text={`Recommendations Across All Clients (${recs.length})`}/>
+            {!recsLoaded ? <Spinner/> : recs.length===0 ? (
+              <Card style={{textAlign:"center",padding:"36px"}}>
+                <div style={{color:C.textSec,fontSize:13}}>No recommendations yet.</div>
+              </Card>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {recs.map(r=>(
+                  <Card key={r.id} style={{padding:"13px 16px"}}>
+                    <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                      <Badge label={r.severity} color={sevColor(r.severity)}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{r.title}</div>
+                        {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{r.detail}</div>}
+                        <div style={{color:C.textMut,fontSize:11,marginTop:5}}>
+                          {r.client} · {r.aiAuthored?"AI-drafted":r.origin} · {new Date(r.createdAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <Badge label={r.status} color={r.status==="completed"?C.green:r.status==="declined"?C.textMut:r.status==="suggested"?C.purple:C.accent}/>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ANALYZE */}
+        {tab==="analyze" && (
+          <div>
+            <SectionLabel text="On-Demand Analysis"/>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 14px"}}>
+              Run Mastermind against a client's current endpoint posture to get a prioritized read and
+              suggested recommendations you can promote into the analyst pipeline.
+            </p>
+            <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+              <select value={analyzeTarget} onChange={e=>setAnalyzeTarget(e.target.value)}
+                style={{flex:"1 1 240px",padding:"11px 13px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:9,color:C.text,fontSize:13,fontFamily:"Inter,system-ui,sans-serif"}}>
+                <option value="">Select a client…</option>
+                {accounts.filter(a=>!a.isAdmin).map(a=>(
+                  <option key={a.id} value={a.id}>{a.companyName||a.email} ({a.counts?.endpoints||0} endpoints)</option>
+                ))}
+              </select>
+              <button onClick={runAnalysis} disabled={!analyzeTarget||analyzing}
+                style={{padding:"11px 22px",background:analyzeTarget?`linear-gradient(135deg,${C.purple},${C.accent})`:C.border,
+                  color:analyzeTarget?"#fff":C.textMut,border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+                  cursor:analyzeTarget?"pointer":"default"}}>
+                {analyzing?"Analyzing…":"Run Analysis"}
+              </button>
+            </div>
+
+            {analysis && (
+              <div>
+                <Card style={{marginBottom:16}}>
+                  <div style={{color:C.purple,fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>
+                    Summary · {analysis.client}
+                  </div>
+                  <div style={{color:C.text,fontSize:13.5,lineHeight:1.6}}>{analysis.summary || "No summary."}</div>
+                </Card>
+
+                {analysis.findings?.length>0 && (
+                  <>
+                    <SectionLabel text="Findings"/>
+                    <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+                      {analysis.findings.map((fd,i)=>(
+                        <div key={i} style={{display:"flex",gap:10,padding:"10px 14px",background:C.surface,
+                          borderRadius:8,alignItems:"flex-start"}}>
+                          <Badge label={fd.severity} color={sevColor(fd.severity)}/>
+                          <div style={{flex:1}}>
+                            <div style={{color:C.text,fontSize:13,fontWeight:600}}>{fd.area}</div>
+                            <div style={{color:C.textSec,fontSize:12.5,marginTop:2}}>{fd.observation}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {analysis.recommendations?.length>0 && (
+                  <>
+                    <SectionLabel text="Suggested Recommendations"/>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {analysis.recommendations.map((rc,i)=>(
+                        <Card key={i} style={{padding:"13px 16px"}}>
+                          <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                            <Badge label={rc.severity} color={sevColor(rc.severity)}/>
+                            <div style={{flex:1}}>
+                              <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{rc.title}</div>
+                              <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{rc.detail}</div>
+                            </div>
+                            <button onClick={()=>promote(rc,i)} disabled={promoted[i]}
+                              style={{padding:"6px 12px",borderRadius:6,fontSize:11.5,fontWeight:600,whiteSpace:"nowrap",
+                                cursor:promoted[i]?"default":"pointer",
+                                background:promoted[i]?`${C.green}18`:`${C.accent}18`,
+                                border:`1px solid ${promoted[i]?C.green:C.accent}55`,
+                                color:promoted[i]?C.green:C.accent}}>
+                              {promoted[i]?"✓ Promoted":"Promote →"}
+                            </button>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                    <p style={{color:C.textMut,fontSize:11.5,marginTop:10,lineHeight:1.5}}>
+                      "Promote" sends a suggestion into the analyst pipeline (status: suggested). An analyst
+                      reviews and forwards it; the client decides who acts. Mastermind never acts directly.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  ROOT
 // ─────────────────────────────────────────────────────────────
 export default function ShieldAI() {
@@ -6583,6 +7699,7 @@ export default function ShieldAI() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
+  const [showMastermind, setShowMastermind] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
 
@@ -6607,6 +7724,7 @@ export default function ShieldAI() {
     setShowAnalyst(false);
     setShowAdmin(false);
     setShowEndpoints(false);
+    setShowMastermind(false);
     setPhase("home");
   }
 
@@ -6659,6 +7777,11 @@ export default function ShieldAI() {
     return <AdminPanel onClose={() => setShowAdmin(false)}/>;
   }
 
+  // Mastermind console (admin only)
+  if (showMastermind && user.isAdmin) {
+    return <MastermindConsole onClose={() => setShowMastermind(false)}/>;
+  }
+
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
     return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
@@ -6681,6 +7804,14 @@ export default function ShieldAI() {
             color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
         </button>
+        {user.isAdmin && (
+          <button onClick={() => setShowMastermind(true)}
+            style={{padding:"5px 12px",background:`${C.purple}22`,
+              border:`1px solid ${C.purple}55`,borderRadius:6,
+              color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            🧠 Mastermind
+          </button>
+        )}
         {user.isAdmin && (
           <button onClick={() => setShowAdmin(true)}
             style={{padding:"5px 12px",background:`${C.purple}22`,

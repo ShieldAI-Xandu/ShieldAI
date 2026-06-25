@@ -21,6 +21,11 @@ const defaultData = {
   agentReports: [],  // { id, agentId, ownerUserId, receivedAt, report }
   agentEvents: [],   // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
   recommendations: [], // { id, ownerUserId, agentId, origin, title, detail, severity, status, history[] }
+  subscriptions: [], // { id, userId, tier, status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd, updatedAt }
+  transactions: [],  // { id, userId, stripeInvoiceId, amountCents, currency, status, description, createdAt }
+  adminAudit: [],    // { id, actorUserId, actorEmail, action, targetUserId, detail, at }
+  assignments: [],   // { id, analystUserId, clientUserId, assignedBy, assignedAt }
+  clientActions: [], // { id, clientUserId, actorUserId, actorRole, action, detail, recommendationId, at }
 };
 
 const adapter = new JSONFile(file);
@@ -40,6 +45,11 @@ db.data.enrollTokens ||= [];
 db.data.agentReports ||= [];
 db.data.agentEvents ||= [];
 db.data.recommendations ||= [];
+db.data.subscriptions ||= [];
+db.data.transactions ||= [];
+db.data.adminAudit ||= [];
+db.data.assignments ||= [];
+db.data.clientActions ||= [];
 await db.write();
 
 export default db;
