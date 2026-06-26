@@ -134,6 +134,7 @@ function publicUser(user) {
     companyName: user.companyName,
     isAdmin: !!user.isAdmin,
     isAnalyst: !!user.isAnalyst,
+    mustChangePassword: !!user.mustChangePassword,
     createdAt: user.createdAt,
   };
 }
@@ -185,6 +186,47 @@ export async function adminResetPassword(targetUserId, newPassword) {
     throw err;
   }
   user.passwordHash = await bcrypt.hash(newPassword, 10);
+  await db.write();
+  return publicUser(user);
+}
+
+// ── Change own password (self-service + forced first-login) ───
+// For a normal change we verify the current password. For a forced first-login
+// change (mustChangePassword), the user already authenticated with the temp
+// password to reach this route, so the current password is optional — but if
+// supplied it's still verified. Clears the mustChangePassword flag on success.
+export async function changeOwnPassword(userId, { currentPassword, newPassword }) {
+  if (!newPassword || newPassword.length < 8) {
+    const err = new Error("New password must be at least 8 characters.");
+    err.code = "WEAK_PASSWORD";
+    throw err;
+  }
+  const user = (db.data.users || []).find(u => u.id === userId);
+  if (!user) {
+    const err = new Error("User not found.");
+    err.code = "NOT_FOUND";
+    throw err;
+  }
+
+  const forced = !!user.mustChangePassword;
+  if (!forced || currentPassword) {
+    const ok = await bcrypt.compare(currentPassword || "", user.passwordHash);
+    if (!ok) {
+      const err = new Error("Current password is incorrect.");
+      err.code = "INVALID_CREDENTIALS";
+      throw err;
+    }
+  }
+
+  const same = await bcrypt.compare(newPassword, user.passwordHash);
+  if (same) {
+    const err = new Error("New password must be different from the current one.");
+    err.code = "SAME_PASSWORD";
+    throw err;
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  user.mustChangePassword = false;
   await db.write();
   return publicUser(user);
 }

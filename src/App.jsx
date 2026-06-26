@@ -7687,6 +7687,75 @@ function MastermindConsole({ onClose }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  FORCE PASSWORD CHANGE (first login for admin-created accounts)
+// ─────────────────────────────────────────────────────────────
+function ForcePasswordChange({ user, onDone, onSignOut }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function submit() {
+    setError(null);
+    if (newPassword.length < 8) { setError("New password must be at least 8 characters."); return; }
+    if (newPassword !== confirm) { setError("Passwords don't match."); return; }
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/auth/change-password`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not change password.");
+      onDone(data.user);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",
+      padding:20,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,maxWidth:440,width:"100%",padding:"28px 30px"}}>
+        <h2 style={{color:C.text,fontSize:20,margin:"0 0 6px"}}>Set a new password</h2>
+        <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 20px"}}>
+          Your account was created with a temporary password. Choose a new one to continue.
+        </p>
+
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <input type="password" value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}
+            placeholder="Current (temporary) password"
+            style={{padding:"11px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,
+              color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)}
+            placeholder="New password (min 8 characters)"
+            style={{padding:"11px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,
+              color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")submit();}}
+            placeholder="Confirm new password"
+            style={{padding:"11px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,
+              color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+        </div>
+
+        {error && <div style={{color:C.red,fontSize:13,marginTop:12}}>{error}</div>}
+
+        <button onClick={submit} disabled={busy}
+          style={{marginTop:18,width:"100%",padding:"12px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:C.bg,border:"none",borderRadius:9,fontSize:14,fontWeight:700,cursor:busy?"wait":"pointer"}}>
+          {busy ? "Saving…" : "Set Password & Continue"}
+        </button>
+        <button onClick={onSignOut}
+          style={{marginTop:10,width:"100%",padding:"9px",background:"none",border:`1px solid ${C.border}`,
+            borderRadius:9,color:C.textSec,fontSize:12.5,cursor:"pointer"}}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  ROOT
 // ─────────────────────────────────────────────────────────────
 export default function ShieldAI() {
@@ -7710,6 +7779,10 @@ export default function ShieldAI() {
   function handleAuthenticated(userObj) {
     setUser(userObj);
     setPhase("home");
+    if (userObj && userObj.mustChangePassword) {
+      // Force a password change before granting access to anything else.
+      return;
+    }
     // Analysts land directly in their console
     if (userObj && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
       setShowAnalyst(true);
@@ -7770,6 +7843,16 @@ export default function ShieldAI() {
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
       onLogin={() => setPublicView("auth")}/>;
+  }
+
+  // Forced first-login password change — blocks everything until done.
+  if (user.mustChangePassword) {
+    return <ForcePasswordChange user={user}
+      onDone={(updated) => {
+        setUser(updated);
+        if (updated && (updated.isAnalyst || updated.email === ANALYST_EMAIL)) setShowAnalyst(true);
+      }}
+      onSignOut={signOut}/>;
   }
 
   // Admin panel (admins only)

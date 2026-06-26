@@ -24,6 +24,7 @@ import {
   requireAdmin,
   getCurrentUser,
   adminResetPassword,
+  changeOwnPassword,
   adminDeleteUser,
   MAX_USERS,
 } from "./auth.js";
@@ -198,6 +199,20 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   const user = getCurrentUser(req.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json(user);
+});
+
+// Change own password (normal self-service, or forced first-login change).
+app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    const user = await changeOwnPassword(req.userId, { currentPassword, newPassword });
+    res.json({ ok: true, user });
+  } catch (err) {
+    const code = ["WEAK_PASSWORD", "SAME_PASSWORD"].includes(err.code) ? 400
+      : err.code === "INVALID_CREDENTIALS" ? 401
+      : err.code === "NOT_FOUND" ? 404 : 500;
+    res.status(code).json({ error: err.message || "Could not change password." });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
