@@ -16,66 +16,106 @@ export const TIERS = {
     priceCents: 0,
     interval: "month",
     stripePriceId: null,
-    description: "Get started with a single endpoint and a baseline assessment.",
+    description: "Run a baseline security assessment. Upgrade to build programs, policies, and monitor endpoints.",
     limits: {
-      endpoints: 1,
-      policies: 2,
-      programs: 1,
+      endpoints: 0,
+      policies: 0,
+      programs: 0,
       trainingPrograms: 0,
-      analystSupport: "none",        // none | email | priority | dedicated
+      analystSupport: "none",        // none | limited | full
     },
-    features: ["Security assessment", "1 monitored endpoint", "2 starter policies"],
+    capabilities: {
+      assessments: true,            // can run/view assessments
+      buildPrograms: false,
+      createPolicies: false,
+      trainingPrograms: false,
+      downloadExports: false,
+      endpoints: false,             // can't enroll agents (feature shown locked)
+      analystSupport: false,
+      mastermind: false,            // client-facing Mastermind Q&A
+    },
+    features: ["Security assessment only", "Upgrade to unlock programs, policies & monitoring"],
   },
   starter: {
     id: "starter",
     name: "Starter",
     rank: 1,
-    priceCents: 9900,               // $99/mo
+    priceCents: 9900,               // $99/mo  (your "Tier 1")
     interval: "month",
     stripePriceId: null,
-    description: "For small teams beginning to formalize their security program.",
+    description: "Multiple assessments, programs, up to 6 policies, and a training program. Monitor up to 5 endpoints.",
     limits: {
       endpoints: 5,
-      policies: 10,
-      programs: 3,
+      policies: 6,
+      programs: null,               // multiple
       trainingPrograms: 1,
-      analystSupport: "email",
+      analystSupport: "none",
     },
-    features: ["Up to 5 endpoints", "10 policies", "Email analyst support", "Awareness training"],
+    capabilities: {
+      assessments: true,
+      buildPrograms: true,
+      createPolicies: true,         // capped at 6 via limits
+      trainingPrograms: true,
+      downloadExports: false,       // no downloads at this tier
+      endpoints: true,              // up to 5
+      analystSupport: false,
+      mastermind: false,
+    },
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Training program", "5 endpoints", "No downloads"],
   },
   pro: {
     id: "pro",
     name: "Pro",
     rank: 2,
-    priceCents: 29900,              // $299/mo
+    priceCents: 29900,              // $299/mo  (your "Tier 2")
     interval: "month",
     stripePriceId: null,
-    description: "Full program management with priority analyst guidance.",
+    description: "All functions with downloads, up to 25 endpoints, and limited engineer support.",
     limits: {
       endpoints: 25,
-      policies: null,
+      policies: 10,
       programs: null,
-      trainingPrograms: 5,
-      analystSupport: "priority",
+      trainingPrograms: null,
+      analystSupport: "limited",
     },
-    features: ["Up to 25 endpoints", "Unlimited policies & programs", "Priority analyst support", "Full training suite"],
+    capabilities: {
+      assessments: true,
+      buildPrograms: true,
+      createPolicies: true,
+      trainingPrograms: true,
+      downloadExports: true,        // full downloads/exports
+      endpoints: true,              // up to 25
+      analystSupport: true,         // limited
+      mastermind: false,
+    },
+    features: ["All functions", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints", "Limited engineer support"],
   },
   enterprise: {
     id: "enterprise",
     name: "Enterprise",
     rank: 3,
-    priceCents: null,              // custom / contact sales
+    priceCents: null,              // custom / contact sales  (your "Tier 3")
     interval: "month",
     stripePriceId: null,
-    description: "Unlimited scale with a dedicated analyst and custom terms.",
+    description: "Everything, unlimited endpoints, full agent access, limited Mastermind Q&A, and full engineer support.",
     limits: {
       endpoints: null,
       policies: null,
       programs: null,
       trainingPrograms: null,
-      analystSupport: "dedicated",
+      analystSupport: "full",
     },
-    features: ["Unlimited endpoints", "Everything in Pro", "Dedicated analyst", "Custom contract & SLA"],
+    capabilities: {
+      assessments: true,
+      buildPrograms: true,
+      createPolicies: true,
+      trainingPrograms: true,
+      downloadExports: true,
+      endpoints: true,              // unlimited
+      analystSupport: true,         // full
+      mastermind: true,             // limited client-facing Q&A
+    },
+    features: ["Everything in Pro", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
 };
 
@@ -86,6 +126,11 @@ export const DEFAULT_TIER = "free";
 
 export function getTier(tierId) {
   return TIERS[tierId] || TIERS[DEFAULT_TIER];
+}
+
+// Does this tier have a given capability? Unknown capability → false (deny by default).
+export function hasCapability(tierId, capability) {
+  return !!getTier(tierId).capabilities?.[capability];
 }
 
 // Is a given count within the tier's limit for a resource? null limit = unlimited.

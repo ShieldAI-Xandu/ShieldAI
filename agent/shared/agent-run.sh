@@ -96,7 +96,9 @@ bash "$COLLECTOR" -o "$TMP_REPORT" >/dev/null 2>&1 || die "Collection failed."
 [ -s "$TMP_REPORT" ] || die "Collection produced no report."
 
 # ── 3. upload ─────────────────────────────────────────────────
-HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$SERVER_URL/api/agent/report" \
+RESP_BODY="$(mktemp /tmp/shieldai_resp.XXXXXX.json)"
+trap 'rm -f "$TMP_REPORT" "$RESP_BODY"' EXIT
+HTTP_CODE="$(curl -s -o "$RESP_BODY" -w '%{http_code}' -X POST "$SERVER_URL/api/agent/report" \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   --data-binary "@$TMP_REPORT")"
@@ -106,5 +108,22 @@ case "$HTTP_CODE" in
   401|403) die "Agent token rejected (revoked or invalid). Re-enrollment required." ;;
   *) die "Upload failed (HTTP $HTTP_CODE)." ;;
 esac
+
+# ── 4. read server directive (data only — never executed) ─────
+# The server may return a directive: a requested check-in ack, a suggested poll
+# interval, and the latest available agent version. This is informational; the
+# agent already sends a full report every run, so a check-in needs no extra work.
+if command -v python3 >/dev/null 2>&1; then
+  LATEST="$(python3 -c "import json,sys;
+try: print((json.load(open('$RESP_BODY')).get('directive') or {}).get('latestAgentVersion',''))
+except Exception: pass" 2>/dev/null)"
+  CHECKIN="$(python3 -c "import json,sys;
+try: print((json.load(open('$RESP_BODY')).get('directive') or {}).get('checkInRequested',''))
+except Exception: pass" 2>/dev/null)"
+  [ "$CHECKIN" = "True" ] && echo "shieldai-agent: a check-in was requested; fresh report delivered."
+  if [ -n "$LATEST" ] && [ -n "${AGENT_VERSION:-}" ] && [ "$LATEST" != "$AGENT_VERSION" ]; then
+    echo "shieldai-agent: a newer agent version ($LATEST) is available; current is $AGENT_VERSION."
+  fi
+fi
 
 exit 0

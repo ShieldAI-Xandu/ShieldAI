@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -560,11 +560,29 @@ function getAuthToken() {
 }
 
 // Drop-in replacement for fetch() that attaches the auth token.
+// Capability context: lets any component check the current user's plan
+// capabilities without prop-threading. Defaults to "deny" until provided.
+const CapabilityContext = createContext({ can: () => false, tier: "free", capabilities: {} });
+function useCapabilities() { return useContext(CapabilityContext); }
+
+// Global hook for tier-gate (HTTP 402) responses. The root registers a handler
+// that shows an "upgrade" modal; any gated API call that returns 402 triggers it.
+let _onUpgradeRequired = null;
+function setUpgradeHandler(fn) { _onUpgradeRequired = fn; }
+
 async function authFetch(url, options = {}) {
   const token = getAuthToken();
   const headers = { ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  return fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 402 && _onUpgradeRequired) {
+    // Clone so the caller can still read the body if it wants to.
+    try {
+      const data = await res.clone().json();
+      _onUpgradeRequired(data);
+    } catch { _onUpgradeRequired({ error: "Upgrade required.", code: "UPGRADE_REQUIRED" }); }
+  }
+  return res;
 }
 
 const inputStyle = {
@@ -1579,6 +1597,8 @@ function TrainingSection({ results, assessment }) {
 
 // Full curriculum viewer
 function FullCurriculumView({ curriculum, company, programId, onBack }) {
+  const { can } = useCapabilities();
+  const canDownload = can("downloadExports");
   const [openPhase, setOpenPhase] = useState(0);
   const [openModule, setOpenModule] = useState(0);
 
@@ -1636,9 +1656,12 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
       </button>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
         <SectionLabel text="Security Awareness Training Program"/>
-        <button onClick={downloadCurriculum} style={{marginLeft:"auto",padding:"7px 16px",
-          background:`${C.accent}15`,border:`1px solid ${C.accent}33`,borderRadius:7,
-          color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>⬇ Download Word</button>
+        <button onClick={canDownload ? downloadCurriculum : undefined} disabled={!canDownload}
+          title={canDownload ? "" : "Downloads require Pro or higher"}
+          style={{marginLeft:"auto",padding:"7px 16px",
+          background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,borderRadius:7,
+          color:canDownload?C.accent:C.textMut,fontSize:12,fontWeight:600,cursor:canDownload?"pointer":"not-allowed"}}>
+          {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}</button>
       </div>
       {curriculum.overview && (
         <Card style={{marginBottom:16,padding:"16px 18px"}}>
@@ -1853,6 +1876,8 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
 
 // In-app slide viewer with PowerPoint download
 function SlideViewer({ slides, title, accent }) {
+  const { can } = useCapabilities();
+  const canDownload = can("downloadExports");
   const [i, setI] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState(null);
@@ -1993,11 +2018,12 @@ function SlideViewer({ slides, title, accent }) {
           style={{padding:"7px 14px",background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:7,color:i===slides.length-1?C.textMut:C.textSec,fontSize:12,
             cursor:i===slides.length-1?"default":"pointer"}}>Next ›</button>
-        <button onClick={downloadPptxNative} disabled={exporting}
-          style={{padding:"7px 14px",background:`${accent}15`,border:`1px solid ${accent}44`,
-            borderRadius:7,color:accent,fontSize:12,fontWeight:600,
-            cursor:exporting?"wait":"pointer"}}>
-          {exporting ? "Building .pptx…" : "⬇ Download PowerPoint"}
+        <button onClick={canDownload ? downloadPptxNative : undefined} disabled={exporting || !canDownload}
+          title={canDownload ? "" : "Downloads require Pro or higher"}
+          style={{padding:"7px 14px",background:canDownload?`${accent}15`:C.surface,border:`1px solid ${canDownload?accent+"44":C.border}`,
+            borderRadius:7,color:canDownload?accent:C.textMut,fontSize:12,fontWeight:600,
+            cursor:!canDownload?"not-allowed":exporting?"wait":"pointer"}}>
+          {!canDownload ? "🔒 Download (Pro+)" : exporting ? "Building .pptx…" : "⬇ Download PowerPoint"}
         </button>
       </div>
       {exportErr && (
@@ -2321,6 +2347,8 @@ function MarkdownDocLight({ text }) {
 // ─────────────────────────────────────────────────────────────
 
 function PolicyLibrarySection({ assessment }) {
+  const { can } = useCapabilities();
+  const canDownload = can("downloadExports");
   const [catalog, setCatalog] = useState([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [selected, setSelected] = useState(null); // policy catalog entry
@@ -2590,10 +2618,11 @@ function PolicyLibrarySection({ assessment }) {
                     borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
                   📋 Copy
                 </button>
-                <button onClick={downloadAsWord}
-                  style={{padding:"6px 14px",background:`${C.accent}15`,border:`1px solid ${C.accent}33`,
-                    borderRadius:6,color:C.accent,fontSize:12,cursor:"pointer"}}>
-                  ⬇ Download Word
+                <button onClick={canDownload ? downloadAsWord : undefined} disabled={!canDownload}
+                  title={canDownload ? "" : "Downloads require Pro or higher"}
+                  style={{padding:"6px 14px",background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,
+                    borderRadius:6,color:canDownload?C.accent:C.textMut,fontSize:12,cursor:canDownload?"pointer":"not-allowed"}}>
+                  {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}
                 </button>
               </div>
             </div>
@@ -7454,6 +7483,30 @@ function MastermindConsole({ onClose }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [promoted, setPromoted] = useState({});
 
+  // upgrades
+  const [upgrades, setUpgrades] = useState(null);
+  const [upgradesLoaded, setUpgradesLoaded] = useState(false);
+  const [upgradeInfo, setUpgradeInfo] = useState(null); // { hostname, command, ... }
+  const [upgradeBusy, setUpgradeBusy] = useState(false);
+
+  useEffect(() => {
+    if (tab === "upgrades" && !upgradesLoaded) {
+      authFetch(`${API_BASE}/api/endpoints/upgrades`)
+        .then(r=>r.ok?r.json():{outdated:[]}).then(d=>{setUpgrades(d);setUpgradesLoaded(true);}).catch(()=>{});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  async function getUpgradeInstructions(id) {
+    setUpgradeBusy(true); setError(null); setUpgradeInfo(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/endpoints/${id}/upgrade-instructions`, { method:"POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not get instructions.");
+      setUpgradeInfo(data);
+    } catch (e) { setError(e.message); } finally { setUpgradeBusy(false); }
+  }
+
   useEffect(() => {
     authFetch(`${API_BASE}/api/admin/accounts`).then(r=>r.ok&&r.json()).then(d=>d&&setAccounts(d)).catch(()=>{});
   }, []);
@@ -7523,7 +7576,7 @@ function MastermindConsole({ onClose }) {
       </div>
 
       <div style={{display:"flex",gap:8,padding:"12px 20px 0",borderBottom:`1px solid ${C.border}`}}>
-        {[{id:"chat",label:"💬 Chat"},{id:"oversight",label:"📋 Oversight"},{id:"analyze",label:"🔎 Analyze"}].map(t=>(
+        {[{id:"chat",label:"💬 Chat"},{id:"oversight",label:"📋 Oversight"},{id:"analyze",label:"🔎 Analyze"},{id:"upgrades",label:"⬆️ Agent Upgrades"}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)}
             style={{padding:"9px 16px",background:"none",border:"none",cursor:"pointer",
               borderBottom:`2px solid ${tab===t.id?C.purple:"transparent"}`,marginBottom:-1,
@@ -7680,6 +7733,72 @@ function MastermindConsole({ onClose }) {
             )}
           </div>
         )}
+
+        {/* UPGRADES */}
+        {tab==="upgrades" && (
+          <div>
+            <SectionLabel text="Agent Upgrades"/>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 14px"}}>
+              Endpoints running an outdated agent. ShieldAI never pushes code — click an endpoint to
+              get the exact re-install command a human runs (or sends to the client) to upgrade it.
+            </p>
+            {!upgradesLoaded ? <Spinner/> : (
+              <>
+                <div style={{color:C.textMut,fontSize:12,marginBottom:12}}>
+                  Latest version: <span style={{color:C.text,fontWeight:600}}>{upgrades?.latestVersion}</span>
+                  {" · "}{upgrades?.outdated?.length||0} outdated endpoint(s)
+                </div>
+                {(upgrades?.outdated||[]).length===0 ? (
+                  <Card style={{textAlign:"center",padding:"36px"}}>
+                    <div style={{color:C.green,fontSize:14,fontWeight:600}}>✓ All agents are up to date.</div>
+                  </Card>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {upgrades.outdated.map(e=>(
+                      <Card key={e.id} style={{padding:"13px 16px"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:12}}>
+                          <span style={{fontSize:18}}>{e.os==="windows"?"🪟":e.os==="macos"?"🍎":"🐧"}</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{e.hostname}</div>
+                            <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
+                              {e.owner?.name} · v{e.agentVersion} → v{e.latestVersion}
+                            </div>
+                          </div>
+                          <button onClick={()=>getUpgradeInstructions(e.id)} disabled={upgradeBusy}
+                            style={{padding:"7px 14px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                              borderRadius:7,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                            Get Upgrade Command
+                          </button>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+
+                {upgradeInfo && (
+                  <Card style={{marginTop:16,padding:"16px 18px",border:`1px solid ${C.accent}33`}}>
+                    <div style={{color:C.accent,fontSize:12,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>
+                      Upgrade {upgradeInfo.hostname} · v{upgradeInfo.fromVersion} → v{upgradeInfo.toVersion}
+                    </div>
+                    <ol style={{color:C.textSec,fontSize:12.5,lineHeight:1.7,margin:"0 0 12px",paddingLeft:18}}>
+                      {upgradeInfo.steps.map((s,i)=><li key={i}>{s}</li>)}
+                    </ol>
+                    <pre style={{margin:0,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:8,color:C.text,fontSize:11.5,overflowX:"auto",whiteSpace:"pre-wrap",lineHeight:1.5}}>{upgradeInfo.command}</pre>
+                    <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center"}}>
+                      <button onClick={()=>{navigator.clipboard.writeText(upgradeInfo.command);}}
+                        style={{padding:"6px 13px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>Copy command</button>
+                      <span style={{color:C.amber,fontSize:11.5}}>
+                        Token valid {upgradeInfo.expiresInMinutes} min · re-installs &amp; re-enrolls this endpoint.
+                      </span>
+                    </div>
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -7756,6 +7875,113 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  UPGRADE PROMPT (shown when a tier gate blocks an action)
+// ─────────────────────────────────────────────────────────────
+function UpgradeModal({ info, onClose }) {
+  if (!info) return null;
+  const isLimit = info.code === "LIMIT_REACHED";
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.accent}55`,
+        borderRadius:14,maxWidth:420,width:"100%",padding:"26px 28px",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:10}}>{isLimit ? "📦" : "🔒"}</div>
+        <h2 style={{color:C.text,fontSize:19,margin:"0 0 8px"}}>
+          {isLimit ? "Plan limit reached" : "Upgrade to unlock"}
+        </h2>
+        <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 18px"}}>
+          {info.error || "This feature isn't included in your current plan."}
+          {info.currentTier && <><br/><span style={{color:C.textMut,fontSize:12}}>Current plan: {info.currentTier}</span></>}
+        </p>
+        <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+          <button onClick={onClose}
+            style={{padding:"9px 18px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>Maybe later</button>
+          <button onClick={onClose}
+            style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            View plans
+          </button>
+        </div>
+        <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
+          Contact your ShieldAI admin to change your subscription tier.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
+//  CLIENT MASTERMIND (Enterprise) — scoped to the client's own data
+// ─────────────────────────────────────────────────────────────
+function ClientMastermind({ onClose }) {
+  const [msgs, setMsgs] = useState([
+    { role:"assistant", content:"Hi — I'm your ShieldAI Mastermind assistant. I can see your own endpoints, security posture, and recommendations, and help you understand and improve them. What would you like to know?" },
+  ]);
+  const [input, setInput] = useState("");
+  const [thinking, setThinking] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || thinking) return;
+    const next = [...msgs, { role:"user", content:text }];
+    setMsgs(next); setInput(""); setThinking(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/mastermind/chat`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ messages: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Mastermind error.");
+      setMsgs(m => [...m, { role:"assistant", content: data.reply }]);
+    } catch (e) {
+      setError(e.message);
+      setMsgs(m => [...m, { role:"assistant", content: "(I couldn't respond — "+e.message+")" }]);
+    } finally { setThinking(false); }
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
+      <div style={{padding:"12px 20px",background:`linear-gradient(135deg,${C.purple}22,${C.accent}11)`,
+        borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:18}}>🧠</span>
+        <span style={{fontWeight:800,fontSize:16}}>Mastermind <span style={{color:C.purple}}>Assistant</span></span>
+        <span style={{fontSize:11,color:C.textMut,padding:"2px 8px",border:`1px solid ${C.border}`,borderRadius:20}}>Your data only · advisory</span>
+        <button onClick={onClose} style={{marginLeft:"auto",padding:"6px 14px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>← Back</button>
+      </div>
+      <div style={{maxWidth:820,margin:"0 auto",padding:"20px"}}>
+        {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+        <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+          {msgs.map((m,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
+                whiteSpace:"pre-wrap",background:m.role==="user"?`${C.accent}1F`:C.card,
+                border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,color:C.text}}>{m.content}</div>
+            </div>
+          ))}
+          {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
+        </div>
+        <div style={{display:"flex",gap:8,position:"sticky",bottom:16}}>
+          <input value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")send();}}
+            placeholder="Ask about your security posture…"
+            style={{flex:1,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:10,color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <button onClick={send} disabled={thinking||!input.trim()}
+            style={{padding:"12px 22px",background:input.trim()?`linear-gradient(135deg,${C.purple},${C.accent})`:C.border,
+              color:input.trim()?"#fff":C.textMut,border:"none",borderRadius:10,fontSize:13,fontWeight:700,
+              cursor:input.trim()?"pointer":"default"}}>Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  ROOT
 // ─────────────────────────────────────────────────────────────
 export default function ShieldAI() {
@@ -7769,12 +7995,27 @@ export default function ShieldAI() {
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
   const [showMastermind, setShowMastermind] = useState(false);
+  const [showClientMastermind, setShowClientMastermind] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
 
   // Frontend analyst detection for the mockup (matches the analyst email).
   // Later this becomes a real role flag from the backend.
   const isAnalyst = user && (user.isAnalyst || user.email === ANALYST_EMAIL);
+
+  // Tier-gate upgrade prompt (fired by authFetch on any HTTP 402).
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
+  useEffect(() => {
+    setUpgradeHandler((data) => setUpgradePrompt(data || { error: "Upgrade required." }));
+    return () => setUpgradeHandler(null);
+  }, []);
+
+  // Capability helper for gating UI (mirrors backend; backend remains the real gate).
+  const can = (cap) => {
+    if (!user) return false;
+    if (user.isAdmin || user.isAnalyst) return true;       // staff exempt
+    return !!(user.capabilities && user.capabilities[cap]);
+  };
 
   function handleAuthenticated(userObj) {
     setUser(userObj);
@@ -7798,6 +8039,7 @@ export default function ShieldAI() {
     setShowAdmin(false);
     setShowEndpoints(false);
     setShowMastermind(false);
+    setShowClientMastermind(false);
     setPhase("home");
   }
 
@@ -7865,6 +8107,11 @@ export default function ShieldAI() {
     return <MastermindConsole onClose={() => setShowMastermind(false)}/>;
   }
 
+  // Client-facing Mastermind (Enterprise clients only; staff use admin console)
+  if (showClientMastermind && !user.isAdmin && !user.isAnalyst) {
+    return <ClientMastermind onClose={() => setShowClientMastermind(false)}/>;
+  }
+
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
     return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
@@ -7872,6 +8119,8 @@ export default function ShieldAI() {
 
   // Top bar showing the logged-in company + sign out
   const TopBar = () => (
+    <>
+    <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
@@ -7887,6 +8136,18 @@ export default function ShieldAI() {
             color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
         </button>
+        {!user.isAdmin && !user.isAnalyst && (
+          <button onClick={() => can("mastermind")
+              ? setShowClientMastermind(true)
+              : setUpgradePrompt({ error:"Mastermind assistant is available on the Enterprise plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
+            title={can("mastermind") ? "" : "Enterprise plan feature"}
+            style={{padding:"5px 12px",
+              background: can("mastermind") ? `${C.purple}22` : C.surface,
+              border:`1px solid ${can("mastermind") ? C.purple+"55" : C.border}`,borderRadius:6,
+              color: can("mastermind") ? C.purple : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            {can("mastermind") ? "🧠 Mastermind" : "🔒 Mastermind"}
+          </button>
+        )}
         {user.isAdmin && (
           <button onClick={() => setShowMastermind(true)}
             style={{padding:"5px 12px",background:`${C.purple}22`,
@@ -7918,6 +8179,7 @@ export default function ShieldAI() {
         </button>
       </div>
     </div>
+    </>
   );
 
   if (showEndpoints) {
@@ -7955,6 +8217,7 @@ export default function ShieldAI() {
 
   if (phase === "console" && consoleTarget) {
     return (
+      <CapabilityContext.Provider value={{ can, tier: user.tier, capabilities: user.capabilities || {} }}>
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
         <TopBar/>
         <CompanyConsole
@@ -7965,6 +8228,7 @@ export default function ShieldAI() {
           onOpenProgram={openProgram}
         />
       </div>
+      </CapabilityContext.Provider>
     );
   }
 
@@ -8051,12 +8315,14 @@ export default function ShieldAI() {
 
   if (phase === "dashboard") {
     return (
+      <CapabilityContext.Provider value={{ can, tier: user.tier, capabilities: user.capabilities || {} }}>
       <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
         <TopBar/>
         <div style={{flex:1,overflow:"hidden"}}>
           <Dashboard assessment={assessment} results={results} onReset={reset}/>
         </div>
       </div>
+      </CapabilityContext.Provider>
     );
   }
 

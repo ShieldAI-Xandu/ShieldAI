@@ -15,53 +15,104 @@
 //   registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
 
 import { randomUUID } from "crypto";
+import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
 // Build a compact, read-only portfolio snapshot the AI can reason over without
 // blowing the token budget. No secrets, no raw report blobs.
-function portfolioSnapshot(db) {
+// Comprehensive, read-only snapshot of the entire platform. This is
+// Mastermind's situational awareness. `depth` controls verbosity:
+//   "summary" — counts + per-entity one-liners (cheap, for chat)
+//   "full"    — adds per-endpoint checks/events and recommendation detail
+// No secrets (password hashes, tokens, Stripe keys) are ever included.
+function portfolioSnapshot(db, depth = "summary") {
   const users = db.data.users || [];
   const agents = db.data.agents || [];
   const reports = db.data.agentReports || [];
   const recs = db.data.recommendations || [];
+  const assignments = db.data.assignments || [];
+  const subs = db.data.subscriptions || [];
+  const events = db.data.agentEvents || [];
+  const actions = db.data.clientActions || [];
+  const full = depth === "full";
 
   const latestByAgent = {};
   for (const r of reports) {
     const cur = latestByAgent[r.agentId];
     if (!cur || new Date(r.receivedAt) > new Date(cur.receivedAt)) latestByAgent[r.agentId] = r;
   }
+  const nameOf = (id) => { const u = users.find(x => x.id === id); return u ? (u.companyName || u.email) : "—"; };
+  const isOnline = (ls) => ls && (Date.now() - new Date(ls)) < 3 * 60 * 60 * 1000;
 
-  const clients = users.map(u => {
-    const myAgents = agents.filter(a => a.ownerUserId === u.id && a.status !== "revoked");
-    const postures = myAgents.map(a => {
-      const rep = latestByAgent[a.id];
-      const checks = rep?.report?.checks || [];
-      const fails = checks.filter(c => c.status === "fail").length;
-      const warns = checks.filter(c => c.status === "warn").length;
-      return { hostname: a.hostname, os: a.os, fails, warns,
-               posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy" };
-    });
-    const openRecs = recs.filter(r => r.ownerUserId === u.id &&
-      !["completed", "declined"].includes(r.status)).length;
+  // ── people ──
+  const admins = users.filter(u => u.isAdmin).map(u => ({ id: u.id, name: u.companyName || u.email, email: u.email }));
+  const analysts = users.filter(u => u.isAnalyst).map(u => ({
+    id: u.id, name: u.companyName || u.email, email: u.email,
+    clients: assignments.filter(a => a.analystUserId === u.id).map(a => nameOf(a.clientUserId)),
+  }));
+  const clientUsers = users.filter(u => !u.isAdmin && !u.isAnalyst);
+
+  // ── endpoints (per client) ──
+  function postureOf(a) {
+    const rep = latestByAgent[a.id];
+    const checks = rep?.report?.checks || [];
+    const fails = checks.filter(c => c.status === "fail").length;
+    const warns = checks.filter(c => c.status === "warn").length;
     return {
-      id: u.id, company: u.companyName || u.email, tier: u.tier || "free",
-      endpoints: myAgents.length, postures, openRecommendations: openRecs,
+      hostname: a.hostname, os: a.os, agentVersion: a.agentVersion || rep?.report?.agentVersion || "unknown",
+      online: isOnline(a.lastSeen), lastReportAt: a.lastReportAt || null,
+      posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
+      fails, warns, checkCount: checks.length,
+      ...(full ? {
+        checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
+        recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
+        inventory: rep?.report?.inventory || {},
+      } : {}),
+    };
+  }
+
+  const clients = clientUsers.map(u => {
+    const myAgents = agents.filter(a => a.ownerUserId === u.id && a.status !== "revoked");
+    const sub = subs.find(s => s.userId === u.id) || null;
+    const myRecs = recs.filter(r => r.ownerUserId === u.id);
+    return {
+      id: u.id, company: u.companyName || u.email, email: u.email,
+      tier: u.tier || "free", suspended: !!u.suspended,
+      assignedAnalysts: assignments.filter(a => a.clientUserId === u.id).map(a => nameOf(a.analystUserId)),
+      billing: sub ? { status: sub.status, currentPeriodEnd: sub.currentPeriodEnd, stripeLinked: !!sub.stripeCustomerId } : { status: u.tier === "free" || !u.tier ? "free" : "none" },
+      endpointCount: myAgents.length,
+      endpoints: myAgents.map(postureOf),
+      recommendations: {
+        open: myRecs.filter(r => !["completed","declined"].includes(r.status)).length,
+        byStatus: myRecs.reduce((m, r) => { m[r.status] = (m[r.status]||0)+1; return m; }, {}),
+        ...(full ? { items: myRecs.slice(-12).map(r => ({ title: r.title, severity: r.severity, status: r.status, origin: r.origin })) } : {}),
+      },
+      ...(full ? { recentActions: actions.filter(a => a.clientUserId === u.id).slice(-10).map(a => ({ action: a.action, detail: a.detail, at: a.at })) } : {}),
     };
   });
 
+  // ── platform-wide rollups ──
+  const allEndpoints = clients.flatMap(c => c.endpoints);
   return {
+    generatedAt: new Date().toISOString(),
     totals: {
-      clients: users.length,
-      endpoints: agents.filter(a => a.status !== "revoked").length,
-      atRiskEndpoints: clients.reduce((s, c) => s + c.postures.filter(p => p.posture === "at_risk").length, 0),
+      accounts: users.length, admins: admins.length, analysts: analysts.length, clients: clientUsers.length,
+      endpoints: allEndpoints.length,
+      onlineEndpoints: allEndpoints.filter(e => e.online).length,
+      atRiskEndpoints: allEndpoints.filter(e => e.posture === "at_risk").length,
+      needsAttentionEndpoints: allEndpoints.filter(e => e.posture === "needs_attention").length,
       openRecommendations: recs.filter(r => !["completed","declined"].includes(r.status)).length,
+      suspendedAccounts: users.filter(u => u.suspended).length,
+      payingClients: clients.filter(c => ["active","manual","trialing","past_due"].includes(c.billing.status)).length,
+      agentVersions: [...new Set(allEndpoints.map(e => e.agentVersion))],
     },
-    clients,
+    admins, analysts, clients,
+    recentEvents: events.slice(-20).map(e => ({ client: nameOf(e.ownerUserId), severity: e.severity, type: e.type, message: e.message, at: e.ts || e.at })),
   };
 }
 
-export function registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson }) {
+export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson }) {
   db.data.recommendations ||= [];
 
   function aiAvailable(res) {
@@ -76,7 +127,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, callClaudeText
   // body: { messages: [{role:"user"|"assistant", content}], includeContext?: bool }
   app.post("/api/admin/mastermind/chat", requireAdmin, async (req, res) => {
     if (!aiAvailable(res)) return;
-    const { messages, includeContext = true } = req.body || {};
+    const { messages, includeContext = true, depth = "summary" } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "messages[] required." });
     }
@@ -86,12 +137,17 @@ export function registerMastermindRoutes(app, { db, requireAdmin, callClaudeText
       content: String(m.content || "").slice(0, 8000),
     }));
 
-    const snapshot = includeContext ? portfolioSnapshot(db) : null;
-    const system = `You are ShieldAI Mastermind, the senior virtual-CISO intelligence assisting a ShieldAI ADMIN.
+    const useDepth = depth === "full" ? "full" : "summary";
+    const snapshot = includeContext ? portfolioSnapshot(db, useDepth) : null;
+    const system = `You are ShieldAI Mastermind, the central virtual-CISO intelligence for the entire ShieldAI platform, assisting a ShieldAI ADMIN.
 
-You provide analysis, prioritization, and clear recommendations across the admin's whole client portfolio. You are ADVISORY ONLY: you never perform actions on any system, never claim to have changed anything, and always frame remediation as steps a human (client admin or analyst) would take. Be concise, specific, and practical.
+You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients.
 
-${snapshot ? `Read-only portfolio snapshot (current):\n${JSON.stringify(snapshot)}` : "No portfolio context was attached to this message."}`;
+You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. Frame every remediation as concrete steps a human takes — the client's admin acts on their own systems, or an assigned analyst acts with the client's permission. When you spot something actionable (e.g. an at-risk endpoint, an outdated agent, an overdue recommendation), say so clearly and explain what a human should do; the admin can then act through the platform's human-gated controls.
+
+Be specific, accurate, and practical. If the snapshot doesn't contain enough detail to answer precisely, say what additional detail would be needed (the admin can request a deeper context view).
+
+${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.stringify(snapshot)}` : "No platform context was attached to this message."}`;
 
     try {
       const text = await callClaudeText({
@@ -104,6 +160,13 @@ ${snapshot ? `Read-only portfolio snapshot (current):\n${JSON.stringify(snapshot
       console.error("Mastermind chat error:", err.message);
       res.status(500).json({ error: "Mastermind could not respond." });
     }
+  });
+
+  // ── Awareness snapshot (what Mastermind currently "sees") ───
+  // ?depth=summary|full
+  app.get("/api/admin/mastermind/snapshot", requireAdmin, (req, res) => {
+    const depth = req.query.depth === "full" ? "full" : "summary";
+    res.json(portfolioSnapshot(db, depth));
   });
 
   // ── 2. OVERSIGHT — all recommendations across clients ───────
@@ -226,6 +289,95 @@ Limit findings to 6 and recommendations to 5.`;
     db.data.recommendations.push(rec);
     await db.write();
     res.json(rec);
+  });
+
+  // ════════════════════════════════════════════════════════════
+  //  CLIENT-FACING MASTERMIND (Enterprise tier) — STRICTLY SCOPED
+  //  to the requesting client's OWN data. No cross-client info,
+  //  no platform totals, no other accounts. Advisory only.
+  // ════════════════════════════════════════════════════════════
+
+  // Build a snapshot containing ONLY this user's own data.
+  function clientSnapshot(db, userId) {
+    const agents = (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked");
+    const reports = db.data.agentReports || [];
+    const latestByAgent = {};
+    for (const r of reports) {
+      if (r.ownerUserId !== userId) continue;            // isolation: only own reports
+      const cur = latestByAgent[r.agentId];
+      if (!cur || new Date(r.receivedAt) > new Date(cur.receivedAt)) latestByAgent[r.agentId] = r;
+    }
+    const endpoints = agents.map(a => {
+      const rep = latestByAgent[a.id];
+      const checks = rep?.report?.checks || [];
+      const fails = checks.filter(c => c.status === "fail").length;
+      const warns = checks.filter(c => c.status === "warn").length;
+      return {
+        hostname: a.hostname, os: a.os, agentVersion: a.agentVersion || rep?.report?.agentVersion || "unknown",
+        posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
+        checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
+        recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
+      };
+    });
+    // Only recommendations that have reached this client (not internal drafts).
+    const recs = (db.data.recommendations || [])
+      .filter(r => r.ownerUserId === userId && !["suggested"].includes(r.status))
+      .map(r => ({ title: r.title, detail: r.detail, severity: r.severity, status: r.status }));
+    const assessments = (db.data.assessments || [])
+      .filter(a => a.userId === userId)
+      .map(a => ({ id: a.id, createdAt: a.createdAt, company: a.company?.name || null }));
+    return { endpoints, recommendations: recs, assessments,
+             totals: { endpoints: endpoints.length, atRisk: endpoints.filter(e => e.posture === "at_risk").length } };
+  }
+
+  // Capability + auth gate for the client Mastermind.
+  function requireClientMastermind(req, res, next) {
+    requireAuth(req, res, () => {
+      // Staff use the admin console, not this one.
+      if (req.isAdmin || req.isAnalyst) {
+        return res.status(403).json({ error: "Use the admin Mastermind console." });
+      }
+      const user = (db.data.users || []).find(u => u.id === req.userId);
+      const tier = user?.tier && getTier(user.tier).id === user.tier ? user.tier : DEFAULT_TIER;
+      if (!hasCapability(tier, "mastermind")) {
+        return res.status(402).json({
+          error: "Mastermind assistant is available on the Enterprise plan.",
+          code: "UPGRADE_REQUIRED", capability: "mastermind", currentTier: tier,
+        });
+      }
+      next();
+    });
+  }
+
+  app.post("/api/client/mastermind/chat", requireClientMastermind, async (req, res) => {
+    if (!aiAvailable(res)) return;
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages[] required." });
+    }
+    const clean = messages.slice(-16).map(m => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || "").slice(0, 6000),
+    }));
+
+    // ISOLATION: only this client's own data is ever placed in context.
+    const snap = clientSnapshot(db, req.userId);
+    const system = `You are ShieldAI Mastermind, a virtual-CISO assistant helping ONE client understand and improve THEIR OWN security posture.
+
+You can see only this client's own endpoints, posture checks, security events, recommendations, and assessments — provided below. You have NO knowledge of any other client, the platform as a whole, billing, or other accounts, and you must never speculate about them. If asked about anything outside this client's own data, say you can only help with their own security posture.
+
+You are ADVISORY ONLY: explain issues and recommend concrete steps the client can take or ask their ShieldAI analyst about. Never claim to perform actions. Be clear, practical, and encouraging.
+
+This client's data (the only data you have):
+${JSON.stringify(snap)}`;
+
+    try {
+      const text = await callClaudeText({ system, messages: clean, max_tokens: 1200 });
+      res.json({ reply: text });
+    } catch (err) {
+      console.error("Client Mastermind error:", err.message);
+      res.status(500).json({ error: "Mastermind could not respond." });
+    }
   });
 
   console.log("ShieldAI Mastermind admin routes registered.");

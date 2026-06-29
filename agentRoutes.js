@@ -16,11 +16,17 @@
 // deterministic drafts (built directly from the failing checks) are still used.
 
 import { randomUUID, randomBytes, createHash } from "crypto";
+import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 
 // ── small helpers ─────────────────────────────────────────────
 const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 chars
+
+// The latest agent version ShieldAI ships. Surfaced to agents (so they can note
+// staleness) and used by the human-gated upgrade flow. Bump when you release a
+// new collector/runner.
+const AGENT_LATEST_VERSION = "1.0.0";
 
 // Ensure all agent collections exist on the lowdb instance.
 function ensureCollections(db) {
@@ -347,8 +353,24 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
         db.data.recommendations.push(rec);
       }
 
+      // Compute any pending directive for this agent, then clear one-shot flags.
+      // This is the ONLY thing the server tells the agent — data, never a command
+      // to execute. The agent decides what to do with it (re-report / adjust poll).
+      const directive = {
+        // one-shot: re-send a full report on the next cycle (admin requested)
+        checkInRequested: !!req.agent.pendingCheckIn,
+        // optional server-suggested poll interval (minutes); null = keep current
+        pollIntervalMinutes: req.agent.desiredPollMinutes || null,
+        // latest agent version available, so the agent/installer can note staleness
+        latestAgentVersion: AGENT_LATEST_VERSION,
+      };
+      if (req.agent.pendingCheckIn) {
+        req.agent.pendingCheckIn = false;
+        req.agent.lastCheckInServedAt = nowIso();
+      }
+
       await db.write();
-      res.json({ ok: true, summary: summarizeReport(report), draftsCreated: newDrafts.length });
+      res.json({ ok: true, summary: summarizeReport(report), draftsCreated: newDrafts.length, directive });
     } catch (err) {
       console.error("Agent report error:", err.message);
       res.status(500).json({ error: "Could not store report." });
@@ -362,6 +384,27 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   // Issue a one-time enrollment token for a new endpoint.
   app.post("/api/admin/endpoints/enroll-token", requireAuth, async (req, res) => {
     try {
+      // Tier gate: endpoints capability + endpoint count limit (staff exempt).
+      if (!req.isAdmin && !req.isAnalyst) {
+        const user = (db.data.users || []).find(u => u.id === req.userId);
+        const tier = user?.tier && getTier(user.tier).id === user.tier ? user.tier : DEFAULT_TIER;
+        if (!hasCapability(tier, "endpoints")) {
+          return res.status(402).json({
+            error: "Endpoint monitoring isn't included in your current plan.",
+            code: "UPGRADE_REQUIRED", capability: "endpoints", currentTier: tier,
+          });
+        }
+        const limit = getTier(tier).limits?.endpoints;
+        if (limit != null) {
+          const current = (db.data.agents || []).filter(a => a.ownerUserId === req.userId && a.status !== "revoked").length;
+          if (current >= limit) {
+            return res.status(402).json({
+              error: `You've reached your plan's limit of ${limit} endpoints. Upgrade to add more.`,
+              code: "LIMIT_REACHED", resource: "endpoints", currentTier: tier, limit, current,
+            });
+          }
+        }
+      }
       const token = newToken();
       const ttlMin = 60; // enrollment window
       db.data.enrollTokens.push({
@@ -421,9 +464,127 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     res.json({ ok: true, id: agent.id, status: agent.status });
   });
 
-  // ════════════════════════════════════════════════════════════
-  //  ANALYST ROUTES (across all clients' fleets)
-  // ════════════════════════════════════════════════════════════
+  // Request an on-demand check-in: flags the agent to send a fresh full report
+  // on its NEXT poll. Outbound-only model — this sets a flag the agent reads
+  // when it next contacts the server; it does NOT push to the endpoint.
+  // Allowed: the client owner, an admin, or an analyst assigned to the owner.
+  app.post("/api/agent-checkin/:id", requireAuth, async (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found." });
+
+    const isOwner = agent.ownerUserId === req.userId;
+    const isAssignedAnalyst = req.isAnalyst && analystOwnsClient && analystOwnsClient(db, req.userId, agent.ownerUserId);
+    if (!isOwner && !req.isAdmin && !isAssignedAnalyst) {
+      return res.status(403).json({ error: "Not authorized for this endpoint." });
+    }
+    if (agent.status === "revoked") return res.status(409).json({ error: "Endpoint is revoked." });
+
+    agent.pendingCheckIn = true;
+    agent.checkInRequestedAt = nowIso();
+    agent.checkInRequestedBy = req.userId;
+    if (logClientAction) logClientAction(db, {
+      clientUserId: agent.ownerUserId, actorUserId: req.userId,
+      actorRole: req.isAdmin ? "admin" : isAssignedAnalyst ? "analyst" : "client_admin",
+      action: "endpoint_checkin_requested", detail: `Check-in requested for ${agent.hostname}.`,
+    });
+    await db.write();
+    res.json({ ok: true, id: agent.id, pendingCheckIn: true,
+      note: "The endpoint will send a fresh report on its next poll." });
+  });
+
+  // ── Agent upgrade (human-gated, guided re-install) ──────────
+  // Outbound-only model: the server NEVER pushes code. These routes surface
+  // which agents are outdated and produce the exact command a human runs (or
+  // sends to the client) to re-install the latest agent. No autonomous action.
+
+  // List endpoints whose agent version is behind AGENT_LATEST_VERSION.
+  // Admin sees all; analyst sees assigned; client sees own.
+  app.get("/api/endpoints/upgrades", requireAuth, (req, res) => {
+    const allowed = req.isAdmin ? null
+      : req.isAnalyst && analystClientIds ? analystClientIds(db, req.userId)
+      : [req.userId];
+    const rows = (db.data.agents || [])
+      .filter(a => a.status !== "revoked")
+      .filter(a => allowed === null || allowed.includes(a.ownerUserId))
+      .map(a => {
+        const latestRep = (db.data.agentReports || [])
+          .filter(r => r.agentId === a.id)
+          .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
+        const ver = a.agentVersion || latestRep?.report?.agentVersion || "unknown";
+        const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
+        return {
+          id: a.id, hostname: a.hostname, os: a.os, agentVersion: ver,
+          latestVersion: AGENT_LATEST_VERSION,
+          outdated: ver !== AGENT_LATEST_VERSION,
+          owner: owner ? { id: owner.id, name: owner.companyName || owner.email } : null,
+        };
+      })
+      .filter(r => r.outdated);
+    res.json({ latestVersion: AGENT_LATEST_VERSION, outdated: rows });
+  });
+
+  // Guided upgrade instructions for one endpoint — the exact command to run.
+  // Requires a fresh one-time enrollment token (re-install re-enrolls), so this
+  // also issues one, scoped to the endpoint's owner. Human runs the command.
+  app.post("/api/endpoints/:id/upgrade-instructions", requireAuth, async (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found." });
+    const isOwner = agent.ownerUserId === req.userId;
+    const isAssignedAnalyst = req.isAnalyst && analystOwnsClient && analystOwnsClient(db, req.userId, agent.ownerUserId);
+    if (!isOwner && !req.isAdmin && !isAssignedAnalyst) {
+      return res.status(403).json({ error: "Not authorized for this endpoint." });
+    }
+
+    // Issue a fresh one-time enrollment token for the re-install (60 min TTL),
+    // bound to the endpoint's OWNER so the re-installed agent re-enrolls cleanly.
+    const raw = newToken();
+    db.data.enrollTokens ||= [];
+    db.data.enrollTokens.push({
+      id: randomUUID(),
+      tokenHash: sha256(raw),
+      ownerUserId: agent.ownerUserId,
+      createdAt: nowIso(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      usedAt: null,
+      purpose: "upgrade",
+    });
+    await db.write();
+
+    const serverUrl = req.headers["x-server-url"] || `${req.protocol}://${req.headers.host}`;
+    const os = agent.os;
+    let command;
+    if (os === "windows") {
+      command = `powershell -ExecutionPolicy Bypass -File .\\install.ps1 \`\n  -ServerUrl "${serverUrl}" \`\n  -EnrollmentToken "${raw}" \`\n  -IntervalMinutes 60`;
+    } else {
+      // linux/macos share the installer invocation shape
+      command = `sudo ./install.sh \\\n  --server-url "${serverUrl}" \\\n  --enrollment-token "${raw}" \\\n  --interval-minutes 60`;
+    }
+
+    if (logClientAction) logClientAction(db, {
+      clientUserId: agent.ownerUserId, actorUserId: req.userId,
+      actorRole: req.isAdmin ? "admin" : isAssignedAnalyst ? "analyst" : "client_admin",
+      action: "agent_upgrade_initiated",
+      detail: `Upgrade instructions issued for ${agent.hostname} (${agent.agentVersion || "unknown"} → ${AGENT_LATEST_VERSION}).`,
+    });
+    await db.write();
+
+    res.json({
+      hostname: agent.hostname, os,
+      fromVersion: agent.agentVersion || "unknown",
+      toVersion: AGENT_LATEST_VERSION,
+      enrollmentToken: raw,           // shown once
+      expiresInMinutes: 60,
+      command,
+      steps: [
+        "Download the latest ShieldAI agent package for this OS.",
+        os === "windows"
+          ? "Open PowerShell as Administrator in the agent\\windows folder."
+          : "Open a terminal in the agent's OS folder (linux/ or macos/).",
+        "Run the command below — it re-installs the latest agent and re-enrolls this endpoint.",
+        "The endpoint will report on the latest version within ~1 minute.",
+      ],
+    });
+  });
 
   // All endpoints across all clients, with owner + posture summary.
   app.get("/api/analyst/endpoints", requireAnalyst, (req, res) => {

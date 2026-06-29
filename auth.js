@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import db from "./db.js";
+import { TIERS, DEFAULT_TIER } from "./tiers.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "shieldai-test-secret-change-in-production";
 const TOKEN_EXPIRY = "7d";
@@ -128,6 +129,8 @@ function signToken(user) {
 }
 
 function publicUser(user) {
+  const tierId = user.tier && TIERS[user.tier] ? user.tier : DEFAULT_TIER;
+  const tier = TIERS[tierId];
   return {
     id: user.id,
     email: user.email,
@@ -135,6 +138,10 @@ function publicUser(user) {
     isAdmin: !!user.isAdmin,
     isAnalyst: !!user.isAnalyst,
     mustChangePassword: !!user.mustChangePassword,
+    tier: tierId,
+    tierName: tier.name,
+    capabilities: { ...tier.capabilities },
+    limits: { ...tier.limits },
     createdAt: user.createdAt,
   };
 }

@@ -17,6 +17,7 @@ import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
+import { makeTierGate, counters } from "./tierGate.js";
 import {
   registerUser,
   loginUser,
@@ -32,6 +33,7 @@ import {
 dotenv.config();
 
 const app = express();
+const gate = makeTierGate(db);
 const PORT = 3001;
 
 app.use(cors());
@@ -294,7 +296,7 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  PROGRAM GENERATION (protected, user-scoped)
 // ─────────────────────────────────────────────────────────────
-app.post("/api/programs/generate", requireAuth, async (req, res) => {
+app.post("/api/programs/generate", requireAuth, gate.capability("buildPrograms"), gate.limit("programs", counters.programs), async (req, res) => {
   try {
     const { assessmentId } = req.body;
     const assessment = db.data.assessments.find(
@@ -542,7 +544,7 @@ app.get("/api/policy-catalog", (req, res) => {
   res.json(catalog);
 });
 
-app.post("/api/policies/generate", requireAuth, async (req, res) => {
+app.post("/api/policies/generate", requireAuth, gate.capability("createPolicies"), gate.limit("policies", counters.policies), async (req, res) => {
   try {
     const { policyId, companyContext, answers } = req.body;
     const policyDef = POLICY_CATALOG.find(p => p.id === policyId);
@@ -649,7 +651,7 @@ app.get("/api/training/catalog", requireAuth, (req, res) => {
 });
 
 // Generate a full, company-tailored curriculum (hybrid: fixed backbone + AI detail)
-app.post("/api/training/generate", requireAuth, async (req, res) => {
+app.post("/api/training/generate", requireAuth, gate.capability("trainingPrograms"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
   try {
     const { companyContext, includeManagerTrack } = req.body || {};
     const company = companyContext || {};
@@ -1002,7 +1004,7 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
