@@ -16,6 +16,8 @@
 
 import { randomUUID } from "crypto";
 import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
+import { cachedExposure } from "./cveService.js";
+import { cachedDarkweb } from "./darkwebService.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -76,6 +78,8 @@ function portfolioSnapshot(db, depth = "summary") {
     const myAgents = agents.filter(a => a.ownerUserId === u.id && a.status !== "revoked");
     const sub = subs.find(s => s.userId === u.id) || null;
     const myRecs = recs.filter(r => r.ownerUserId === u.id);
+    const exp = cachedExposure(db, u.id);
+    const dw = cachedDarkweb(db, u.id);
     return {
       id: u.id, company: u.companyName || u.email, email: u.email,
       tier: u.tier || "free", suspended: !!u.suspended,
@@ -83,6 +87,18 @@ function portfolioSnapshot(db, depth = "summary") {
       billing: sub ? { status: sub.status, currentPeriodEnd: sub.currentPeriodEnd, stripeLinked: !!sub.stripeCustomerId } : { status: u.tier === "free" || !u.tier ? "free" : "none" },
       endpointCount: myAgents.length,
       endpoints: myAgents.map(postureOf),
+      cveExposure: exp ? {
+        counts: exp.counts, refreshedAt: exp.refreshedAt, degraded: exp.degraded,
+        ...(full ? { software: exp.software, top: exp.top }
+                 : { topCves: (exp.top || []).slice(0, 3).map(c => ({ id: c.id, severity: c.severity, score: c.score, software: c.software })) }),
+      } : { counts: {}, note: "No CVE exposure computed yet (needs software inventory)." },
+      darkWebExposure: dw ? {
+        statusLevel: dw.statusLevel, monitored: dw.monitored, domain: dw.domain,
+        breachedAccounts: dw.breachedAccounts ?? null, distinctBreaches: dw.distinctBreaches ?? null,
+        ...(full ? { breaches: dw.breaches || [] } : {}),
+        ...(dw.reason ? { reason: dw.reason } : {}),
+        refreshedAt: dw.refreshedAt,
+      } : { statusLevel: "Not checked", note: "No breach exposure computed yet." },
       recommendations: {
         open: myRecs.filter(r => !["completed","declined"].includes(r.status)).length,
         byStatus: myRecs.reduce((m, r) => { m[r.status] = (m[r.status]||0)+1; return m; }, {}),
@@ -141,7 +157,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
     const snapshot = includeContext ? portfolioSnapshot(db, useDepth) : null;
     const system = `You are ShieldAI Mastermind, the central virtual-CISO intelligence for the entire ShieldAI platform, assisting a ShieldAI ADMIN.
 
-You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients.
+You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Each client also carries a cveExposure object — known CVE vulnerabilities (with CVSS severity and score) matched from the live NIST National Vulnerability Database against the software that client's agents and assessment report — and a darkWebExposure object — real breach/credential exposure for the client's domain from Have I Been Pwned (statusLevel, breached account count, and the named breaches). Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients. When relevant, reference specific CVE IDs and their severity, and named breaches. Remember CVE matches depend on reported software, and dark-web monitoring depends on a verified domain — a "Not monitored", "Not active", or "Not checked" status is a data/coverage gap, NOT a clean bill of health.
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. Frame every remediation as concrete steps a human takes — the client's admin acts on their own systems, or an assigned analyst acts with the client's permission. When you spot something actionable (e.g. an at-risk endpoint, an outdated agent, an overdue recommendation), say so clearly and explain what a human should do; the admin can then act through the platform's human-gated controls.
 
@@ -326,7 +342,15 @@ Limit findings to 6 and recommendations to 5.`;
     const assessments = (db.data.assessments || [])
       .filter(a => a.userId === userId)
       .map(a => ({ id: a.id, createdAt: a.createdAt, company: a.company?.name || null }));
+    const exp = cachedExposure(db, userId);
+    const dw = cachedDarkweb(db, userId);
     return { endpoints, recommendations: recs, assessments,
+             cveExposure: exp ? { counts: exp.counts, top: exp.top, software: exp.software, refreshedAt: exp.refreshedAt, degraded: exp.degraded }
+                              : { counts: {}, note: "No CVE exposure computed yet." },
+             darkWebExposure: dw ? { statusLevel: dw.statusLevel, monitored: dw.monitored, domain: dw.domain,
+                                     breachedAccounts: dw.breachedAccounts ?? null, distinctBreaches: dw.distinctBreaches ?? null,
+                                     breaches: dw.breaches || [], reason: dw.reason || null, refreshedAt: dw.refreshedAt }
+                                 : { statusLevel: "Not checked", note: "No breach exposure computed yet." },
              totals: { endpoints: endpoints.length, atRisk: endpoints.filter(e => e.posture === "at_risk").length } };
   }
 

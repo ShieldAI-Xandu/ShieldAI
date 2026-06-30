@@ -11,6 +11,9 @@ import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
+import { registerCveRoutes } from "./cveRoutes.js";
+import { clientSoftwareDescriptors, exposureForSoftware, searchByKeyword } from "./cveService.js";
+import { clientDomain, domainExposure } from "./darkwebService.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
@@ -18,6 +21,7 @@ import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
+import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import {
   registerUser,
   loginUser,
@@ -35,6 +39,11 @@ dotenv.config();
 const app = express();
 const gate = makeTierGate(db);
 const PORT = 3001;
+
+// Dev mode: when SHIELDAI_DEV_MODE=true, enables the self-service tier switcher
+// used for testing (bypasses Stripe). MUST be off in production.
+const DEV_MODE = String(process.env.SHIELDAI_DEV_MODE).toLowerCase() === "true";
+if (DEV_MODE) console.warn("⚠️  ShieldAI DEV_MODE is ON — self-service tier switching is enabled. Do NOT use in production.");
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -201,6 +210,99 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   const user = getCurrentUser(req.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json(user);
+});
+
+// Usage vs plan limits for the logged-in user. Drives the dashboard's
+// "X of Y used" meters. Staff (admin/analyst) aren't tier-limited, so they
+// get a flag indicating that. `limit: null` means unlimited.
+app.get("/api/usage", requireAuth, (req, res) => {
+  const user = getCurrentUser(req.userId);
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const staff = !!(req.isAdmin || req.isAnalyst);
+  const tierId = TIERS[user.tier] ? user.tier : DEFAULT_TIER;
+  const tier = TIERS[tierId];
+  const limits = tier.limits || {};
+
+  // Resources we meter, each paired with its counter and limit.
+  const resources = ["policies", "programs", "trainingPrograms", "endpoints"];
+  const usage = {};
+  for (const r of resources) {
+    const counter = counters[r];
+    const current = counter ? counter(db, req.userId) : 0;
+    const limit = limits[r] != null ? limits[r] : null; // null => unlimited
+    usage[r] = {
+      current,
+      limit,
+      unlimited: limit == null,
+      remaining: limit == null ? null : Math.max(0, limit - current),
+      atLimit: limit != null && current >= limit,
+    };
+  }
+
+  res.json({
+    tier: tierId,
+    tierName: tier.name,
+    staff,           // staff bypass tier limits
+    devMode: DEV_MODE,
+    usage,
+    // The full tier ladder for the upgrade UI (ordered by rank). Self-serve
+    // tiers carry a price; enterprise is contact-sales (priceCents null).
+    tiers: Object.values(TIERS)
+      .sort((a, b) => a.rank - b.rank)
+      .map(t => ({
+        id: t.id,
+        name: t.name,
+        rank: t.rank,
+        priceCents: t.priceCents,
+        description: t.description,
+        selfServe: ["starter", "pro"].includes(t.id) && !!t.stripePriceId,
+        contactSales: t.id === "enterprise",
+        current: t.id === tierId,
+        isUpgrade: t.rank > tier.rank,
+      })),
+  });
+});
+
+// DEV ONLY — change the caller's OWN tier instantly, bypassing Stripe.
+// Hard-gated behind SHIELDAI_DEV_MODE so it can never run in production.
+// Mirrors the admin tier-change side effects (subscription sync) so the rest
+// of the app behaves as if a real plan change happened.
+app.post("/api/dev/my-tier", requireAuth, async (req, res) => {
+  if (!DEV_MODE) {
+    return res.status(403).json({ error: "Dev tier switching is disabled." });
+  }
+  const { tier } = req.body || {};
+  if (!TIERS[tier]) {
+    return res.status(400).json({ error: `tier must be one of: ${Object.keys(TIERS).join(", ")}.` });
+  }
+  const user = getCurrentUser(req.userId);
+  if (!user) return res.status(404).json({ error: "User not found." });
+
+  // Find the raw user record to mutate (getCurrentUser returns a public view).
+  const raw = (db.data.users || []).find(u => u.id === req.userId);
+  if (!raw) return res.status(404).json({ error: "User not found." });
+
+  const nowIso = new Date().toISOString();
+  raw.tier = tier;
+
+  // Keep the internal subscription record in sync, marked as a manual/dev change.
+  db.data.subscriptions = db.data.subscriptions || [];
+  let sub = db.data.subscriptions.find(s => s.userId === raw.id);
+  if (!sub) {
+    sub = { id: randomUUID(), userId: raw.id, tier,
+            status: tier === "free" ? "free" : "manual",
+            stripeCustomerId: null, stripeSubscriptionId: null,
+            currentPeriodEnd: null, updatedAt: nowIso };
+    db.data.subscriptions.push(sub);
+  } else {
+    sub.tier = tier;
+    sub.status = tier === "free" ? "free" : (sub.stripeSubscriptionId ? sub.status : "manual");
+    sub.updatedAt = nowIso;
+  }
+  await db.write();
+
+  res.json({ ok: true, user: getCurrentUser(req.userId) });
 });
 
 // Change own password (normal self-service, or forced first-login change).
@@ -437,9 +539,86 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           parsed = extractJson(retryText);
         }
         program.sections[step.key] = parsed;
+      } else if (step.key === "threatIntel") {
+        // REAL threat intel: pull the client's software (agent inventory +
+        // assessment tech stack), query the live NVD for actual CVEs, and inject
+        // them. The AI writes industry-threat context around REAL CVEs — it does
+        // not invent CVE IDs. Also derive software directly from this assessment
+        // even before any agent is enrolled.
+        const assessmentStack = (() => {
+          const s = assessmentData.techStack || assessmentData.technologies || [];
+          return (Array.isArray(s) ? s : []).map(x =>
+            typeof x === "string" ? x : (x && x.name ? (x.version ? `${x.name} ${x.version}` : x.name) : "")
+          ).filter(Boolean);
+        })();
+        // Merge any agent/assessment-derived descriptors known for this user.
+        const known = program.userId ? clientSoftwareDescriptors(db, program.userId) : [];
+        const software = [...new Set([...known, ...assessmentStack])];
+
+        let realCVEs = [];
+        let cveDegraded = false;
+        if (software.length > 0) {
+          const exposure = await exposureForSoftware(software, { perItem: 2 });
+          cveDegraded = exposure.degraded;
+          realCVEs = (exposure.top || []).slice(0, 5).map(c => ({
+            id: c.id,
+            description: c.description,
+            severity: (c.severity || "UNKNOWN").replace(/^\w/, m => m.toUpperCase()),
+            affected: c.software,
+            score: c.score,
+            url: c.url,
+          }));
+        }
+
+        // Ask the AI ONLY for the industry-threat narrative + dark-web posture.
+        // The recentCVEs are supplied from NVD and must not be altered.
+        const tiSystem = `You are a threat intelligence analyst. Return ONLY valid JSON, no markdown fences:
+{"threatLandscape":{"industryThreats":[{"name":"","description":"1 sentence","prevalence":"High|Medium|Low","mitigations":["mitigation 1","mitigation 2"]}]}}
+Limit industryThreats to exactly 3, tailored to this business's industry and tech stack. Do NOT include CVEs or dark-web/breach status — those are supplied separately from authoritative live sources.`;
+
+        let parsed = null;
+        try {
+          const text = await callClaudeText({
+            system: tiSystem,
+            messages: [{ role: "user", content: `Business context:\n${ctx}\n\nGenerate the industry threat landscape JSON.` }],
+            max_tokens: step.maxTokens,
+          });
+          parsed = extractJson(text);
+        } catch (firstErr) {
+          console.warn(`Step "threatIntel" narrative failed (${firstErr.message}); using minimal fallback.`);
+          parsed = { threatLandscape: { industryThreats: [] } };
+        }
+
+        parsed.threatLandscape = parsed.threatLandscape || {};
+        // Inject the REAL CVEs from NVD (authoritative; AI cannot alter them).
+        parsed.threatLandscape.recentCVEs = realCVEs;
+        parsed.threatLandscape.cveSource = software.length === 0
+          ? "No software inventory available yet — CVE matching needs the monitoring agent's inventory or a tech-stack entry. A website URL alone can't be matched to CVEs."
+          : (cveDegraded
+              ? "Live NVD lookup was partial; results may be incomplete."
+              : "Matched against the NIST National Vulnerability Database (live).");
+        parsed.threatLandscape.cveSoftware = software;
+
+        // REAL dark-web / breach exposure from Have I Been Pwned (never AI-invented).
+        // Overrides whatever the model might have implied. Honest about inactive/
+        // unverified states rather than faking an all-clear.
+        const domain = program.userId ? clientDomain(db, program.userId) : null;
+        const dw = await domainExposure(domain);
+        parsed.threatLandscape.darkWebMentions = dw.statusLevel;     // legacy field, now real
+        parsed.threatLandscape.darkWeb = {
+          source: "Have I Been Pwned",
+          domain: dw.domain || null,
+          monitored: !!dw.monitored,
+          statusLevel: dw.statusLevel,
+          breachedAccounts: dw.breachedAccounts ?? null,
+          distinctBreaches: dw.distinctBreaches ?? null,
+          breaches: dw.breaches || [],
+          reason: dw.reason || null,
+          needsVerification: !!dw.needsVerification,
+          degraded: !!dw.degraded,
+        };
+        program.sections[step.key] = parsed;
       } else {
-        // All other steps: try once, and on parse failure retry with a
-        // stricter "valid JSON only" nudge before giving up.
         let parsed = null;
         try {
           const text = await callClaudeText({
@@ -1005,6 +1184,7 @@ registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extrac
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
+registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────

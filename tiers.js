@@ -38,12 +38,12 @@ export const TIERS = {
   },
   starter: {
     id: "starter",
-    name: "Starter",
+    name: "Self-Serve",
     rank: 1,
-    priceCents: 9900,               // $99/mo  (your "Tier 1")
+    priceCents: 12900,              // $129/mo — plan's Self-Serve tier
     interval: "month",
     stripePriceId: null,
-    description: "Multiple assessments, programs, up to 6 policies, and a training program. Monitor up to 5 endpoints.",
+    description: "Automated assessment, NIST posture score, full program, and policy generation — no human time.",
     limits: {
       endpoints: 5,
       policies: 6,
@@ -65,12 +65,12 @@ export const TIERS = {
   },
   pro: {
     id: "pro",
-    name: "Pro",
+    name: "Guided",
     rank: 2,
-    priceCents: 29900,              // $299/mo  (your "Tier 2")
+    priceCents: 59900,              // $599/mo — plan's Guided tier
     interval: "month",
     stripePriceId: null,
-    description: "All functions with downloads, up to 25 endpoints, and limited engineer support.",
+    description: "Self-serve plus periodic engineer review, compliance tracking, check-ins, and downloads.",
     limits: {
       endpoints: 25,
       policies: 10,
@@ -88,16 +88,16 @@ export const TIERS = {
       analystSupport: true,         // limited
       mastermind: false,
     },
-    features: ["All functions", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints", "Limited engineer support"],
+    features: ["Everything in Self-Serve", "Periodic engineer review", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints", "Compliance tracking"],
   },
   enterprise: {
     id: "enterprise",
-    name: "Enterprise",
+    name: "Managed vCISO",
     rank: 3,
-    priceCents: null,              // custom / contact sales  (your "Tier 3")
+    priceCents: 195000,            // $1,950/mo — plan's Managed vCISO tier
     interval: "month",
     stripePriceId: null,
-    description: "Everything, unlimited endpoints, full agent access, limited Mastermind Q&A, and full engineer support.",
+    description: "A ShieldAI engineer runs your security program end-to-end, with unlimited endpoints, full agent access, Mastermind Q&A, and full engineer support.",
     limits: {
       endpoints: null,
       policies: null,
@@ -115,7 +115,7 @@ export const TIERS = {
       analystSupport: true,         // full
       mastermind: true,             // limited client-facing Q&A
     },
-    features: ["Everything in Pro", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+    features: ["Everything in Guided", "Engineer-run program", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
 };
 

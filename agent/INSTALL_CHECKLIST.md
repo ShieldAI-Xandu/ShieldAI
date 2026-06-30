@@ -90,6 +90,61 @@ sudo ./install.sh --server-url "https://app.shieldai.example" \
 
 ---
 
+## Threat intelligence integrations (server-side, optional but recommended)
+
+ShieldAI's threat intelligence draws on two live external sources. Both are
+configured once on the **server** (not per endpoint) via environment variables,
+and both fail **honestly** — if a source isn't configured or a domain isn't
+verified, the UI says so rather than showing a fake "all clear."
+
+### CVE / vulnerability data — NIST NVD
+- [ ] (Optional) Request a free NVD API key:
+      https://nvd.nist.gov/developers/request-an-api-key
+- [ ] Set `NVD_API_KEY` in the server environment.
+      Without a key, lookups still work but are throttled to ~1 request / 6 s;
+      with a key, ~1 / 0.6 s. A key is strongly recommended in production.
+- [ ] Verify: open a client's **Threat Intel** panel (or the admin user detail
+      → **CVE Exposure** card) and confirm CVEs appear once the client has a
+      software inventory (from the agent or the assessment tech-stack field).
+      No inventory → an honest "needs software inventory" note, not empty CVEs.
+
+### Dark-web / breach data — Have I Been Pwned (HIBP)
+> Real breach intelligence requires a paid HIBP subscription — there is no free
+> dark-web source. HIBP's domain search **only works for domains whose control
+> you have verified** in HIBP's own dashboard. Plan to onboard each managed
+> client's domain there; until a domain is verified it will honestly show
+> **"Not monitored"** rather than a result.
+
+- [ ] Purchase an HIBP API key (~$4/mo): https://haveibeenpwned.com/API/Key
+- [ ] Set `HIBP_API_KEY` in the server environment (32-char hex).
+- [ ] (Optional) Set `HIBP_USER_AGENT` (defaults to `ShieldAI-vCISO`). HIBP
+      requires a user-agent header; the default is fine.
+- [ ] **Per client to be monitored:** in the HIBP **domain search dashboard**,
+      add the client's domain and complete HIBP's domain-control verification
+      (DNS TXT record, file upload, or email to a domain mailbox — HIBP guides
+      you through it). This proves you're authorized to search that domain.
+- [ ] Confirm ShieldAI has the right domain on file for the client — it's taken
+      from the assessment's company website/domain, falling back to the admin
+      email's domain. Fix the assessment if the wrong domain is being checked.
+- [ ] Verify states (open **Threat Intel** panel or the admin **CVE Exposure**
+      card, which also shows the dark-web/breach section):
+      - No `HIBP_API_KEY` set → **"Not active"** (feature off).
+      - Key set but domain not yet verified in HIBP → **"Not monitored —
+        verify domain control"**.
+      - Verified domain, breaches found → a real status (Low risk / Elevated /
+        High alert) with the breached-account count and named breaches.
+      - Verified domain, no breaches → **"No intel"** (a genuine all-clear).
+- [ ] Sanity check with HIBP's test domain: a test API key querying
+      `hibp-integration-tests.com` returns sample breach data, confirming the
+      integration path works before you onboard real client domains.
+
+> Scope note: HIBP reports whether a domain's accounts appear in **known data
+> breaches** (credential exposure) — what most SMBs mean by "are we on the dark
+> web." It is not active dark-web forum crawling; that needs an enterprise feed
+> (e.g. Recorded Future, Flare, SpyCloud) wired through the same service layer.
+
+---
+
 ## Troubleshooting
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -98,6 +153,10 @@ sudo ./install.sh --server-url "https://app.shieldai.example" \
 | Endpoint never appears | network/TLS blocked, or wrong `serverUrl` | verify `curl <serverUrl>` from the endpoint |
 | Checks show `unknown` | tool not present, or needs elevation | confirm the security tool is installed; run as admin/root |
 | No drafts created | all checks pass, or only low-severity findings | expected — drafts are for medium+ fail/warn |
+| Dark-web shows "Not active" | `HIBP_API_KEY` not set | add the key to the server env and restart |
+| Dark-web shows "Not monitored" | client domain not verified in HIBP | add + verify the domain in HIBP's domain-search dashboard |
+| Dark-web checks the wrong domain | assessment has wrong/no website | set the correct company website/domain on the assessment |
+| CVEs empty despite known software | no inventory reached the server, or NVD throttled/unreachable | confirm the agent reported inventory; set `NVD_API_KEY`; retry |
 
 ## Removing an endpoint
 - Revoke from the client admin account (its next upload returns 403 and stops).

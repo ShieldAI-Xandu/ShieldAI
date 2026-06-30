@@ -17,6 +17,7 @@
 
 import { randomUUID, randomBytes, createHash } from "crypto";
 import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
+import { refreshClientExposure } from "./cveService.js";
 
 // ── small helpers ─────────────────────────────────────────────
 const nowIso = () => new Date().toISOString();
@@ -371,6 +372,14 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
 
       await db.write();
       res.json({ ok: true, summary: summarizeReport(report), draftsCreated: newDrafts.length, directive });
+
+      // Fire-and-forget: refresh this client's CVE exposure from the new
+      // inventory, so Mastermind stays current. Rate-limited internally; we
+      // don't await it (the agent's response already went out) and swallow
+      // errors so a CVE/NVD hiccup never affects report ingestion.
+      if (report.inventory) {
+        refreshClientExposure(db, req.agent.ownerUserId).catch(() => {});
+      }
     } catch (err) {
       console.error("Agent report error:", err.message);
       res.status(500).json({ error: "Could not store report." });
