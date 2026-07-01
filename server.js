@@ -93,6 +93,68 @@ async function callClaudeText({ system, messages, max_tokens }) {
   return data?.content?.map(c => c.text || "").join("") || "";
 }
 
+// Tool-use loop for Mastermind. `tools` is the Anthropic tool schema array;
+// `runTool(name, input)` executes a tool and returns a JSON-serializable result.
+// IMPORTANT: this helper is generic, but Mastermind supplies ONLY read-only
+// tools — the tool handlers never write to the database. The loop caps
+// iterations so a misbehaving model can't spin forever.
+async function callClaudeWithTools({ system, messages, tools, runTool, max_tokens = 1500, maxRounds = 6 }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
+
+  const convo = [...messages];
+  for (let round = 0; round < maxRounds; round++) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens,
+        system,
+        messages: convo,
+        tools,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
+    }
+    const data = await res.json();
+    const content = data?.content || [];
+
+    // If the model wants to use tools, execute them and loop; otherwise return text.
+    if (data.stop_reason === "tool_use") {
+      convo.push({ role: "assistant", content });
+      const toolResults = [];
+      for (const block of content) {
+        if (block.type !== "tool_use") continue;
+        let result;
+        try {
+          result = await runTool(block.name, block.input || {});
+        } catch (e) {
+          result = { error: String(e.message || e) };
+        }
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: JSON.stringify(result ?? null),
+        });
+      }
+      convo.push({ role: "user", content: toolResults });
+      continue;
+    }
+
+    // No more tool calls — return the assembled text.
+    return content.map(c => c.text || "").join("");
+  }
+  // Safety valve: hit the round cap.
+  return "I gathered data across several steps but couldn't finish composing an answer. Please narrow the question.";
+}
+
 function extractJson(text) {
   let clean = text.replace(/```json|```/g, "").trim();
   const start = clean.indexOf("{");
@@ -1185,7 +1247,7 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 

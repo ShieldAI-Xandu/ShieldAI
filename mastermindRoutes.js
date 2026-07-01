@@ -128,7 +128,7 @@ function portfolioSnapshot(db, depth = "summary") {
   };
 }
 
-export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson }) {
+export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson }) {
   db.data.recommendations ||= [];
 
   function aiAvailable(res) {
@@ -137,6 +137,127 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       return false;
     }
     return true;
+  }
+
+  // Module-scope name resolver for tool results (snapshot has its own local one).
+  function nameOf(id) {
+    const u = (db.data.users || []).find(x => x.id === id);
+    return u ? (u.companyName || u.email) : "—";
+  }
+
+  // ── READ-ONLY MASTERMIND TOOLS ──────────────────────────────
+  // Every tool here ONLY READS db.data. None writes, and none performs any
+  // action on any system or account. This lets Mastermind fetch precise detail
+  // on demand (instead of stuffing the whole platform into every prompt) while
+  // strictly preserving the "advisory only / humans act" boundary.
+  const MASTERMIND_TOOLS = [
+    {
+      name: "list_clients",
+      description: "List all client accounts with company name, tier, endpoint count, open-recommendation count, and CVE/dark-web summary. Use to get the lay of the land before drilling in.",
+      input_schema: { type: "object", properties: {}, required: [] },
+    },
+    {
+      name: "get_client_detail",
+      description: "Get full detail for one client by id or email: endpoints with posture, recommendations with status, CVE exposure (top CVEs), dark-web/breach exposure, and recent actions.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client's user id or email address." },
+      }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "list_recommendations",
+      description: "List recommendations across the platform, optionally filtered by status (suggested, proposed, permitted, client_performing, declined, completed) and/or a client id/email.",
+      input_schema: { type: "object", properties: {
+        status: { type: "string", description: "Optional status filter." },
+        clientIdOrEmail: { type: "string", description: "Optional client filter." },
+      }, required: [] },
+    },
+    {
+      name: "get_cve_exposure",
+      description: "Get the cached CVE vulnerability exposure for a client (matched from the live NVD against their reported software).",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string" },
+      }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "get_darkweb_exposure",
+      description: "Get the cached dark-web/breach exposure (Have I Been Pwned) for a client's domain.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string" },
+      }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "recent_events",
+      description: "Get the most recent security events across the platform (optionally for one client), newest first.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "Optional client filter." },
+        limit: { type: "number", description: "Max events (default 20, cap 50)." },
+      }, required: [] },
+    },
+  ];
+
+  // Resolve a client by id or email → the user record (or null).
+  function resolveClient(idOrEmail) {
+    const key = String(idOrEmail || "").trim().toLowerCase();
+    return (db.data.users || []).find(u =>
+      !u.isAdmin && !u.isAnalyst && (u.id === idOrEmail || (u.email || "").toLowerCase() === key)
+    ) || null;
+  }
+
+  // Execute a read-only tool. NEVER writes to the database.
+  async function runMastermindTool(name, input) {
+    switch (name) {
+      case "list_clients": {
+        const snap = portfolioSnapshot(db, "summary");
+        return { clients: snap.clients, totals: snap.totals };
+      }
+      case "get_client_detail": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const snap = portfolioSnapshot(db, "full");
+        const detail = snap.clients.find(c => c.id === u.id);
+        return detail || { error: "Client found but no snapshot detail available." };
+      }
+      case "list_recommendations": {
+        let recs = (db.data.recommendations || []);
+        if (input.clientIdOrEmail) {
+          const u = resolveClient(input.clientIdOrEmail);
+          if (!u) return { error: "Client not found." };
+          recs = recs.filter(r => r.ownerUserId === u.id);
+        }
+        if (input.status) recs = recs.filter(r => r.status === input.status);
+        return { count: recs.length, recommendations: recs.slice(-50).map(r => ({
+          id: r.id, title: r.title, severity: r.severity, status: r.status,
+          origin: r.origin, client: nameOf(r.ownerUserId),
+        })) };
+      }
+      case "get_cve_exposure": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const exp = cachedExposure(db, u.id);
+        return exp || { note: "No CVE exposure computed yet for this client." };
+      }
+      case "get_darkweb_exposure": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const dw = cachedDarkweb(db, u.id);
+        return dw || { note: "No dark-web exposure computed yet for this client." };
+      }
+      case "recent_events": {
+        let events = (db.data.agentEvents || []);
+        if (input.clientIdOrEmail) {
+          const u = resolveClient(input.clientIdOrEmail);
+          if (!u) return { error: "Client not found." };
+          events = events.filter(e => e.ownerUserId === u.id);
+        }
+        const limit = Math.min(input.limit || 20, 50);
+        return { events: events.slice(-limit).reverse().map(e => ({
+          client: nameOf(e.ownerUserId), severity: e.severity, type: e.type,
+          message: e.message, at: e.ts || e.at,
+        })) };
+      }
+      default:
+        return { error: `Unknown tool: ${name}` };
+    }
   }
 
   // ── 1. CHAT ─────────────────────────────────────────────────
@@ -161,16 +282,23 @@ You have read-only situational awareness of the whole platform: every account (a
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. Frame every remediation as concrete steps a human takes — the client's admin acts on their own systems, or an assigned analyst acts with the client's permission. When you spot something actionable (e.g. an at-risk endpoint, an outdated agent, an overdue recommendation), say so clearly and explain what a human should do; the admin can then act through the platform's human-gated controls.
 
-Be specific, accurate, and practical. If the snapshot doesn't contain enough detail to answer precisely, say what additional detail would be needed (the admin can request a deeper context view).
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand — list_clients, get_client_detail, list_recommendations, get_cve_exposure, get_darkweb_exposure, and recent_events. Prefer starting from the attached summary snapshot, and call a tool when you need specifics you don't already have (e.g. one client's full endpoint list or CVE detail). These tools only READ data; they never change anything.
 
 ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.stringify(snapshot)}` : "No platform context was attached to this message."}`;
 
     try {
-      const text = await callClaudeText({
-        system,
-        messages: clean,
-        max_tokens: 1500,
-      });
+      let text;
+      if (callClaudeWithTools) {
+        text = await callClaudeWithTools({
+          system,
+          messages: clean,
+          tools: MASTERMIND_TOOLS,
+          runTool: runMastermindTool,
+          max_tokens: 1500,
+        });
+      } else {
+        text = await callClaudeText({ system, messages: clean, max_tokens: 1500 });
+      }
       res.json({ reply: text });
     } catch (err) {
       console.error("Mastermind chat error:", err.message);
