@@ -318,13 +318,25 @@ async function generatePolicy(userId, policyId, companyData) {
   console.log(`    · policy: ${def.name}`);
 }
 
-// ── Main ──
-async function main() {
+// ── Seed routine (exported so the server can run it on first boot) ──
+// force=false: if the demo user already exists, do nothing (idempotent).
+// force=true : re-seed, clearing the demo user's prior data first.
+export async function demoExists() {
+  await db.read();
+  db.data.users ||= [];
+  return !!db.data.users.find(u => u.email === DEMO_EMAIL);
+}
+
+export async function seedDemo({ force = false } = {}) {
   await db.read();
   db.data.users ||= []; db.data.assessments ||= []; db.data.programs ||= []; db.data.policyDocs ||= [];
 
   // Find or create the demo user
   let user = db.data.users.find(u => u.email === DEMO_EMAIL);
+  if (user && !force) {
+    console.log(`Demo account ${DEMO_EMAIL} already exists — skipping seed.`);
+    return { seeded: false, reason: "exists" };
+  }
   if (user) {
     console.log("Removing previous demo data…");
     db.data.assessments = db.data.assessments.filter(a => a.userId !== user.id);
@@ -358,7 +370,14 @@ async function main() {
   await db.write();
   console.log(`\n✅ Demo seed complete. Log in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
   console.log(`   ${COMPANIES.length} companies, each with a full program + policies.`);
-  process.exit(0);
+  return { seeded: true, companies: COMPANIES.length };
 }
 
-main().catch(err => { console.error("Seed failed:", err); process.exit(1); });
+// Run directly from the CLI: `node seedDemo.js` (force re-seed).
+// import.meta.url matches the entry point only when executed directly.
+const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isDirectRun) {
+  seedDemo({ force: true })
+    .then(() => process.exit(0))
+    .catch(err => { console.error("Seed failed:", err); process.exit(1); });
+}

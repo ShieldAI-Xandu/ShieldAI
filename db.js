@@ -7,7 +7,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const file = path.join(__dirname, "db.json");
+// On Railway (or any host), set DB_DIR to a mounted persistent volume path
+// (e.g. /data) so the JSON database survives redeploys. Falls back to the app
+// directory for local development.
+const DB_DIR = process.env.DB_DIR || __dirname;
+const file = path.join(DB_DIR, "db.json");
 
 const defaultData = {
   users: [],         // { id, email, companyName, passwordHash, createdAt }

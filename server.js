@@ -2,6 +2,8 @@
 // ShieldAI backend: auth + AI proxy + database persistence + program pipeline.
 
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
@@ -38,7 +40,7 @@ dotenv.config();
 
 const app = express();
 const gate = makeTierGate(db);
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Dev mode: when SHIELDAI_DEV_MODE=true, enables the self-service tier switcher
 // used for testing (bypasses Stripe). MUST be off in production.
@@ -1188,10 +1190,58 @@ registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
+//  SERVE THE BUILT FRONTEND (production)
+//  In dev, Vite serves the React app on its own port. In production
+//  (Railway), we build the frontend to ./dist and serve it from the same
+//  Express process so frontend and API share one origin. The SPA fallback
+//  returns index.html for any non-API, non-file GET so client-side routing
+//  works — but must NEVER swallow /api/* requests.
+// ─────────────────────────────────────────────────────────────
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = path.join(__dirname, "dist");
+import("fs").then(({ existsSync }) => {
+  if (existsSync(DIST_DIR)) {
+    app.use(express.static(DIST_DIR));
+    // SPA fallback: serve index.html for browser navigations only.
+    app.use((req, res, next) => {
+      if (req.method !== "GET") return next();
+      if (req.path.startsWith("/api/")) return next();
+      if (req.path.includes(".")) return next(); // let static assets 404 normally
+      res.sendFile(path.join(DIST_DIR, "index.html"));
+    });
+    console.log("   Serving built frontend from ./dist");
+  } else {
+    console.log("   No ./dist found — API-only mode (run `npm run build` for production).");
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
+
+  // Optional first-boot demo seed (set SEED_ON_BOOT=true on Railway for demos).
+  // Runs in the BACKGROUND after the server is already listening, because it
+  // makes many AI calls and can take minutes — we never want it to block boot
+  // or a health check. It's idempotent: it only seeds if the demo user is
+  // absent, so redeploys won't duplicate or clobber data.
+  if (String(process.env.SEED_ON_BOOT).toLowerCase() === "true") {
+    (async () => {
+      try {
+        const { demoExists, seedDemo } = await import("./seedDemo.js");
+        if (await demoExists()) {
+          console.log("   SEED_ON_BOOT: demo data already present — skipping.");
+          return;
+        }
+        console.log("   SEED_ON_BOOT: no demo data found — seeding in background…");
+        const r = await seedDemo({ force: false });
+        console.log(`   SEED_ON_BOOT: ${r.seeded ? `seeded ${r.companies} companies.` : "skipped."}`);
+      } catch (e) {
+        console.error("   SEED_ON_BOOT failed (server still running):", e.message);
+      }
+    })();
+  }
 });
 
 // Surface the real reason if the server can't stay up (e.g. port in use).

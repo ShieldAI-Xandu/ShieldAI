@@ -539,7 +539,11 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:3001";
+// In production the frontend is served by the same Express server as the API,
+// so calls are same-origin (empty base = relative URLs). In local dev, Vite
+// serves the frontend on a different port, so point at the local backend.
+// Vite exposes import.meta.env.DEV (true during `vite dev`, false in a build).
+const API_BASE = import.meta.env.DEV ? "http://localhost:3001" : "";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
