@@ -14,6 +14,7 @@ import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerCveRoutes } from "./cveRoutes.js";
+import { registerAiProviderRoutes } from "./aiProviders.js";
 import { clientSoftwareDescriptors, exposureForSoftware, searchByKeyword } from "./cveService.js";
 import { clientDomain, domainExposure } from "./darkwebService.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
@@ -1277,6 +1278,7 @@ registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
+registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────

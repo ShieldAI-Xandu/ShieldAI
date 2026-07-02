@@ -446,7 +446,7 @@ function IntakeChat({ onComplete }) {
       if (match) {
         try {
           const data = JSON.parse(match[1].trim());
-          const finalMsg = "Excellent! I have a complete picture of your security landscape. Spinning up the full AI analysis now — Claude will handle risk modeling, Gemini will pull threat intelligence, and GPT-4o will draft your executive summary. This takes about 30 seconds...";
+          const finalMsg = "Excellent! I have a complete picture of your security landscape. Spinning up the full analysis now — generating your risk model, policies, roadmap, and executive report, and pulling live CVE and breach data from the NIST NVD and Have I Been Pwned. This takes about 30 seconds...";
           setMessages([...newMsgs, { role:"assistant", content:finalMsg, model }]);
           setLoading(false);
           setTimeout(() => onComplete(data), 1800);
@@ -463,18 +463,14 @@ function IntakeChat({ onComplete }) {
       {/* AI model indicator */}
       <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
         display:"flex",alignItems:"center",gap:12}}>
-        <div style={{fontSize:12,color:C.textSec}}>Active AI:</div>
-        {Object.values(AI_MODELS).map(m => (
-          <div key={m.id} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",
-            borderRadius:20,background:m.color+(activeModel===m.id?"33":"11"),
-            border:`1px solid ${m.color}${activeModel===m.id?"55":"22"}`,
-            color:activeModel===m.id?m.color:C.textMut,fontSize:11,fontWeight:600,
-            transition:"all 0.3s"}}>
-            {m.icon} {m.label.split(" ")[0]}
-          </div>
-        ))}
+        <div style={{fontSize:12,color:C.textSec}}>Analysis engine:</div>
+        <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",
+          borderRadius:20,background:"#D9770633",border:"1px solid #D9770655",
+          color:"#D97706",fontSize:11,fontWeight:600}}>
+          ⚡ Claude
+        </div>
         <div style={{marginLeft:"auto",fontSize:11,color:C.textMut}}>
-          Intake routed to Claude · Threat Intel → Gemini · Reports → GPT-4o
+          Generation by Claude · Live CVE data → NIST NVD · Breach data → Have I Been Pwned
         </div>
       </div>
 
@@ -852,7 +848,8 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
 
   const pct = Math.round((progress.step / progress.total) * 100);
 
-  // Map pipeline step labels to a representative AI model badge for display
+  // All program generation runs on Claude today. The threat-intel step also
+  // pulls live data from external databases (NVD, HIBP) — reflected below.
   const stepModelMap = {
     "Risk overview & top threats": "claude",
     "Prioritized roadmap & quick wins": "claude",
@@ -860,10 +857,10 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
     "Operational security policies": "claude",
     "Compliance framework gap analysis": "claude",
     "Incident response workflows": "claude",
-    "Threat intelligence": "gemini",
-    "Recommended tool stack": "gemini",
-    "Awareness training program": "gpt4",
-    "Executive summary report": "gpt4",
+    "Threat intelligence": "claude",
+    "Recommended tool categories": "claude",
+    "Awareness training program": "claude",
+    "Executive summary report": "claude",
   };
   const activeModel = stepModelMap[progress.label] || "claude";
 
@@ -909,15 +906,16 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
-          {Object.values(AI_MODELS).map(m => (
-            <div key={m.id} style={{padding:"12px",background:C.surface,
-              border:`1px solid ${activeModel===m.id?m.color+"55":C.border}`,
-              borderRadius:10,textAlign:"center",transition:"border-color 0.3s"}}>
-              <div style={{fontSize:20,marginBottom:4}}>{m.icon}</div>
-              <div style={{color:m.color,fontSize:11,fontWeight:600}}>{m.label.split(" ")[0]}</div>
-              <div style={{color:C.textMut,fontSize:10,marginTop:2}}>
-                {activeModel===m.id?"● Active":"Standby"}
-              </div>
+          {[
+            { icon:"⚡", label:"Claude", sub:"Generation", color:"#D97706" },
+            { icon:"🛡️", label:"NIST NVD", sub:"Live CVEs", color:C.accent },
+            { icon:"🕵️", label:"HIBP", sub:"Breach data", color:C.green },
+          ].map((s,i) => (
+            <div key={i} style={{padding:"12px",background:C.surface,
+              border:`1px solid ${C.border}`,borderRadius:10,textAlign:"center"}}>
+              <div style={{fontSize:20,marginBottom:4}}>{s.icon}</div>
+              <div style={{color:s.color,fontSize:11,fontWeight:600}}>{s.label}</div>
+              <div style={{color:C.textMut,fontSize:10,marginTop:2}}>{s.sub}</div>
             </div>
           ))}
         </div>
@@ -1320,7 +1318,7 @@ function ThreatIntelSection({ results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Threat Intelligence"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model="claude"/></div>
       </div>
       {(() => {
         const dw = tl.darkWeb;
@@ -1418,7 +1416,7 @@ function ToolsSection({ results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Recommended Tool Categories"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model="claude"/></div>
       </div>
       <div style={{color:C.textMut,fontSize:11.5,lineHeight:1.5,marginBottom:16,
         background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
@@ -4486,6 +4484,7 @@ function AdminPanel({ onClose }) {
             { id:"assignments", label:"Assignments" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
+            { id:"ai", label:"AI Integrations" },
           ].map(t => {
             const on = listTab === t.id;
             return (
@@ -4746,6 +4745,8 @@ function AdminPanel({ onClose }) {
             )}
           </div>
         )}
+
+        {listTab === "ai" && <AiIntegrations />}
 
         {listTab === "assignments" && (
           <div>
@@ -8268,6 +8269,70 @@ function PlanPanel({ user, usage, loading, onClose, onTierChanged }) {
 // ─────────────────────────────────────────────────────────────
 //  ADMIN/ANALYST CVE EXPOSURE — a client's live vulnerability exposure
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  AI INTEGRATIONS — provider status (reads /api/ai/providers)
+//  Shows which models are live vs. planned. Honest by construction:
+//  status comes from the backend registry, not hardcoded claims.
+// ─────────────────────────────────────────────────────────────
+function AiIntegrations() {
+  const [providers, setProviders] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/api/ai/providers`);
+        if (res.ok) setProviders((await res.json()).providers || []);
+      } catch { /* ignore */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  const badge = (status) => {
+    const map = {
+      active:              { label:"Active",            color:C.green },
+      coming_soon:         { label:"Coming soon",       color:C.textMut },
+      needs_configuration: { label:"Needs API key",     color:C.amber },
+    };
+    return map[status] || { label:status, color:C.textMut };
+  };
+
+  return (
+    <div>
+      <SectionLabel text="AI Integrations"/>
+      <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
+        All program generation currently runs on Claude. Additional providers are scaffolded
+        but not yet serviced — their routes exist and return a clear “not available” response
+        until activated. Threat data (CVEs, breaches) comes from live databases, not a model.
+      </p>
+      {loading ? (
+        <div style={{color:C.textMut,fontSize:13}}>Loading provider status…</div>
+      ) : !providers ? (
+        <div style={{color:C.textMut,fontSize:13}}>Couldn’t load provider status.</div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
+          {providers.map(p => {
+            const b = badge(p.status);
+            return (
+              <Card key={p.id} style={{padding:"14px 16px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
+                  <span style={{color:C.text,fontSize:14,fontWeight:700}}>{p.name}</span>
+                  <span style={{padding:"2px 9px",borderRadius:20,fontSize:10.5,fontWeight:700,
+                    background:`${b.color}18`,border:`1px solid ${b.color}55`,color:b.color}}>
+                    {b.label}
+                  </span>
+                </div>
+                <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{p.role}</div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ─────────────────────────────────────────────────────────────
 //  ADMIN TIER SWITCH — change any client's tier directly (no Stripe)
 //  Uses the internal /api/admin/accounts/:id/tier endpoint via onSwitch.
