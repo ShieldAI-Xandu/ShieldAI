@@ -5775,151 +5775,6 @@ function agentMeta(status) {
   }
 }
 
-// 12 months of posture history per client (trend story)
-const SAMPLE_CLIENTS = [
-  {
-    id: "c1", name: "Meridian Dental Group", industry: "Healthcare", employees: "45",
-    posture: 53, level: "Developing", plan: "Managed vCISO", mrr: 1800,
-    status: "needs_review", lastActivity: "2h ago", compliance: ["HIPAA"],
-    weakest: ["Identify", "Respond"], openItems: 3,
-    history: [31, 34, 38, 38, 41, 44, 44, 47, 49, 49, 51, 53],
-    agent: { status: "healthy", endpoints: 38, lastSeen: "3 min ago", coverage: 84 },
-    compliancePct: { current: 62, target: 90, framework: "HIPAA" },
-    alerts: [
-      { sev: "high", title: "Phishing email reported by 2 staff", time: "18 min ago", detail: "Spoofed invoice from 'billing@meridian-dental.co' — quarantined." },
-      { sev: "medium", title: "Outdated OS on 3 endpoints", time: "2h ago", detail: "Workstations running unsupported Windows build." },
-      { sev: "low", title: "New device joined network", time: "5h ago", detail: "Unmanaged tablet on guest VLAN." },
-    ],
-    reviewQueue: [
-      { type: "Incident Response Policy", status: "awaiting_review", generated: "2h ago" },
-      { type: "Q2 Risk Reassessment", status: "awaiting_review", generated: "2h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Dr. Patel", text: "We had a staff member click something suspicious — should we be worried?", time: "20 min ago" },
-      { from: "analyst", who: "You", text: "Saw the alert come through — it was quarantined before any payload ran. I'm resetting that account's credentials as a precaution and will send a short refresher to the team.", time: "12 min ago" },
-      { from: "client", who: "Dr. Patel", text: "Thank you, that's a relief.", time: "8 min ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 71, enrolled: 45, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 38, avgScore: 84 },
-        { name: "Passwords & MFA", done: 41, avgScore: 91 },
-        { name: "Device & Mobile Security", done: 28, avgScore: 78 },
-        { name: "Incident Reporting", done: 25, avgScore: 73 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 45, clicked: 6, reported: 22, date: "Jun 12" },
-        { name: "Q1 Phishing Simulation", status: "complete", sent: 45, clicked: 11, reported: 14, date: "Mar 10" },
-      ] },
-  },
-  {
-    id: "c2", name: "Lakeside Financial Advisors", industry: "Finance", employees: "28",
-    posture: 91, level: "Strong", plan: "Managed vCISO", mrr: 2400,
-    status: "on_track", lastActivity: "1d ago", compliance: ["SEC", "SOC 2"],
-    weakest: ["Respond"], openItems: 1,
-    history: [68, 70, 72, 74, 77, 79, 81, 83, 85, 87, 89, 91],
-    agent: { status: "healthy", endpoints: 26, lastSeen: "1 min ago", coverage: 96 },
-    compliancePct: { current: 88, target: 95, framework: "SOC 2" },
-    alerts: [
-      { sev: "low", title: "Impossible-travel login flagged & cleared", time: "6h ago", detail: "VP logged in from two cities; confirmed VPN, no action needed." },
-    ],
-    reviewQueue: [
-      { type: "Backup & Recovery Policy", status: "approved", generated: "1d ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "Your SOC 2 evidence package is 88% complete — we're on track for the audit window.", time: "1d ago" },
-      { from: "client", who: "Sandra Kim", text: "Excellent. The board will be pleased.", time: "1d ago" },
-    ],
-    training: { active: "Annual Security Refresher", completion: 96, enrolled: 28, nextDue: "Complete",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 28, avgScore: 95 },
-        { name: "Business Email Compromise", done: 27, avgScore: 92 },
-        { name: "Data Protection & Privacy", done: 28, avgScore: 97 },
-        { name: "Secure Payment Verification", done: 26, avgScore: 90 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 28, clicked: 1, reported: 26, date: "Jun 5" },
-        { name: "Wire-Fraud Drill", status: "complete", sent: 28, clicked: 0, reported: 27, date: "May 2" },
-      ] },
-  },
-  {
-    id: "c3", name: "Apex Manufacturing", industry: "Manufacturing", employees: "120",
-    posture: 24, level: "At Risk", plan: "Assessment + Roadmap", mrr: 950,
-    status: "attention", lastActivity: "4h ago", compliance: ["CMMC"],
-    weakest: ["Protect", "Identify"], openItems: 7,
-    history: [18, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24],
-    agent: { status: "offline", endpoints: 0, lastSeen: "never", coverage: 0 },
-    compliancePct: { current: 19, target: 80, framework: "CMMC L2" },
-    alerts: [
-      { sev: "high", title: "No MFA on email — active brute-force attempts", time: "1h ago", detail: "47 failed logins on shared mailbox in past hour." },
-      { sev: "high", title: "Unpatched VPN appliance (critical CVE)", time: "3h ago", detail: "Internet-facing device vulnerable to known exploit." },
-      { sev: "medium", title: "Local admin rights on all workstations", time: "4h ago", detail: "Standard users can install software / disable controls." },
-    ],
-    reviewQueue: [
-      { type: "Initial Security Program", status: "awaiting_review", generated: "4h ago" },
-      { type: "Access Control Policy", status: "awaiting_review", generated: "4h ago" },
-      { type: "Data Classification Policy", status: "draft", generated: "5h ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "We've finished your initial assessment — there are a few urgent items I'd like to walk you through. Do you have 15 minutes tomorrow?", time: "3h ago" },
-      { from: "client", who: "Mike Torres", text: "Yeah, mornings are best. How bad is it?", time: "2h ago" },
-      { from: "analyst", who: "You", text: "Fixable, but we should move quickly on MFA and the VPN patch. I'll prep a prioritized list.", time: "2h ago" },
-    ],
-    training: { active: "Not yet deployed", completion: 0, enrolled: 0, nextDue: "—",
-      modules: [], campaigns: [] },
-  },
-  {
-    id: "c4", name: "BrightPath Marketing", industry: "Professional Services", employees: "16",
-    posture: 84, level: "Strong", plan: "Self-Serve + Quarterly Review", mrr: 450,
-    status: "on_track", lastActivity: "3d ago", compliance: ["GDPR"],
-    weakest: ["Detect"], openItems: 0,
-    history: [70, 72, 73, 75, 76, 78, 79, 80, 81, 82, 83, 84],
-    agent: { status: "degraded", endpoints: 14, lastSeen: "8 min ago", coverage: 64 },
-    compliancePct: { current: 80, target: 90, framework: "GDPR" },
-    alerts: [],
-    reviewQueue: [],
-    chat: [
-      { from: "client", who: "Jordan Lee", text: "Quick one — is it safe to use that new AI tool with client data?", time: "3d ago" },
-      { from: "analyst", who: "You", text: "Let me review their data-handling terms and get back to you with a recommendation.", time: "3d ago" },
-    ],
-    training: { active: "Data Privacy Essentials", completion: 88, enrolled: 16, nextDue: "Jul 15",
-      modules: [
-        { name: "Data Protection & Privacy", done: 15, avgScore: 89 },
-        { name: "Phishing & Social Engineering", done: 14, avgScore: 86 },
-        { name: "Remote Work & Wi-Fi Security", done: 13, avgScore: 82 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 16, clicked: 2, reported: 12, date: "Jun 8" },
-      ] },
-  },
-  {
-    id: "c5", name: "Coastal Property Mgmt", industry: "Real Estate", employees: "33",
-    posture: 61, level: "Moderate", plan: "Managed vCISO", mrr: 1600,
-    status: "needs_review", lastActivity: "6h ago", compliance: ["State Privacy"],
-    weakest: ["Respond"], openItems: 2,
-    history: [44, 46, 47, 49, 51, 52, 54, 55, 57, 58, 60, 61],
-    agent: { status: "healthy", endpoints: 29, lastSeen: "12 min ago", coverage: 79 },
-    compliancePct: { current: 64, target: 85, framework: "State Privacy" },
-    alerts: [
-      { sev: "medium", title: "Shared password detected in cloud drive", time: "6h ago", detail: "Plaintext credentials file found in shared folder." },
-    ],
-    reviewQueue: [
-      { type: "Vendor Risk Policy", status: "awaiting_review", generated: "6h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Rosa Mendes", text: "Got the vendor policy draft — looks good. One question on the cloud storage section.", time: "5h ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 58, enrolled: 33, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 24, avgScore: 79 },
-        { name: "Passwords & MFA", done: 22, avgScore: 81 },
-        { name: "Data Protection & Privacy", done: 18, avgScore: 75 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 33, clicked: 9, reported: 13, date: "Jun 14" },
-      ] },
-  },
-];
-
 // ── Small SVG sparkline / trend chart ──
 function TrendChart({ data, color, height = 120 }) {
   const w = 520, h = height, pad = 8;
@@ -6287,10 +6142,88 @@ function AnalystConsole({ user, onExit }) {
     }, 650);
   }
 
-  const clients = SAMPLE_CLIENTS;
-  const totalMRR = clients.reduce((s, c) => s + c.mrr, 0);
-  const avgPosture = Math.round(clients.reduce((s, c) => s + c.posture, 0) / clients.length);
-  const reviewCount = clients.reduce((s, c) => s + c.reviewQueue.filter(r => r.status === "awaiting_review").length, 0);
+  // ── Live portfolio (replaces the SAMPLE_CLIENTS mockup) ──
+  // The rollup comes from /api/analyst/portfolio; richer per-client panels
+  // (posture history, alerts, review queue) are lazy-loaded when a client is
+  // opened and merged into that client's record via clientDetail.
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState(null);
+  const [clientDetail, setClientDetail] = useState({}); // { [clientId]: { history, alerts, reviewQueue, loaded } }
+
+  async function loadPortfolio() {
+    setPortfolioLoading(true); setPortfolioError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/portfolio`);
+      if (!res.ok) throw new Error("Could not load portfolio (analyst access required).");
+      setPortfolio(await res.json());
+    } catch (e) { setPortfolioError(e.message); } finally { setPortfolioLoading(false); }
+  }
+  useEffect(() => { if (view === "portfolio" && portfolio === null) loadPortfolio(); }, [view]);
+
+  async function loadClientDetail(clientId) {
+    if (clientDetail[clientId]?.loaded) return;
+    try {
+      const [hRes, aRes, rRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/posture-history`),
+        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/alerts`),
+        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-queue`),
+      ]);
+      const history = hRes.ok ? (await hRes.json()).points || [] : [];
+      const alerts = aRes.ok ? (await aRes.json()).alerts || [] : [];
+      const reviewQueue = rRes.ok ? (await rRes.json()).queue || [] : [];
+      setClientDetail(d => ({ ...d, [clientId]: { history, alerts, reviewQueue, loaded: true } }));
+    } catch {
+      setClientDetail(d => ({ ...d, [clientId]: { history: [], alerts: [], reviewQueue: [], loaded: true } }));
+    }
+  }
+
+  // Map a live portfolio row + any loaded detail into the shape the console
+  // panels expect. Real data where we have it; empty (not fabricated) elsewhere.
+  function toClientRecord(p) {
+    const detail = clientDetail[p.id] || {};
+    const health = p.agent || { status: "pending", endpoints: 0, healthy: 0, lastSeen: null };
+    return {
+      id: p.id,
+      name: p.name,
+      industry: p.industry || "—",
+      employees: p.employees || "—",
+      posture: p.posture ?? 0,
+      level: p.level || "—",
+      plan: p.plan || p.tier || "free",
+      status: p.status || "on_track",
+      weakest: p.weakest || [],
+      openItems: p.openItems || 0,
+      lastActivity: health.lastSeen || p.scoredAt || null,
+      compliance: [],
+      history: (detail.history || []).map(pt => pt.score),
+      agent: {
+        status: health.status,
+        endpoints: health.endpoints,
+        lastSeen: health.lastSeen || "never",
+        coverage: health.endpoints ? Math.round((health.healthy / health.endpoints) * 100) : 0,
+      },
+      compliancePct: null,        // no live compliance-% source yet; panel guards on null
+      alerts: (detail.alerts || []).map(a => ({
+        sev: a.severity === "critical" ? "high" : (a.severity || "low"),
+        title: a.title, time: a.time, detail: a.type || "",
+      })),
+      reviewQueue: (detail.reviewQueue || []).map(r => ({
+        type: r.label || r.type, status: r.status, generated: r.generatedAt,
+      })),
+      chat: [],                   // messaging is a later phase; empty for now
+      training: null,             // training campaigns are a later phase
+      mrr: 0,
+    };
+  }
+
+  const clients = (portfolio || []).map(toClientRecord);
+  const totalClients = clients.length;
+  const avgPosture = clients.length
+    ? Math.round(clients.filter(c => c.posture > 0).reduce((s, c) => s + c.posture, 0) /
+        Math.max(1, clients.filter(c => c.posture > 0).length))
+    : 0;
+  const reviewCount = clients.reduce((s, c) => s + c.openItems, 0);
   const highAlerts = clients.reduce((s, c) => s + c.alerts.filter(a => a.sev === "high").length, 0);
   const agentsOnline = clients.filter(c => c.agent.status === "healthy").length;
 
@@ -6307,8 +6240,6 @@ function AnalystConsole({ user, onExit }) {
       <span style={{fontWeight:700,fontSize:15,color:SOC.text}}>{title}</span>
       <span style={{fontSize:10,color:SOC.cyan,letterSpacing:2,padding:"2px 10px",
         background:`${SOC.cyan}18`,borderRadius:20,border:`1px solid ${SOC.cyan}33`}}>ANALYST CONSOLE</span>
-      <span style={{fontSize:9,color:SOC.textMut,padding:"2px 8px",background:SOC.bg,
-        border:`1px solid ${SOC.border}`,borderRadius:4}}>VISION MOCKUP</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
         <span style={{fontSize:11,color:SOC.textSec}}>{user.email}</span>
         <button onClick={()=>setView(view==="myclients"?"portfolio":"myclients")}
@@ -6686,10 +6617,16 @@ function AnalystConsole({ user, onExit }) {
   }
 
   if (view === "client" && active) {
-    const c = active;
+    // Re-derive from the live portfolio so lazily-loaded detail (history,
+    // alerts, review queue) shows up after the client was opened.
+    const c = clients.find(x => x.id === active.id) || active;
     const clr = pColor(c.posture);
     const chatLog = [...(c.chat || []), ...((localChats[c.id]) || [])];
-    const trend = c.history[c.history.length-1] - c.history[0];
+    const hist = Array.isArray(c.history) ? c.history : [];
+    const trend = hist.length >= 2 ? hist[hist.length-1] - hist[0] : 0;
+    // Null-safe view of compliance readiness (no live source yet → hidden gracefully).
+    const comp = c.compliancePct || null;
+    const training = c.training || null;
 
     function sendChat() {
       if (!chatDraft.trim()) return;
@@ -6737,17 +6674,23 @@ function AnalystConsole({ user, onExit }) {
               ); })()}
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct.framework} READINESS</div>
-              <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{c.compliancePct.current}%</div>
-              <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
-                <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:SOC.cyan}}/>
-              </div>
-              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {c.compliancePct.target}%</div>
+              {comp ? (<>
+                <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{comp.framework} READINESS</div>
+                <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{comp.current}%</div>
+                <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
+                  <div style={{width:`${comp.current}%`,height:"100%",background:SOC.cyan}}/>
+                </div>
+                <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {comp.target}%</div>
+              </>) : (<>
+                <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>COMPLIANCE</div>
+                <div style={{fontSize:13,fontWeight:700,color:SOC.textSec,marginTop:14}}>No framework tracked</div>
+                <div style={{fontSize:9,color:SOC.textMut,marginTop:6}}>Run an assessment to begin</div>
+              </>)}
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>MONTHLY VALUE</div>
-              <div style={{fontSize:24,fontWeight:800,color:SOC.green,marginTop:6}}>${c.mrr.toLocaleString()}</div>
-              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.plan}</div>
+              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>PLAN</div>
+              <div style={{fontSize:18,fontWeight:800,color:SOC.green,marginTop:12,textTransform:"capitalize"}}>{c.plan}</div>
+              <div style={{fontSize:9,color:SOC.textMut,marginTop:6}}>{c.openItems} open item{c.openItems===1?"":"s"}</div>
             </div>
           </div>
 
@@ -6875,48 +6818,64 @@ function AnalystConsole({ user, onExit }) {
 
             {/* Compliance progress */}
             <SocPanel title="Compliance Progress" accent={SOC.purple}>
-              <div style={{textAlign:"center",padding:"6px 0"}}>
-                <div style={{fontSize:11,color:SOC.textSec}}>{c.compliancePct.framework}</div>
-                <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
-                <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
-                  <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+              {comp ? (
+                <>
+                  <div style={{textAlign:"center",padding:"6px 0"}}>
+                    <div style={{fontSize:11,color:SOC.textSec}}>{comp.framework}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{comp.current}%</div>
+                    <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
+                      <div style={{width:`${comp.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+                    </div>
+                    <div style={{fontSize:10,color:SOC.textMut}}>
+                      {comp.target - comp.current}% to target ({comp.target}%)
+                    </div>
+                  </div>
+                  <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
+                    {comp.current >= comp.target - 10
+                      ? "On track for certification window."
+                      : "Remediation roadmap in progress."}
+                  </div>
+                </>
+              ) : (
+                <div style={{color:SOC.textSec,fontSize:11,padding:"14px 0",lineHeight:1.6,textAlign:"center"}}>
+                  No compliance framework is being tracked for this client yet.
                 </div>
-                <div style={{fontSize:10,color:SOC.textMut}}>
-                  {c.compliancePct.target - c.compliancePct.current}% to target ({c.compliancePct.target}%)
-                </div>
-              </div>
-              <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
-                {c.compliancePct.current >= c.compliancePct.target - 10
-                  ? "On track for certification window."
-                  : "Remediation roadmap in progress."}
-              </div>
+              )}
             </SocPanel>
 
             {/* Training program */}
             <SocPanel title="Training Program" accent={SOC.cyan}>
-              <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>{c.training.active}</div>
-              {c.training.enrolled > 0 ? (
+              {training ? (
                 <>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
-                    <span>{c.training.enrolled} enrolled</span><span>Due {c.training.nextDue}</span>
-                  </div>
-                  <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
-                    <div style={{width:`${c.training.completion}%`,height:"100%",
-                      background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
-                  </div>
-                  <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
-                    {c.training.completion}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
-                  </div>
+                  <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>{training.active}</div>
+                  {training.enrolled > 0 ? (
+                    <>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
+                        <span>{training.enrolled} enrolled</span><span>Due {training.nextDue}</span>
+                      </div>
+                      <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
+                        <div style={{width:`${training.completion}%`,height:"100%",
+                          background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
+                      </div>
+                      <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
+                        {training.completion}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
+                      No active program. Deploy a tailored awareness campaign for this client.
+                    </div>
+                  )}
                 </>
               ) : (
-                <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
-                  No active program. Deploy a tailored awareness campaign for this client.
+                <div style={{color:SOC.textSec,fontSize:11,padding:"14px 0",lineHeight:1.6,textAlign:"center"}}>
+                  No training program for this client yet.
                 </div>
               )}
               <button onClick={()=>setTrainingClient(c)} style={{marginTop:10,width:"100%",padding:"8px",
                 background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,borderRadius:7,
                 color:SOC.cyan,fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                {c.training.enrolled>0?"Manage Training":"Build Training Program"} →
+                {training?.enrolled>0?"Manage Training":"Build Training Program"} →
               </button>
             </SocPanel>
           </div>
@@ -6940,11 +6899,36 @@ function AnalystConsole({ user, onExit }) {
       <Mastermind/>
       <div style={{maxWidth:1180,margin:"0 auto",padding:"20px"}}>
 
+        {portfolioLoading && portfolio === null && (
+          <div style={{padding:"60px 0",textAlign:"center",color:SOC.textSec,fontSize:13}}>
+            Loading your client portfolio…
+          </div>
+        )}
+        {portfolioError && (
+          <div style={{padding:"16px",marginBottom:16,background:`${SOC.red}12`,
+            border:`1px solid ${SOC.red}44`,borderRadius:10,color:SOC.red,fontSize:12}}>
+            {portfolioError}
+            <button onClick={loadPortfolio} style={{marginLeft:12,padding:"4px 12px",
+              background:`${SOC.red}22`,border:`1px solid ${SOC.red}55`,borderRadius:6,
+              color:SOC.red,fontSize:11,fontWeight:600,cursor:"pointer"}}>Retry</button>
+          </div>
+        )}
+        {portfolio !== null && !portfolioError && clients.length === 0 && (
+          <div style={{padding:"60px 20px",textAlign:"center"}}>
+            <div style={{fontSize:15,fontWeight:700,color:SOC.text,marginBottom:8}}>No clients assigned yet</div>
+            <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.7,maxWidth:440,margin:"0 auto"}}>
+              Clients you're assigned to will appear here with their live posture, agent health,
+              alerts, and review queue. An admin can assign clients from the Admin panel.
+            </div>
+          </div>
+        )}
+        {portfolio !== null && clients.length > 0 && (<>
+
         {/* KPI row */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:18}}>
           {[
             { label:"Active Clients", value:clients.length, color:SOC.cyan },
-            { label:"Monthly Recurring", value:`$${(totalMRR/1000).toFixed(1)}k`, color:SOC.green },
+            { label:"Open Items", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
             { label:"Avg Posture", value:avgPosture, color:pColor(avgPosture) },
             { label:"Agents Online", value:`${agentsOnline}/${clients.length}`, color:SOC.blue },
             { label:"Pending Reviews", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
@@ -6988,7 +6972,7 @@ function AnalystConsole({ user, onExit }) {
                 const pend = c.reviewQueue.filter(r=>r.status==="awaiting_review").length;
                 const highA = c.alerts.filter(a=>a.sev==="high").length;
                 return (
-                  <div key={c.id} onClick={()=>{setActive(c);setView("client");}}
+                  <div key={c.id} onClick={()=>{loadClientDetail(c.id);setActive(c);setView("client");}}
                     style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,
                       padding:"13px 15px",cursor:"pointer",display:"flex",alignItems:"center",gap:13}}>
                     <div style={{width:46,height:46,borderRadius:"50%",flexShrink:0,
@@ -7016,8 +7000,8 @@ function AnalystConsole({ user, onExit }) {
                       </div>
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{color:SOC.green,fontWeight:700,fontSize:14}}>${c.mrr.toLocaleString()}</div>
-                      <div style={{color:SOC.textMut,fontSize:9,marginTop:2}}>per month</div>
+                      <div style={{color:SOC.text,fontWeight:700,fontSize:14,textTransform:"capitalize"}}>{c.plan}</div>
+                      <div style={{color:SOC.textMut,fontSize:9,marginTop:2}}>{c.openItems} open</div>
                     </div>
                   </div>
                 );
@@ -7111,9 +7095,10 @@ function AnalystConsole({ user, onExit }) {
         <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
           border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
           <span style={{color:SOC.textSec,fontSize:11}}>
-            Vision mockup with representative data. Click any client to open their full command center.
+            Click any client to open their full command center.
           </span>
         </div>
+        </>)}
       </div>
     </div>
   );

@@ -25,6 +25,7 @@ import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
+import { registerPortfolioRoutes, recordPostureSnapshot } from "./portfolioRoutes.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import {
@@ -767,6 +768,8 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
 
   program.status = "complete";
   program.sections.meta = program.meta; // surfaced to the UI (results === sections)
+  // Record a real posture point for the analyst-console trend line.
+  recordPostureSnapshot(db, program.userId, posture.postureScore, posture.postureLevel);
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }
@@ -1286,6 +1289,7 @@ registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
+registerPortfolioRoutes(app, { db, analystClientIds, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
 //  SERVE THE BUILT FRONTEND (production)

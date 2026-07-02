@@ -107,6 +107,14 @@ verified, the UI says so rather than showing a fake "all clear."
       → **CVE Exposure** card) and confirm CVEs appear once the client has a
       software inventory (from the agent or the assessment tech-stack field).
       No inventory → an honest "needs software inventory" note, not empty CVEs.
+- [ ] **Richer CVE coverage comes from the monitoring agent's software inventory.**
+      The collectors (v1.1+) report installed apps with versions
+      (`inventory.software`), which drives per-application CVE matching — not just
+      the OS. Endpoints enrolled on an older collector keep sending the OS-only
+      shape until they run the updated collector (via the normal, human-initiated
+      agent reinstall/update). After an endpoint runs the new collector, its next
+      report populates the software list and the CVE refresh picks it up
+      automatically. This scan is read-only (registry/package-DB reads only).
 
 ### Dark-web / breach data — Have I Been Pwned (HIBP)
 > Real breach intelligence requires a paid HIBP subscription — there is no free

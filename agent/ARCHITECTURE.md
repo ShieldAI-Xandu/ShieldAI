@@ -31,6 +31,31 @@ that violates it.
   the analyst **only after the client grants explicit permission** for that
   specific action. Software never has an execution path to the endpoint.
 
+## What it collects
+The collector produces a normalized `inventory` (same schema on Windows, Linux,
+and macOS):
+- **Security posture** — installed security tools (e.g. Microsoft Defender),
+  host firewall state, disk encryption (BitLocker/FileVault/LUKS), pending OS
+  patches, local administrator accounts, and screen-lock policy.
+- **Host** — OS and version, architecture, hostname, last boot.
+- **Installed software inventory** — a list of installed applications with their
+  versions, as `[{ "name": "...", "version": "..." }]`. Sources per OS:
+  - Windows: registry uninstall keys (64-bit, 32-bit, per-user); excludes system
+    components and OS updates; the slow/risky `Win32_Product` WMI query is
+    deliberately avoided.
+  - Linux: the package database via `dpkg-query` or `rpm`.
+  - macOS: `/Applications/*.app` bundles, versions read from each Info.plist.
+  The list is capped (~200 entries) to keep report payloads reasonable.
+
+  **Why this exists:** it feeds ShieldAI's CVE matching. The backend turns each
+  `name + version` into a descriptor and queries the live NIST NVD, so a client's
+  real installed software drives their vulnerability exposure — not just the OS
+  version or assessment answers. This is **read-only**: the collector only reads
+  the package/registry databases; it never installs, updates, or changes
+  anything, preserving the agent boundary described above. If a scan fails, the
+  software list is left **empty** rather than fabricated, and CVE matching falls
+  back to OS + assessment data.
+
 ## What it is NOT (set client expectations honestly)
 - It is **not an antivirus or anti-malware engine.** It does not scan for or
   detect malware itself. Instead it **reads the status and findings of the
