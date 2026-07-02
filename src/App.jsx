@@ -4160,6 +4160,15 @@ function AdminPanel({ onClose }) {
                 )}
               </Card>
 
+              {!u.isAdmin && !u.isAnalyst && (
+                <AdminTierSwitch
+                  userId={u.id}
+                  currentTier={accountCtl?.tier || u.tier || "free"}
+                  busy={ctlBusy}
+                  onSwitch={(tier)=>changeTier(u.id, tier)}
+                />
+              )}
+
               {!u.isAdmin && !u.isAnalyst && <AdminCveExposure userId={u.id}/>}
 
               {/* ── Account Controls (Stage 3) ───────────────── */}
@@ -8011,7 +8020,11 @@ function PlanPanel({ user, usage, loading, onClose, onTierChanged }) {
         window.location.href = data.url;   // hand off to Stripe Checkout
         return;
       }
-      setBillingError(data.error || "Couldn't start checkout. Please try again or contact your admin.");
+      if (res.status === 503) {
+        setBillingError("Online payments aren't set up on this server yet. If you're testing, enable SHIELDAI_DEV_MODE to switch tiers instantly, or an admin can change your tier from the admin console.");
+      } else {
+        setBillingError(data.error || "Couldn't start checkout. Please try again or contact your admin.");
+      }
     } catch {
       setBillingError("Network error starting checkout. Please try again.");
     } finally {
@@ -8235,6 +8248,66 @@ function PlanPanel({ user, usage, loading, onClose, onTierChanged }) {
 // ─────────────────────────────────────────────────────────────
 //  ADMIN/ANALYST CVE EXPOSURE — a client's live vulnerability exposure
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  ADMIN TIER SWITCH — change any client's tier directly (no Stripe)
+//  Uses the internal /api/admin/accounts/:id/tier endpoint via onSwitch.
+// ─────────────────────────────────────────────────────────────
+function AdminTierSwitch({ userId, currentTier, busy, onSwitch }) {
+  const TIERS_UI = [
+    { id: "free",       name: "Free",          price: "$0" },
+    { id: "starter",    name: "Self-Serve",    price: "$129" },
+    { id: "pro",        name: "Guided",        price: "$599" },
+    { id: "enterprise", name: "Managed vCISO", price: "$1,950" },
+  ];
+  const [pending, setPending] = useState(null);
+  const cur = currentTier || "free";
+
+  return (
+    <Card style={{marginBottom:20,border:`1px solid ${C.accent}33`}}>
+      <div style={{color:C.accent,fontSize:11,fontWeight:700,letterSpacing:1.2,
+        textTransform:"uppercase",marginBottom:4}}>Subscription Tier</div>
+      <div style={{color:C.textMut,fontSize:11.5,marginBottom:12}}>
+        Change this client's plan instantly — applied server-side, no payment or Stripe required.
+      </div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+        {TIERS_UI.map(t => {
+          const isCurrent = t.id === cur;
+          const isPending = t.id === pending;
+          return (
+            <button key={t.id}
+              onClick={() => !isCurrent && setPending(t.id)}
+              disabled={busy || isCurrent}
+              style={{padding:"8px 13px",borderRadius:8,fontSize:12,fontWeight:600,textAlign:"left",
+                cursor: isCurrent || busy ? "default" : "pointer",
+                background: isPending ? `${C.accent}18` : (isCurrent ? `${C.green}18` : "transparent"),
+                border:`1px solid ${isPending ? C.accent : (isCurrent ? C.green : C.border)}`,
+                color: isPending ? C.accent : (isCurrent ? C.green : C.textSec)}}>
+              {t.name} <span style={{opacity:0.65,fontWeight:400}}>{t.price}</span>
+              {isCurrent ? " · current" : ""}
+            </button>
+          );
+        })}
+      </div>
+      {pending && pending !== cur && (
+        <div style={{marginTop:12,display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={() => { onSwitch(pending); setPending(null); }} disabled={busy}
+            style={{padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,border:"none",
+              cursor: busy ? "default" : "pointer", color:C.bg,
+              background:`linear-gradient(135deg,${C.accent},${C.accentDm})`}}>
+            {busy ? "Applying…" : `Apply: ${cur} → ${pending}`}
+          </button>
+          <button onClick={() => setPending(null)} disabled={busy}
+            style={{padding:"8px 12px",borderRadius:8,fontSize:12,background:"none",
+              border:`1px solid ${C.border}`,color:C.textMut,cursor:"pointer"}}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+
 function AdminCveExposure({ userId }) {
   const [data, setData] = useState(null);
   const [darkweb, setDarkweb] = useState(null);
