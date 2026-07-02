@@ -3001,17 +3001,17 @@ function MarketingPage({ onEnterApp, onLogin }) {
   const steps = [
     { n:"01", t:"Assess", d:"Answer a short, structured assessment about your business and current security posture." },
     { n:"02", t:"Score", d:"Our deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork." },
-    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training." },
-    { n:"04", t:"Manage", d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
+    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, staff training, and live threat intelligence — real CVEs from the NIST NVD and breach exposure from Have I Been Pwned." },
+    { n:"04", t:"Manage", d:"Coming soon: our security engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Self-Serve", tag:"Available now", points:["Automated assessment & NIST score","Full security program & policies","Live threat intelligence (CVEs & breach exposure)","Generate and download documents"], cta:"Start free" },
+    { name:"Guided", tag:"Coming soon", upcoming:true, featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Join the waitlist" },
+    { name:"Managed vCISO", tag:"Coming soon", upcoming:true, points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Join the waitlist" },
   ];
 
-  const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
+  const trust = ["NIST Cybersecurity Framework","CIS Controls v8.1","HIPAA","SOC 2","CMMC","PCI-DSS"];
 
   return (
     <div style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
@@ -3047,8 +3047,8 @@ function MarketingPage({ onEnterApp, onLogin }) {
           The cybersecurity expert<br/>your business is required to have.
         </h1>
         <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 auto 36px"}}>
-          A full-time CISO costs $200,000 a year. ShieldAI gives you the same protection —
-          AI-powered, expert-reviewed — for the price of a subscription.
+          A full-time CISO costs $200,000–$400,000 a year. ShieldAI gives you an AI-powered
+          security program today — with expert-managed service coming soon — for the price of a subscription.
         </p>
         <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
           <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
@@ -3069,7 +3069,7 @@ function MarketingPage({ onEnterApp, onLogin }) {
           padding:"24px 36px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:46,fontWeight:800,color:C.green,lineHeight:1}}>91</div>
-            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE</div>
+            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE · EXAMPLE</div>
           </div>
           <div style={{width:1,height:48,background:line}}/>
           <div style={{textAlign:"left",maxWidth:280}}>
@@ -3161,24 +3161,31 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
           {tiers.map((t,i)=>(
             <div key={i} style={{flex:"1 1 280px",background:t.featured?`${cyan}0C`:C.card,
-              border:`1px solid ${t.featured?cyan:line}`,borderRadius:16,padding:"28px 26px",position:"relative"}}>
-              {t.featured && (
+              border:`1px solid ${t.upcoming?C.amber+"66":(t.featured?cyan:line)}`,borderRadius:16,padding:"28px 26px",position:"relative"}}>
+              {(t.featured || t.upcoming) && (
                 <div style={{position:"absolute",top:-11,left:26,padding:"3px 12px",borderRadius:20,
-                  background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
+                  background:t.upcoming?C.amber:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
               )}
-              <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
-              <div style={{fontSize:22,fontWeight:800,marginBottom:18}}>{t.name}</div>
+              <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && !t.upcoming && t.tag}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:18,display:"flex",alignItems:"center",gap:8}}>
+                {t.name}
+              </div>
               <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
                 {t.points.map((p,j)=>(
                   <div key={j} style={{display:"flex",gap:9,fontSize:14,color:dim,lineHeight:1.4}}>
-                    <span style={{color:C.green,flexShrink:0}}>✓</span>{p}
+                    <span style={{color:t.upcoming?C.amber:C.green,flexShrink:0}}>{t.upcoming?"○":"✓"}</span>{p}
                   </div>
                 ))}
               </div>
+              {t.upcoming && (
+                <div style={{fontSize:11.5,color:C.amber,lineHeight:1.5,marginBottom:14}}>
+                  Expert-led service — in development. Join the waitlist and we'll reach out when it launches.
+                </div>
+              )}
               <button onClick={()=> t.cta==="Start free" ? onEnterApp() : document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
                 style={{width:"100%",padding:"11px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",
-                  background:t.featured?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
-                  color:t.featured?deep:ink,border:t.featured?"none":`1px solid ${line}`}}>
+                  background:t.featured&&!t.upcoming?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
+                  color:t.featured&&!t.upcoming?deep:ink,border:t.featured&&!t.upcoming?"none":`1px solid ${line}`}}>
                 {t.cta}
               </button>
             </div>

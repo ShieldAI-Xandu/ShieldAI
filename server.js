@@ -19,6 +19,7 @@ import { clientSoftwareDescriptors, exposureForSoftware, searchByKeyword } from 
 import { clientDomain, domainExposure } from "./darkwebService.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
+import { buildCustomFrameworkBlock, registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
@@ -593,8 +594,12 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             buildCISPromptBlock(ig);
         }
 
+        // Inject any client-selected CUSTOM frameworks + their real controls,
+        // so the gap analysis assesses against them like a built-in framework.
+        const customBlock = buildCustomFrameworkBlock(db, selected);
+
         const userContent =
-          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}\n\n` +
+          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}${customBlock}\n\n` +
           `Generate the "compliance" section. Return ONLY valid JSON matching the schema in your instructions. Limit gaps to 3 per framework.`;
 
         let parsed = null;
@@ -1278,6 +1283,7 @@ registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
+registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
