@@ -4,6 +4,7 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
@@ -1280,7 +1281,6 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
-await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
@@ -1295,29 +1295,42 @@ registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 //  returns index.html for any non-API, non-file GET so client-side routing
 //  works — but must NEVER swallow /api/* requests.
 // ─────────────────────────────────────────────────────────────
+// Lightweight health check for the platform (fast 200, no auth, no DB work).
+app.get("/health", (req, res) => res.status(200).json({ ok: true }));
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
-import("fs").then(({ existsSync }) => {
-  if (existsSync(DIST_DIR)) {
-    app.use(express.static(DIST_DIR));
-    // SPA fallback: serve index.html for browser navigations only.
-    app.use((req, res, next) => {
-      if (req.method !== "GET") return next();
-      if (req.path.startsWith("/api/")) return next();
-      if (req.path.includes(".")) return next(); // let static assets 404 normally
-      res.sendFile(path.join(DIST_DIR, "index.html"));
-    });
-    console.log("   Serving built frontend from ./dist");
-  } else {
-    console.log("   No ./dist found — API-only mode (run `npm run build` for production).");
-  }
-});
+if (existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  // SPA fallback: serve index.html for browser navigations only.
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (req.path.startsWith("/api/")) return next();
+    if (req.path.includes(".")) return next(); // let static assets 404 normally
+    res.sendFile(path.join(DIST_DIR, "index.html"));
+  });
+  console.log("   Serving built frontend from ./dist");
+} else {
+  console.log("   No ./dist found — API-only mode (run `npm run build` for production).");
+}
 
 // ─────────────────────────────────────────────────────────────
-const server = app.listen(PORT, () => {
-  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ ShieldAI backend running on port ${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
+
+  // Register billing AFTER the port is open, so a slow/failed Stripe import can
+  // never prevent the server from starting (which would fail Railway's health
+  // check). Billing routes attach a moment later; they 503 until then.
+  (async () => {
+    try {
+      await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
+      console.log("   Billing routes registered.");
+    } catch (e) {
+      console.warn("   Billing registration failed, continuing without it —", e.message);
+    }
+  })();
 
   // Optional first-boot demo seed (set SEED_ON_BOOT=true on Railway for demos).
   // Runs in the BACKGROUND after the server is already listening, because it
