@@ -1417,8 +1417,14 @@ function ToolsSection({ results }) {
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-        <SectionLabel text="Recommended Security Tool Stack"/>
+        <SectionLabel text="Recommended Tool Categories"/>
         <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
+      </div>
+      <div style={{color:C.textMut,fontSize:11.5,lineHeight:1.5,marginBottom:16,
+        background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+        These describe the <b>capabilities to look for</b> in each category, not specific
+        products. Evaluate vendors against these criteria and your budget — ShieldAI doesn't
+        endorse particular brands.
       </div>
       {categories.map(cat=>(
         <div key={cat} style={{marginBottom:18}}>
@@ -1427,22 +1433,22 @@ function ToolsSection({ results }) {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
             {tools.filter(t=>t.category===cat).map((t,i)=>(
               <Card key={i} style={{padding:"14px 16px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span style={{color:C.accent,fontWeight:700,fontSize:15}}>{t.recommended}</span>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,gap:8}}>
+                  <span style={{color:C.accent,fontWeight:700,fontSize:13.5}}>{t.subcategory || t.category}</span>
                   <Badge label={t.cost}/>
                 </div>
-                {t.subcategory && (
-                  <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>{t.subcategory}</div>
-                )}
-                <p style={{color:C.textSec,fontSize:12,margin:"0 0 8px",lineHeight:1.6}}>
-                  {t.rationale}
+                <p style={{color:C.text,fontSize:12.5,margin:"0 0 6px",lineHeight:1.5}}>
+                  {t.capability || t.recommended}
                 </p>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <Badge label={t.implementation}/>
-                  {t.alternative && (
-                    <span style={{color:C.textMut,fontSize:11}}>Alt: {t.alternative}</span>
-                  )}
-                </div>
+                {(t.selectionCriteria || t.alternative) && (
+                  <p style={{color:C.textMut,fontSize:11.5,margin:"0 0 8px",lineHeight:1.5}}>
+                    <b>How to choose:</b> {t.selectionCriteria || t.alternative}
+                  </p>
+                )}
+                {t.rationale && (
+                  <p style={{color:C.textSec,fontSize:12,margin:"0 0 8px",lineHeight:1.5}}>{t.rationale}</p>
+                )}
+                <Badge label={t.implementation}/>
               </Card>
             ))}
           </div>
@@ -2889,6 +2895,20 @@ function Dashboard({ assessment, results, onReset }) {
 
       {/* Main content */}
       <div style={{flex:1,overflowY:"auto",padding:"24px"}}>
+        {results?.meta?.isSample && (
+          <div style={{marginBottom:16,padding:"10px 14px",borderRadius:8,
+            background:`${C.amber}14`,border:`1px solid ${C.amber}55`,
+            color:C.amber,fontSize:12.5,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
+            🧪 Sample data — this is a demonstration account. The content below is illustrative and not a real security assessment.
+          </div>
+        )}
+        {!results?.meta?.isSample && ["priorities","policies","workflows","tools","training","report"].includes(section) && (
+          <div style={{marginBottom:14,padding:"8px 12px",borderRadius:8,
+            background:C.surface,border:`1px solid ${C.border}`,
+            color:C.textMut,fontSize:11.5,lineHeight:1.5}}>
+            ✎ AI-drafted from your assessment inputs — professional guidance intended for review by a qualified person, not verified fact. Scores, compliance mappings, CVEs, and breach status are drawn from real/deterministic sources.
+          </div>
+        )}
         {sectionMap[section]}
       </div>
     </div>

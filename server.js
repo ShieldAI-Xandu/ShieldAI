@@ -8,7 +8,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
 import db from "./db.js";
-import { PIPELINE } from "./generators.js";
+import { PIPELINE, NO_FABRICATION } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
@@ -46,6 +46,17 @@ const PORT = process.env.PORT || 3001;
 // used for testing (bypasses Stripe). MUST be off in production.
 const DEV_MODE = String(process.env.SHIELDAI_DEV_MODE).toLowerCase() === "true";
 if (DEV_MODE) console.warn("⚠️  ShieldAI DEV_MODE is ON — self-service tier switching is enabled. Do NOT use in production.");
+
+// Sample/demo accounts: their generated content is illustrative and gets badged
+// as "sample data" in the UI. Defaults to the seeded demo login; extend via
+// SAMPLE_EMAILS (comma-separated) if you add more showcase accounts.
+const SAMPLE_EMAILS = new Set(
+  ["demo@shieldai.com", ...String(process.env.SAMPLE_EMAILS || "").split(",")]
+    .map(e => e.trim().toLowerCase()).filter(Boolean)
+);
+function isDemoAccount(user) {
+  return !!user && SAMPLE_EMAILS.has(String(user.email || "").toLowerCase());
+}
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -683,10 +694,14 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
         };
         program.sections[step.key] = parsed;
       } else {
+        // Authored steps (priorities, policies, workflows, tools, training,
+        // execReport): legitimately AI-written, but grounded in the client's
+        // real inputs and constrained against inventing verifiable facts.
+        const authoredSystem = step.system + NO_FABRICATION;
         let parsed = null;
         try {
           const text = await callClaudeText({
-            system: step.system,
+            system: authoredSystem,
             messages: [{
               role: "user",
               content: `Business context:\n${ctx}\n\nGenerate the "${step.key}" section. Return ONLY valid JSON matching the schema in your instructions.`,
@@ -697,7 +712,7 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
         } catch (firstErr) {
           console.warn(`Step "${step.key}" first attempt failed (${firstErr.message}); retrying…`);
           const retryText = await callClaudeText({
-            system: step.system,
+            system: authoredSystem,
             messages: [{
               role: "user",
               content: `Business context:\n${ctx}\n\nGenerate the "${step.key}" section. Return ONLY strictly valid, minified JSON — no trailing commas, no comments, no text before or after the JSON object. Match the schema exactly.`,
@@ -731,7 +746,20 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
     await db.write();
   }
 
+  // Provenance metadata: record which sections are REAL (deterministic/live
+  // sources) vs AI-DRAFTED (authored guidance for human review), and whether
+  // this program belongs to the demo/sample account. The UI uses this to badge
+  // content honestly so nothing AI-written is mistaken for verified fact.
+  const demoUser = (db.data.users || []).find(u => u.id === program.userId && isDemoAccount(u));
+  program.meta = {
+    real: ["riskOverview", "compliance", "threatIntel.cves", "threatIntel.darkWeb"],
+    aiDrafted: ["priorities", "policiesCore", "policiesOps", "workflows", "tools", "training", "execReport", "threatIntel.industryThreats"],
+    isSample: !!demoUser,
+    generatedAt: new Date().toISOString(),
+  };
+
   program.status = "complete";
+  program.sections.meta = program.meta; // surfaced to the UI (results === sections)
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }

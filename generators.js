@@ -4,6 +4,21 @@
 // this avoids the token-truncation issues that come from asking for
 // everything in one giant response.
 
+// Appended to every AUTHORED step's system prompt (policies, roadmap,
+// workflows, training, exec report, threat narrative, tools). These steps are
+// legitimately AI-*written*, but must be grounded in the client's real
+// assessment inputs and must NOT invent verifiable facts. The hard-fact items
+// (posture score, compliance mapping, CVEs, dark-web status) are produced from
+// deterministic/live sources elsewhere and are never authored here.
+export const NO_FABRICATION = `
+
+GROUNDING & ACCURACY RULES (critical):
+- Base everything ONLY on the business context provided. Do not assume facts that were not given.
+- Do NOT invent verifiable specifics: no made-up statistics, breach numbers, CVE IDs, dollar figures presented as fact, compliance-certification claims, dates, or citations.
+- Do NOT name specific commercial product brands, versions, or exact prices unless they were provided in the business context. Refer to tool CATEGORIES and capabilities instead (e.g. "a reputable endpoint protection platform"), and express cost only as the coarse ranges defined in the schema.
+- When you reference a standard or framework, name only well-established ones (e.g. NIST CSF, CIS Controls, HIPAA, PCI DSS, SOC 2) and only if relevant to the stated industry/needs. Never fabricate a standard.
+- This content is AI-drafted guidance for human review, not verified fact. Keep claims general and defensible rather than specific and unverifiable.`;
+
 export const PIPELINE = [
   {
     key: "riskOverview",
@@ -68,11 +83,11 @@ Limit industryThreats to exactly 3, tailored to the business's industry and tech
   },
   {
     key: "tools",
-    label: "Recommended tool stack",
+    label: "Recommended tool categories",
     maxTokens: 2000,
     system: `You are a security architect. Return ONLY valid JSON, no markdown fences:
-{"toolStack":[{"category":"","subcategory":"","recommended":"","alternative":"","rationale":"1 sentence","cost":"Free|<$50/mo|$50-200/mo|$200+/mo","implementation":"Easy|Moderate|Complex"}]}
-Limit to exactly 6 tools covering: Endpoint Protection, Email Security, Password Management, Backup, MFA/Identity, and Network/DNS Security. Match recommendations to the stated budget.`,
+{"toolStack":[{"category":"","subcategory":"","capability":"what to look for, 1 sentence — NO brand names","selectionCriteria":"how to choose, 1 sentence","rationale":"why this matters for THIS business, 1 sentence","cost":"Free|<$50/mo|$50-200/mo|$200+/mo","implementation":"Easy|Moderate|Complex"}]}
+Cover exactly these 6 categories: Endpoint Protection, Email Security, Password Management, Backup, MFA/Identity, and Network/DNS Security. Describe the CAPABILITY to look for in each category and selection criteria — do NOT name specific commercial products, vendors, or brands, and do NOT state exact prices (use only the coarse cost ranges in the schema). Match the cost range and implementation difficulty to the business's stated budget and size.`,
   },
   {
     key: "training",
