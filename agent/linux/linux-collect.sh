@@ -203,10 +203,33 @@ else
     "Consider enabling unattended security updates." "7"
 fi
 
+# ── installed software inventory (read-only) ──────────────────
+# Reads installed packages + versions from whichever package manager is present
+# (dpkg on Debian/Ubuntu, rpm on RHEL/Fedora/SUSE). Feeds ShieldAI CVE matching.
+# Read-only: only queries the package database, never installs or changes.
+SOFTWARE_JSON=""
+build_software() {
+  local raw="" line name ver first=1
+  if command -v dpkg-query >/dev/null 2>&1; then
+    raw="$(dpkg-query -W -f='${Package}\t${Version}\n' 2>/dev/null)"
+  elif command -v rpm >/dev/null 2>&1; then
+    raw="$(rpm -qa --qf '%{NAME}\t%{VERSION}\n' 2>/dev/null)"
+  fi
+  [ -z "$raw" ] && { SOFTWARE_JSON=""; return; }
+  # Cap to 200 entries to keep the payload reasonable.
+  while IFS=$'\t' read -r name ver; do
+    [ -z "$name" ] && continue
+    if [ $first -eq 1 ]; then first=0; else SOFTWARE_JSON+=","; fi
+    SOFTWARE_JSON+="{\"name\":$(json_escape "$name"),\"version\":$(json_escape "${ver:-}")}"
+  done <<< "$(printf '%s\n' "$raw" | head -n 200)"
+}
+build_software
+
 # ── inventory ─────────────────────────────────────────────────
 INV="{\"localAdmins\":[],\"installedSecurityTools\":[${SEC_TOOLS}],"
 INV+="\"diskEncryption\":$(json_escape "$ENC_OBSERVED"),\"pendingPatches\":${PEND:-0},"
-INV+="\"firewall\":$(json_escape "$FW_OBSERVED")}"
+INV+="\"firewall\":$(json_escape "$FW_OBSERVED"),"
+INV+="\"software\":[${SOFTWARE_JSON}]}"
 
 # ── assemble report ───────────────────────────────────────────
 REPORT="{\"agentVersion\":$(json_escape "$AGENT_VERSION"),\"schema\":1,"

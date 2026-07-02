@@ -74,7 +74,8 @@ $hostInfo = [ordered]@{
 
 $inventory = [ordered]@{
   localAdmins = @(); installedSecurityTools = @();
-  diskEncryption = "unknown"; pendingPatches = 0; firewall = "unknown"
+  diskEncryption = "unknown"; pendingPatches = 0; firewall = "unknown";
+  software = @()
 }
 
 # ── 1. Microsoft Defender / registered AV ─────────────────────
@@ -227,6 +228,45 @@ Try-Run {
     -Severity ($(if ($ok) {"info"} else {"low"})) `
     -Observed ($(if ($ok) {"Secured, <=15 min"} else {"Not enforced / too long"})) `
     -Detail "Screens should auto-lock after a short idle period and require a password." -CisControl "4"
+}
+
+# ── 7. Installed software inventory (read-only) ───────────────
+# Enumerates installed applications with versions from the registry uninstall
+# keys — the standard, fast, read-only method (avoids the slow Win32_Product
+# WMI query, which can trigger MSI reconfiguration). Covers 64-bit, 32-bit, and
+# per-user installs. This feeds ShieldAI's CVE matching (name + version -> NVD).
+Try-Run {
+  $paths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+  )
+  $seen = @{}
+  $sw = New-Object System.Collections.ArrayList
+  foreach ($p in $paths) {
+    Get-ItemProperty $p -ErrorAction SilentlyContinue | ForEach-Object {
+      $name = $_.DisplayName
+      $ver  = $_.DisplayVersion
+      # Skip entries with no name, system components, and updates/hotfixes.
+      if ([string]::IsNullOrWhiteSpace($name)) { return }
+      if ($_.SystemComponent -eq 1) { return }
+      if ($name -match "^(KB\d+|Security Update|Update for|Hotfix)") { return }
+      $key = "$name|$ver"
+      if ($seen.ContainsKey($key)) { return }
+      $seen[$key] = $true
+      [void]$sw.Add([ordered]@{
+        name    = "$name".Trim()
+        version = if ([string]::IsNullOrWhiteSpace($ver)) { "" } else { "$ver".Trim() }
+      })
+    }
+  }
+  # Cap the list to keep report payloads reasonable; most relevant for CVEs are
+  # the named third-party apps, which this comfortably covers.
+  $inventory.software = @($sw | Sort-Object { $_.name } | Select-Object -First 200)
+} {
+  # Non-fatal: if the scan fails, software stays an empty array (honest — no
+  # fabricated inventory), and CVE matching falls back to OS + assessment data.
+  $inventory.software = @()
 }
 
 # ── assemble report ───────────────────────────────────────────

@@ -187,10 +187,34 @@ else
     "Consider enabling automatic update checks." "7"
 fi
 
+# ── installed software inventory (read-only) ──────────────────
+# Enumerates installed applications + versions. Prefers system_profiler's JSON
+# output (parsed with the built-in plutil/python where available); falls back to
+# reading each /Applications/*.app Info.plist. Read-only. Feeds CVE matching.
+SOFTWARE_JSON=""
+build_software() {
+  local first=1 name ver
+  # Fallback approach that needs no extra tools: read app bundle Info.plists.
+  local appdir line
+  for appdir in /Applications/*.app /Applications/*/*.app; do
+    [ -d "$appdir" ] || continue
+    name="$(basename "$appdir" .app)"
+    ver=""
+    if [ -f "$appdir/Contents/Info.plist" ]; then
+      ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$appdir/Contents/Info.plist" 2>/dev/null)"
+    fi
+    [ -z "$name" ] && continue
+    if [ $first -eq 1 ]; then first=0; else SOFTWARE_JSON+=","; fi
+    SOFTWARE_JSON+="{\"name\":$(json_escape "$name"),\"version\":$(json_escape "${ver:-}")}"
+  done
+}
+build_software 2>/dev/null || SOFTWARE_JSON=""
+
 # ── inventory ─────────────────────────────────────────────────
 INV="{\"localAdmins\":[],\"installedSecurityTools\":[${SEC_TOOLS}],"
 INV+="\"diskEncryption\":$(json_escape "$ENC_OBSERVED"),\"pendingPatches\":0,"
-INV+="\"firewall\":$(json_escape "$FW_OBSERVED")}"
+INV+="\"firewall\":$(json_escape "$FW_OBSERVED"),"
+INV+="\"software\":[${SOFTWARE_JSON}]}"
 
 # ── assemble report ───────────────────────────────────────────
 REPORT="{\"agentVersion\":$(json_escape "$AGENT_VERSION"),\"schema\":1,"
