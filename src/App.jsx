@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext, Component } from "react";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -5259,10 +5259,21 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
 // Light-theme trend chart for the company console
 function TrendChartLight({ data, color }) {
   const w = 560, h = 130, pad = 8;
-  const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
+  const series = Array.isArray(data) ? data.filter(v => typeof v === "number") : [];
+  if (series.length < 2) {
+    return (
+      <div style={{height:h, display:"flex",alignItems:"center",justifyContent:"center",
+        color:C.textMut,fontSize:12,textAlign:"center",padding:"0 16px"}}>
+        {series.length === 1
+          ? "Only one reading so far — a trend line appears with two or more."
+          : "No history yet — the trend builds over time."}
+      </div>
+    );
+  }
+  const min = Math.min(...series) - 5, max = Math.max(...series) + 5;
   const range = max - min || 1;
-  const pts = data.map((v,i)=>{
-    const x = pad + (i/(data.length-1))*(w-pad*2);
+  const pts = series.map((v,i)=>{
+    const x = pad + (i/(series.length-1))*(w-pad*2);
     const y = h - pad - ((v-min)/range)*(h-pad*2);
     return [x,y];
   });
@@ -5897,10 +5908,22 @@ function agentMeta(status) {
 // ── Small SVG sparkline / trend chart ──
 function TrendChart({ data, color, height = 120 }) {
   const w = 520, h = height, pad = 8;
-  const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
+  const series = Array.isArray(data) ? data.filter(v => typeof v === "number") : [];
+  // Need at least 2 points to draw a trend line; otherwise show a friendly note.
+  if (series.length < 2) {
+    return (
+      <div style={{height, display:"flex",alignItems:"center",justifyContent:"center",
+        color:SOC.textMut,fontSize:12,textAlign:"center",padding:"0 16px"}}>
+        {series.length === 1
+          ? "Only one posture reading so far — the trend line appears once there are at least two."
+          : "No posture history yet. A trend builds as programs are re-scored over time."}
+      </div>
+    );
+  }
+  const min = Math.min(...series) - 5, max = Math.max(...series) + 5;
   const range = max - min || 1;
-  const pts = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+  const pts = series.map((v, i) => {
+    const x = pad + (i / (series.length - 1)) * (w - pad * 2);
     const y = h - pad - ((v - min) / range) * (h - pad * 2);
     return [x, y];
   });
@@ -5924,7 +5947,7 @@ function TrendChart({ data, color, height = 120 }) {
         <circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?4:0} fill={color}/>
       ))}
       {months.map((m,i)=>(
-        i % 2 === 0 ? <text key={i} x={pad+(i/(data.length-1))*(w-pad*2)} y={h+14} fill={SOC.textMut} fontSize="9" textAnchor="middle">{m}</text> : null
+        i % 2 === 0 ? <text key={i} x={pad+(i/(series.length-1))*(w-pad*2)} y={h+14} fill={SOC.textMut} fontSize="9" textAnchor="middle">{m}</text> : null
       ))}
     </svg>
   );
@@ -6153,6 +6176,45 @@ function mastermindReply(quickId, client) {
   }
 }
 
+
+// ── Error boundary — turns a render crash into a readable message instead
+// of a blank white screen, and surfaces the error so it can be diagnosed. ──
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Console render error:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{minHeight:"100vh",background:"#0A0E1A",color:"#E2EDFF",
+          fontFamily:"Inter,system-ui,sans-serif",padding:"40px",boxSizing:"border-box"}}>
+          <div style={{maxWidth:720,margin:"40px auto",background:"#0F1626",
+            border:"1px solid #2A1A1A",borderRadius:12,padding:"24px"}}>
+            <div style={{fontSize:18,fontWeight:800,color:"#FF6B6B",marginBottom:8}}>Something went wrong rendering this view</div>
+            <div style={{fontSize:13,color:"#9FB0C9",lineHeight:1.6,marginBottom:16}}>
+              The console hit an unexpected error. Your data is safe. You can go back and try again.
+            </div>
+            <pre style={{whiteSpace:"pre-wrap",fontSize:11,color:"#C0704F",background:"#0A0E1A",
+              padding:"12px",borderRadius:8,overflowX:"auto",margin:"0 0 16px"}}>
+              {String(this.state.error?.message || this.state.error)}
+            </pre>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>this.setState({error:null})}
+                style={{padding:"9px 18px",background:"#00E0C6",color:"#0A0E1A",border:"none",
+                  borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>Try again</button>
+              {this.props.onExit && (
+                <button onClick={this.props.onExit}
+                  style={{padding:"9px 18px",background:"transparent",color:"#9FB0C9",
+                    border:"1px solid #1A2D47",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>Exit console</button>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
@@ -9331,7 +9393,7 @@ export default function ShieldAI() {
 
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
-    return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
+    return <ErrorBoundary onExit={() => setShowAnalyst(false)}><AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/></ErrorBoundary>;
   }
 
   // Top bar showing the logged-in company + sign out

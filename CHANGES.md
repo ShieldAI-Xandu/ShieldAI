@@ -276,3 +276,95 @@ and clients are NOTIFIED (with that note) via an in-app notification bell.
 ## To apply
 Redeploy db.js, portfolioRoutes.js, server.js, and src/App.jsx. The
 notifications collection auto-creates on first boot; no migration needed.
+
+---
+
+# Fix — Analyst 403 ("analyst access required") + Repair Demo button
+
+## The bug
+The analyst console loaded but the portfolio failed with 403. Cause: the
+account analyst@shieldai.com did not have isAnalyst=true in the live DB, so
+/api/analyst/portfolio correctly rejected it. Also, the frontend's hardcoded
+ANALYST_EMAIL was analyst@xandultd.com — never matched the demo analyst.
+
+## Fixes
+- **src/App.jsx** — ANALYST_EMAIL corrected to analyst@shieldai.com.
+- **seedDemo.js** — ensureDemoAnalyst() now ALWAYS enforces the analyst role on
+  an existing account (and repairs a missing password), not just on creation.
+- **server.js** — new admin endpoint POST /api/admin/repair-demo that runs
+  ensureDemoAnalyst on demand (no redeploy needed).
+- **src/App.jsx** — new "Repair Demo" button in the Admin panel maintenance area
+  that calls it and reports how many clients were assigned.
+
+## Immediate unblock (no deploy)
+Log in as admin (dbrooks@xandultd.com) → Admin panel → find analyst@shieldai.com
+→ click "Make Analyst". Portfolio loads immediately.
+
+## After deploying these files
+Either the boot seed self-heals the analyst flag (if SEED_ON_BOOT=true), or you
+can click the new "Repair Demo" button in the Admin panel any time.
+
+## Files to upload to GitHub (this session, complete set)
+- portfolioRoutes.js  (root, NEW)
+- server.js           (root)
+- db.js               (root)
+- seedDemo.js         (root)
+- src/App.jsx
+
+All verified: node --check clean, eslint clean, vite build succeeds.
+
+---
+
+# Fix — Portfolio 401/403 root cause: requireAnalyst didn't call requireAuth
+
+## The actual bug
+/api/analyst/portfolio returned 401 "Not authenticated" even for a valid
+analyst — while /api/analyst/clients worked with the same token. Root cause:
+portfolioRoutes.js's requireAnalyst checked `req.userId` but nothing populated
+it. In this app, req.userId is set INSIDE requireAuth, not by global middleware.
+The other analyst routes (assignmentRoutes, agentRoutes) wrap requireAuth inside
+their gate; the portfolio gate did not, so req.userId was always empty → 401.
+
+This is why the analyst flag being correctly set (✓ Analyst in admin) still
+didn't help — the request never got past the auth check to reach the flag check.
+
+## Fix (portfolioRoutes.js)
+requireAnalyst now wraps requireAuth (exactly like the working gates):
+    requireAuth(req, res, () => { ...check isAnalyst/isAdmin...; next(); });
+This applies to ALL analyst endpoints in the file (portfolio, posture-history,
+alerts, review-queue, programs/policies/assessments, review-decision).
+
+## Verified
+- Runtime test with a real requireAuth simulation: analyst→200, client→403,
+  no-token→401, and the analyst sees their assigned client.
+- eslint clean, vite build succeeds.
+
+## To deploy
+Re-upload portfolioRoutes.js (this one file). This is the fix that makes the
+analyst console load. server.js already passes requireAuth into the registration.
+
+---
+
+# Fix — White screen when opening a client (TrendChart crash on empty history)
+
+## Root cause
+"Cannot read properties of undefined (reading '0')" when clicking a client.
+TrendChart (and TrendChartLight) built an SVG area path with pts[0][0] and
+pts[pts.length-1][0]. For real clients the posture history is empty or a single
+point (a 12-month trend only accrues as programs are re-scored), so pts was
+empty and pts[0] was undefined → crash → white screen.
+
+## Fix (src/App.jsx)
+- TrendChart and TrendChartLight now filter to numeric points and, when there
+  are fewer than 2, render a friendly "no trend yet" note instead of computing
+  a path. All internal references use the cleaned series length.
+- Added an ErrorBoundary around the Analyst Console: any future render error
+  now shows a readable, recoverable message (with the error text and a Try
+  Again button) instead of a blank white screen.
+
+## Verified
+- vite build succeeds. The empty/single-point history path no longer executes
+  any [0] access.
+
+## To deploy
+Re-upload src/App.jsx. Single-file fix.
