@@ -448,9 +448,17 @@ export async function ensureDemoAnalyst() {
     };
     db.data.users.push(analyst);
     console.log(`   Created demo analyst: ${DEMO_ANALYST_EMAIL} / ${DEMO_ANALYST_PASSWORD}`);
-  } else if (!analyst.isAnalyst) {
-    analyst.isAnalyst = true;
-    console.log(`   Promoted ${DEMO_ANALYST_EMAIL} to analyst.`);
+  } else {
+    // Always enforce the analyst role + repair a missing password, so an
+    // account created by an earlier partial run can't get stuck without access.
+    if (!analyst.isAnalyst) {
+      analyst.isAnalyst = true;
+      console.log(`   Promoted ${DEMO_ANALYST_EMAIL} to analyst.`);
+    }
+    if (!analyst.passwordHash) {
+      analyst.passwordHash = await bcrypt.hash(DEMO_ANALYST_PASSWORD, 10);
+      console.log(`   Reset demo analyst password.`);
+    }
   }
 
   // Assign each demo client to the analyst (if not already assigned).

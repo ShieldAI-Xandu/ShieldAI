@@ -3945,6 +3945,24 @@ function AdminPanel({ onClose }) {
     }
   }
 
+  async function repairDemo() {
+    setBusy("repair-demo");
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/repair-demo`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Repair failed.");
+      const r = data.result || {};
+      setNotice(r.ok
+        ? `Demo repaired: analyst ready, ${(r.clientIds||[]).length} client(s) assigned.`
+        : `Repair ran, but: ${r.reason || "no demo clients found"}.`);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function openUser(id) {
     setDetailLoading(true);
     setError(null);
@@ -4480,6 +4498,23 @@ function AdminPanel({ onClose }) {
             </button>
           </div>
         )}
+
+        {/* Demo maintenance — ensure the demo analyst + client assignments exist */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,
+          padding:"12px 16px",marginBottom:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10}}>
+          <div>
+            <div style={{color:C.text,fontSize:13,fontWeight:700}}>Repair Demo Accounts</div>
+            <div style={{color:C.textSec,fontSize:12,marginTop:2}}>
+              Ensures analyst@shieldai.com has the analyst role and is assigned every demo client.
+            </div>
+          </div>
+          <button onClick={repairDemo} disabled={busy==="repair-demo"}
+            style={{padding:"9px 18px",background:busy==="repair-demo"?C.border:C.accent,
+              color:busy==="repair-demo"?C.textMut:C.bg,border:"none",borderRadius:8,
+              fontSize:13,fontWeight:700,cursor:busy==="repair-demo"?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+            {busy==="repair-demo" ? "Repairing…" : "Repair Demo"}
+          </button>
+        </div>
 
         {banners}
 
@@ -5821,7 +5856,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
 //  with believable sample data.
 // ─────────────────────────────────────────────────────────────
 
-const ANALYST_EMAIL = "analyst@xandultd.com";
+const ANALYST_EMAIL = "analyst@shieldai.com";
 
 // SOC palette (dark, data-dense)
 const SOC = {

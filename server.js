@@ -1256,6 +1256,19 @@ app.post("/api/admin/clear-stuck", requireAdmin, async (req, res) => {
   res.json({ ok: true, cleared: stuckIds.length, ids: stuckIds });
 });
 
+// Admin: repair the demo analyst account + its client assignments on demand,
+// without waiting for a redeploy/boot cycle. Ensures analyst@shieldai.com has
+// the analyst role and is assigned every demo client.
+app.post("/api/admin/repair-demo", requireAdmin, async (req, res) => {
+  try {
+    const { ensureDemoAnalyst } = await import("./seedDemo.js");
+    const result = await ensureDemoAnalyst();
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Admin: fetch any program's full content (bypasses user scoping)
 app.get("/api/admin/programs/:id", requireAdmin, (req, res) => {
   const program = (db.data.programs || []).find(p => p.id === req.params.id);
