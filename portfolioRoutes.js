@@ -25,6 +25,37 @@ import { logClientAction } from "./assignmentRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 
+// ── notifications ────────────────────────────────────────────
+// Lightweight per-user notification. Bounded to keep the JSON db small.
+export function pushNotification(db, { userId, type, title, body, link, actorRole }) {
+  if (!userId) return;
+  db.data.notifications ||= [];
+  db.data.notifications.push({
+    id: (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`),
+    userId,
+    type: type || "info",
+    title: (title || "").slice(0, 200),
+    body: (body || "").slice(0, 1000),
+    link: link || null,
+    actorRole: actorRole || "system",
+    read: false,
+    createdAt: nowIso(),
+  });
+  // Keep the most recent 200 per user (and overall bounded).
+  const mine = db.data.notifications.filter(n => n.userId === userId);
+  if (mine.length > 200) {
+    const excessIds = new Set(
+      mine.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+        .slice(0, mine.length - 200)
+        .map(n => n.id)
+    );
+    db.data.notifications = db.data.notifications.filter(n => !excessIds.has(n.id));
+  }
+  if (db.data.notifications.length > 10000) {
+    db.data.notifications = db.data.notifications.slice(-10000);
+  }
+}
+
 // ── posture snapshots ────────────────────────────────────────
 // A snapshot is a single { userId, score, level, at } point. We keep the
 // history bounded per user and only add a point when the score meaningfully
@@ -53,7 +84,7 @@ export function recordPostureSnapshot(db, userId, score, level) {
 
 export function registerPortfolioRoutes(
   app,
-  { db, analystClientIds, analystOwnsClient }
+  { db, requireAuth, analystClientIds, analystOwnsClient }
 ) {
   db.data.postureSnapshots ||= [];
 
@@ -489,8 +520,61 @@ export function registerPortfolioRoutes(
       detail: `${label} ${decision === "approve" ? "approved" : "sent back for changes"}${note ? `: ${note}` : "."}`,
     });
 
+    // Notify the client so they see the outcome in their notification bell.
+    if (decision === "approve") {
+      pushNotification(db, {
+        userId: clientId,
+        type: "review_approved",
+        title: `${label} approved`,
+        body: note
+          ? `Your ${label.toLowerCase()} was approved by your security analyst. Note: ${note}`
+          : `Your ${label.toLowerCase()} was reviewed and approved by your security analyst.`,
+        actorRole: "analyst",
+      });
+    } else {
+      pushNotification(db, {
+        userId: clientId,
+        type: "review_changes_requested",
+        title: `Changes requested on your ${label.toLowerCase()}`,
+        body: note
+          ? `Your security analyst requested changes: ${note}`
+          : `Your security analyst requested changes to your ${label.toLowerCase()}.`,
+        actorRole: "analyst",
+      });
+    }
+
     await db.write();
     res.json({ ok: true, kind, id, status: newStatus });
+  });
+
+  // ── Client notifications (the recipient's own login) ──
+  // Any authenticated user can read + manage THEIR OWN notifications.
+  app.get("/api/notifications", requireAuth, (req, res) => {
+    const mine = (db.data.notifications || [])
+      .filter(n => n.userId === req.userId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 50);
+    const unread = mine.filter(n => !n.read).length;
+    res.json({ unread, notifications: mine });
+  });
+
+  app.post("/api/notifications/:id/read", requireAuth, async (req, res) => {
+    const n = (db.data.notifications || []).find(
+      x => x.id === req.params.id && x.userId === req.userId
+    );
+    if (!n) return res.status(404).json({ error: "Notification not found." });
+    n.read = true;
+    await db.write();
+    res.json({ ok: true });
+  });
+
+  app.post("/api/notifications/read-all", requireAuth, async (req, res) => {
+    let count = 0;
+    for (const n of db.data.notifications || []) {
+      if (n.userId === req.userId && !n.read) { n.read = true; count++; }
+    }
+    await db.write();
+    res.json({ ok: true, marked: count });
   });
 
   console.log("ShieldAI portfolio routes registered.");

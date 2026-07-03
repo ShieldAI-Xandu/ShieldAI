@@ -5252,6 +5252,89 @@ function TrendChartLight({ data, color }) {
   );
 }
 
+// ── Notification bell (client-facing) ──
+// Shows unread count + a dropdown of recent notifications. Polls lightly so a
+// client sees analyst decisions without a manual refresh.
+function NotificationBell() {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [unread, setUnread] = useState(0);
+
+  async function load() {
+    try {
+      const res = await authFetch(`${API_BASE}/api/notifications`);
+      if (res.ok) {
+        const data = await res.json();
+        setItems(data.notifications || []);
+        setUnread(data.unread || 0);
+      }
+    } catch { /* ignore */ }
+  }
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000); // light poll every 60s
+    return () => clearInterval(t);
+  }, []);
+
+  async function markAllRead() {
+    try {
+      await authFetch(`${API_BASE}/api/notifications/read-all`, { method: "POST" });
+      setUnread(0);
+      setItems(items.map(n => ({ ...n, read: true })));
+    } catch { /* ignore */ }
+  }
+
+  async function openAndMark() {
+    const next = !open;
+    setOpen(next);
+    if (next && unread > 0) await markAllRead();
+  }
+
+  return (
+    <div style={{position:"relative"}}>
+      <button onClick={openAndMark}
+        style={{position:"relative",width:42,height:42,borderRadius:10,background:C.surface,
+          border:`1px solid ${C.border}`,color:C.text,fontSize:18,cursor:"pointer",
+          display:"flex",alignItems:"center",justifyContent:"center"}}>
+        🔔
+        {unread > 0 && (
+          <span style={{position:"absolute",top:-4,right:-4,minWidth:18,height:18,padding:"0 4px",
+            borderRadius:9,background:C.red,color:"#fff",fontSize:10,fontWeight:700,
+            display:"flex",alignItems:"center",justifyContent:"center"}}>{unread}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{position:"absolute",top:48,right:0,width:340,maxHeight:420,overflowY:"auto",
+          background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,zIndex:100,
+          boxShadow:"0 10px 40px rgba(0,0,0,0.4)"}}>
+          <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,
+            display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{fontWeight:700,fontSize:13,color:C.text}}>Notifications</span>
+            <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:C.textSec,cursor:"pointer",fontSize:14}}>✕</button>
+          </div>
+          {items.length === 0 ? (
+            <div style={{padding:"28px 14px",textAlign:"center",color:C.textSec,fontSize:12}}>
+              No notifications yet.
+            </div>
+          ) : (
+            items.map(n => (
+              <div key={n.id} style={{padding:"11px 14px",borderBottom:`1px solid ${C.border}`,
+                background: n.read ? "transparent" : `${C.accent}0C`}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                  <span style={{fontSize:13}}>{n.type==="review_approved"?"✅":n.type==="review_changes_requested"?"✏️":"🔔"}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:C.text}}>{n.title}</span>
+                </div>
+                <div style={{fontSize:11,color:C.textSec,lineHeight:1.5}}>{n.body}</div>
+                <div style={{fontSize:9,color:C.textMut,marginTop:4}}>{new Date(n.createdAt).toLocaleString()}</div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, onOpenConsole }) {
   const [assessments, setAssessments] = useState([]);
   const [programsByAssessment, setProgramsByAssessment] = useState({});
@@ -5328,6 +5411,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
               cursor:"pointer",whiteSpace:"nowrap",boxShadow:`0 0 30px ${C.accent}33`}}>
             + New Assessment
           </button>
+          <NotificationBell/>
         </div>
 
         {error && (
@@ -6188,15 +6272,19 @@ function AnalystConsole({ user, onExit }) {
 
   // Analyst approves or requests changes on a review-queue item, then refreshes.
   const [reviewBusy, setReviewBusy] = useState(null); // item id being acted on
-  async function submitReviewDecision(clientId, item, decision) {
+  const [notePromptFor, setNotePromptFor] = useState(null); // item id showing note input
+  const [reviewNote, setReviewNote] = useState("");
+  async function submitReviewDecision(clientId, item, decision, note) {
     setReviewBusy(item.id);
     try {
       const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-decision`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: item.kind, id: item.id, decision }),
+        body: JSON.stringify({ kind: item.kind, id: item.id, decision, note: note || "" }),
       });
       if (res.ok) {
+        setNotePromptFor(null);
+        setReviewNote("");
         // Force a fresh reload of this client's detail so the queue + programs/
         // policies reflect the new status.
         setClientDetail(d => { const n = { ...d }; delete n[clientId]; return n; });
@@ -6826,28 +6914,50 @@ function AnalystConsole({ user, onExit }) {
                   {c.reviewQueue.map((item,i)=>{
                     const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, changes_requested:{label:"Changes Requested",color:SOC.red}, draft:{label:"Draft",color:SOC.textMut} }[item.status] || {label:item.status,color:SOC.textMut};
                     const busy = reviewBusy === item.id;
+                    const promptingNote = notePromptFor === item.id;
                     return (
-                      <div key={item.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
-                        <span style={{fontSize:15}}>📄</span>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
-                          <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated ? new Date(item.generated).toLocaleDateString() : ""}</div>
-                        </div>
-                        {item.status==="awaiting_review" ? (
-                          <div style={{display:"flex",gap:6}}>
-                            <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"request_changes")}
-                              style={{padding:"5px 10px",background:`${SOC.red}14`,border:`1px solid ${SOC.red}44`,
-                                borderRadius:6,color:SOC.red,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
-                              {busy?"…":"Request Changes"}
-                            </button>
-                            <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"approve")}
-                              style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
-                                borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
-                              {busy?"…":"Approve"}
-                            </button>
+                      <div key={item.id||i} style={{background:SOC.bg,borderRadius:8,padding:"9px 11px"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:10}}>
+                          <span style={{fontSize:15}}>📄</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
+                            <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated ? new Date(item.generated).toLocaleDateString() : ""}</div>
                           </div>
-                        ) : (
-                          <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
+                          {item.status==="awaiting_review" ? (
+                            <div style={{display:"flex",gap:6}}>
+                              <button disabled={busy} onClick={()=>{ setNotePromptFor(promptingNote?null:item.id); setReviewNote(""); }}
+                                style={{padding:"5px 10px",background:promptingNote?`${SOC.red}28`:`${SOC.red}14`,border:`1px solid ${SOC.red}44`,
+                                  borderRadius:6,color:SOC.red,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
+                                Request Changes
+                              </button>
+                              <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"approve")}
+                                style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
+                                  borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
+                                {busy?"…":"Approve"}
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
+                          )}
+                        </div>
+                        {promptingNote && (
+                          <div style={{marginTop:9,display:"flex",flexDirection:"column",gap:8}}>
+                            <textarea value={reviewNote} onChange={e=>setReviewNote(e.target.value)}
+                              placeholder="What needs to change? (the client will see this)"
+                              rows={2}
+                              style={{width:"100%",padding:"8px 10px",background:SOC.panel,border:`1px solid ${SOC.border}`,
+                                borderRadius:6,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif",resize:"vertical"}}/>
+                            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                              <button onClick={()=>{ setNotePromptFor(null); setReviewNote(""); }}
+                                style={{padding:"5px 12px",background:"transparent",border:`1px solid ${SOC.border}`,
+                                  borderRadius:6,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>Cancel</button>
+                              <button disabled={busy || !reviewNote.trim()} onClick={()=>submitReviewDecision(c.id,item,"request_changes",reviewNote.trim())}
+                                style={{padding:"5px 14px",background:reviewNote.trim()?SOC.red:`${SOC.red}44`,border:"none",
+                                  borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:reviewNote.trim()&&!busy?"pointer":"default",opacity:busy?0.6:1}}>
+                                {busy?"Sending…":"Send to Client"}
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     );

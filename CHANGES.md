@@ -233,3 +233,46 @@ overwritten; approval is tracked in a parallel reviewStatus field.
   status preserved), request-changes on policy (note captured), audit log gets
   both entries, queue reflects new statuses, and access control returns
   403/400/404 for unassigned/bad-decision/missing cases.
+
+---
+
+# Update — Request-changes note prompt + client notifications
+
+## What changed
+Two connected pieces: analysts can now attach a NOTE when requesting changes,
+and clients are NOTIFIED (with that note) via an in-app notification bell.
+
+## Backend
+- **db.js** — new `notifications` collection (self-initializing).
+- **portfolioRoutes.js**
+  - `pushNotification(db, {...})` helper (bounded to 200/user, 10k total).
+  - review-decision now creates a client notification on approve AND on
+    request-changes, embedding the analyst's note.
+  - New client endpoints (own login, requireAuth):
+    - GET  /api/notifications          → { unread, notifications[] } (latest 50)
+    - POST /api/notifications/:id/read → mark one read
+    - POST /api/notifications/read-all → mark all read
+- **server.js** — passes `requireAuth` into registerPortfolioRoutes.
+
+## Frontend (src/App.jsx)
+- **Request Changes** now opens an inline note textarea in the review queue;
+  "Send to Client" is disabled until a note is entered. The note is delivered
+  to the client verbatim.
+- **NotificationBell** component on the client HomeScreen: unread badge, dropdown
+  of recent notifications, marks all read on open, light 60s poll. Approvals show
+  ✅, change-requests show ✏️.
+
+## Privacy / access
+- Notifications are strictly per-recipient: a user only ever reads their own
+  (verified — the analyst does not see the client's notifications).
+- Unauthenticated → 401.
+
+## Verified
+- Backend syntax + eslint clean; frontend vite build succeeds.
+- Full flow smoke test: request-changes-with-note creates a client notification
+  carrying the note; approve creates one too; unread count tracks correctly;
+  read-all clears it; recipient scoping and 401 both hold.
+
+## To apply
+Redeploy db.js, portfolioRoutes.js, server.js, and src/App.jsx. The
+notifications collection auto-creates on first boot; no migration needed.

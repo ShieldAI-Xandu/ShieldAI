@@ -30,6 +30,7 @@ const defaultData = {
   adminAudit: [],    // { id, actorUserId, actorEmail, action, targetUserId, detail, at }
   assignments: [],   // { id, analystUserId, clientUserId, assignedBy, assignedAt }
   clientActions: [], // { id, clientUserId, actorUserId, actorRole, action, detail, recommendationId, at }
+  notifications: [], // { id, userId, type, title, body, link, read, createdAt, actorRole }
 };
 
 const adapter = new JSONFile(file);
@@ -54,6 +55,7 @@ db.data.transactions ||= [];
 db.data.adminAudit ||= [];
 db.data.assignments ||= [];
 db.data.clientActions ||= [];
+db.data.notifications ||= [];
 await db.write();
 
 export default db;

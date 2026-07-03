@@ -1289,7 +1289,7 @@ registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
-registerPortfolioRoutes(app, { db, analystClientIds, analystOwnsClient });
+registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
 //  SERVE THE BUILT FRONTEND (production)
