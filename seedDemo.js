@@ -23,9 +23,14 @@ import { computePostureScore } from "./riskEngine.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 
-const DEMO_EMAIL = "demo@shieldai.com";
-const DEMO_PASSWORD = "ShieldDemo2026";
-const DEMO_COMPANY = "ShieldAI Demo Workspace";
+// Legacy single-account demo (pre-split). Kept only to clean up old data.
+const LEGACY_DEMO_EMAIL = "demo@shieldai.com";
+
+// Demo ANALYST account — signs into the analyst console and is assigned the
+// demo clients so the portfolio is populated out of the box.
+const DEMO_ANALYST_EMAIL = "analyst@shieldai.com";
+const DEMO_ANALYST_PASSWORD = "ShieldAnalyst2026";
+const DEMO_ANALYST_NAME = "Demo Analyst";
 
 // ── Claude helpers (self-contained so the script doesn't depend on server.js) ──
 async function callClaudeText({ system, messages, max_tokens }) {
@@ -64,6 +69,7 @@ function extractJson(text) {
 // ── The 3 showcase companies (varied industries & security maturity) ──
 const COMPANIES = [
   {
+    account: { email: "meridian@shieldai.com", password: "ShieldDemo2026" },
     company: { name: "Meridian Dental Group", industry: "Healthcare", employees: "45" },
     compliance: ["HIPAA"],
     summary: "A multi-location dental practice handling patient health records (PHI) and payment data. Growing fast, modest IT maturity.",
@@ -86,6 +92,7 @@ const COMPANIES = [
     policies: ["incident-response", "data-classification"],
   },
   {
+    account: { email: "lakeside@shieldai.com", password: "ShieldDemo2026" },
     company: { name: "Lakeside Financial Advisors", industry: "Financial Services", employees: "28" },
     compliance: ["SEC", "SOC 2"],
     summary: "A boutique wealth-management firm handling client PII and financial data. Security-conscious, well-resourced for its size.",
@@ -108,6 +115,7 @@ const COMPANIES = [
     policies: ["access-control", "vendor-risk"],
   },
   {
+    account: { email: "apex@shieldai.com", password: "ShieldDemo2026" },
     company: { name: "Apex Manufacturing", industry: "Manufacturing", employees: "120" },
     compliance: ["CMMC"],
     summary: "A mid-size manufacturer pursuing defense contracts (CMMC required). Operational focus, security maturity lagging behind growth.",
@@ -324,53 +332,150 @@ async function generatePolicy(userId, policyId, companyData) {
 export async function demoExists() {
   await db.read();
   db.data.users ||= [];
-  return !!db.data.users.find(u => u.email === DEMO_EMAIL);
+  // "Exists" now means all per-company client accounts are present.
+  return COMPANIES.every(co => db.data.users.some(u => u.email === co.account.email));
 }
 
 export async function seedDemo({ force = false } = {}) {
   await db.read();
   db.data.users ||= []; db.data.assessments ||= []; db.data.programs ||= []; db.data.policyDocs ||= [];
+  db.data.assignments ||= [];
 
-  // Find or create the demo user
-  let user = db.data.users.find(u => u.email === DEMO_EMAIL);
-  if (user && !force) {
-    console.log(`Demo account ${DEMO_EMAIL} already exists — skipping seed.`);
-    return { seeded: false, reason: "exists" };
+  // Legacy cleanup: earlier versions seeded all 3 companies under a single
+  // demo@shieldai.com account. If that combined account exists, remove it and
+  // its data so we don't show a stale merged client alongside the new split
+  // accounts. (The per-company accounts below are the new source of truth.)
+  const legacy = db.data.users.find(u => u.email === LEGACY_DEMO_EMAIL);
+  if (legacy) {
+    console.log("Removing legacy combined demo account (demo@shieldai.com)…");
+    db.data.assessments = db.data.assessments.filter(a => a.userId !== legacy.id);
+    db.data.programs = db.data.programs.filter(p => p.userId !== legacy.id);
+    db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== legacy.id);
+    db.data.assignments = db.data.assignments.filter(a => a.clientUserId !== legacy.id);
+    db.data.users = db.data.users.filter(u => u.id !== legacy.id);
   }
-  if (user) {
-    console.log("Removing previous demo data…");
-    db.data.assessments = db.data.assessments.filter(a => a.userId !== user.id);
-    db.data.programs = db.data.programs.filter(p => p.userId !== user.id);
-    db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== user.id);
-  } else {
-    user = {
-      id: randomUUID(), email: DEMO_EMAIL, companyName: DEMO_COMPANY,
-      passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
-      isAdmin: false, isAnalyst: false, createdAt: new Date().toISOString(),
-    };
-    db.data.users.push(user);
-    console.log(`Created demo account: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+
+  // If not forcing and all company accounts already exist, skip.
+  const allExist = COMPANIES.every(co => db.data.users.some(u => u.email === co.account.email));
+  if (allExist && !force) {
+    console.log("Demo company accounts already exist — skipping seed.");
+    await ensureDemoAnalyst();
+    return { seeded: false, reason: "exists" };
   }
 
   for (const co of COMPANIES) {
     console.log(`\n▶ ${co.company.name} (${co.company.industry})`);
-    const assessment = {
-      id: randomUUID(), userId: user.id, createdAt: new Date().toISOString(),
-      data: { company: co.company, compliance: co.compliance, summary: co.summary, checklist: co.checklist },
-    };
-    db.data.assessments.push(assessment);
 
-    await generateProgram(user.id, assessment.id, assessment.data);
-    for (const pid of (co.policies || [])) {
-      await generatePolicy(user.id, pid, assessment.data);
+    // Find or create this company's own client account.
+    let user = db.data.users.find(u => u.email === co.account.email);
+    if (user && force) {
+      // Re-seed: clear this client's prior data.
+      db.data.assessments = db.data.assessments.filter(a => a.userId !== user.id);
+      db.data.programs = db.data.programs.filter(p => p.userId !== user.id);
+      db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== user.id);
+    } else if (!user) {
+      user = {
+        id: randomUUID(),
+        email: co.account.email,
+        companyName: co.company.name,
+        passwordHash: await bcrypt.hash(co.account.password, 10),
+        isAdmin: false, isAnalyst: false,
+        createdAt: new Date().toISOString(),
+      };
+      db.data.users.push(user);
+      console.log(`   Created client account: ${co.account.email} / ${co.account.password}`);
+    } else {
+      // Exists and not forcing — leave its data, just ensure assignment below.
+      console.log(`   Client ${co.account.email} already exists — keeping data.`);
+    }
+
+    // Build the assessment + program + policies only if this client has none.
+    const hasProgram = (db.data.programs || []).some(p => p.userId === user.id);
+    if (!hasProgram || force) {
+      const assessment = {
+        id: randomUUID(), userId: user.id, createdAt: new Date().toISOString(),
+        data: { company: co.company, compliance: co.compliance, summary: co.summary, checklist: co.checklist },
+      };
+      db.data.assessments.push(assessment);
+
+      await generateProgram(user.id, assessment.id, assessment.data);
+      for (const pid of (co.policies || [])) {
+        await generatePolicy(user.id, pid, assessment.data);
+      }
     }
     await db.write(); // save progress after each company
   }
 
   await db.write();
-  console.log(`\n✅ Demo seed complete. Log in as ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
-  console.log(`   ${COMPANIES.length} companies, each with a full program + policies.`);
+  console.log(`\n✅ Demo seed complete — ${COMPANIES.length} separate client accounts.`);
+  COMPANIES.forEach(co => console.log(`   ${co.company.name}: ${co.account.email} / ${co.account.password}`));
+
+  // Ensure the demo analyst exists and is assigned ALL demo clients.
+  await ensureDemoAnalyst();
+
   return { seeded: true, companies: COMPANIES.length };
+}
+
+// ── Ensure a demo analyst exists and is assigned all demo clients ──
+// Idempotent and independent of the client seed, so existing deployments still
+// get a working analyst login and assignments. Safe to call on every boot.
+export async function ensureDemoAnalyst() {
+  await db.read();
+  db.data.users ||= [];
+  db.data.assignments ||= [];
+
+  // Collect the demo client accounts that actually exist.
+  const clients = COMPANIES
+    .map(co => db.data.users.find(u => u.email === co.account.email))
+    .filter(Boolean);
+
+  if (clients.length === 0) {
+    console.log("   ensureDemoAnalyst: no demo clients found yet — skipping.");
+    return { ok: false, reason: "no-clients" };
+  }
+
+  // Find or create the analyst account.
+  let analyst = db.data.users.find(u => u.email === DEMO_ANALYST_EMAIL);
+  if (!analyst) {
+    analyst = {
+      id: randomUUID(),
+      email: DEMO_ANALYST_EMAIL,
+      companyName: DEMO_ANALYST_NAME,
+      passwordHash: await bcrypt.hash(DEMO_ANALYST_PASSWORD, 10),
+      isAdmin: false,
+      isAnalyst: true,
+      createdAt: new Date().toISOString(),
+    };
+    db.data.users.push(analyst);
+    console.log(`   Created demo analyst: ${DEMO_ANALYST_EMAIL} / ${DEMO_ANALYST_PASSWORD}`);
+  } else if (!analyst.isAnalyst) {
+    analyst.isAnalyst = true;
+    console.log(`   Promoted ${DEMO_ANALYST_EMAIL} to analyst.`);
+  }
+
+  // Assign each demo client to the analyst (if not already assigned).
+  let added = 0;
+  for (const client of clients) {
+    const already = db.data.assignments.some(
+      a => a.analystUserId === analyst.id && a.clientUserId === client.id
+    );
+    if (!already) {
+      db.data.assignments.push({
+        id: randomUUID(),
+        analystUserId: analyst.id,
+        clientUserId: client.id,
+        assignedBy: "seed",
+        assignedAt: new Date().toISOString(),
+      });
+      added++;
+    }
+  }
+  if (added > 0) {
+    console.log(`   Assigned ${added} demo client(s) to analyst (${DEMO_ANALYST_EMAIL}).`);
+  }
+
+  await db.write();
+  return { ok: true, analystId: analyst.id, clientIds: clients.map(c => c.id) };
 }
 
 // Run directly from the CLI: `node seedDemo.js` (force re-seed).

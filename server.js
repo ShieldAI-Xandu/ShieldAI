@@ -1344,14 +1344,19 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   if (String(process.env.SEED_ON_BOOT).toLowerCase() === "true") {
     (async () => {
       try {
-        const { demoExists, seedDemo } = await import("./seedDemo.js");
+        const { demoExists, seedDemo, ensureDemoAnalyst } = await import("./seedDemo.js");
         if (await demoExists()) {
-          console.log("   SEED_ON_BOOT: demo data already present — skipping.");
+          console.log("   SEED_ON_BOOT: demo data already present — skipping company seed.");
+          // Still ensure the demo analyst account + client assignment exist, so
+          // existing deployments get a working analyst-console login without a
+          // full re-seed.
+          await ensureDemoAnalyst();
           return;
         }
         console.log("   SEED_ON_BOOT: no demo data found — seeding in background…");
         const r = await seedDemo({ force: false });
         console.log(`   SEED_ON_BOOT: ${r.seeded ? `seeded ${r.companies} companies.` : "skipped."}`);
+        // seedDemo already calls ensureDemoAnalyst on success.
       } catch (e) {
         console.error("   SEED_ON_BOOT failed (server still running):", e.message);
       }
