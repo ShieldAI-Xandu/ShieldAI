@@ -21,6 +21,8 @@
 // Access model mirrors the existing analyst routes: admins see all non-admin
 // clients; analysts see only clients assigned to them.
 
+import { logClientAction } from "./assignmentRoutes.js";
+
 const nowIso = () => new Date().toISOString();
 
 // ── posture snapshots ────────────────────────────────────────
@@ -289,42 +291,206 @@ export function registerPortfolioRoutes(
     }
     const queue = [];
 
-    // Programs whose status indicates they await analyst review/approval.
+    // Programs: a generated program (generation status "complete") is reviewable.
+    // The review decision lives in reviewStatus, separate from generation status.
     for (const p of db.data.programs || []) {
       if (p.userId !== clientId) continue;
-      const status = p.status || "complete";
-      if (["awaiting_review", "pending", "in_review", "draft"].includes(status)) {
-        queue.push({
-          id: p.id,
-          type: "Security Program",
-          label: p.sections?.riskOverview?.postureLevel
-            ? `Program — ${p.sections.riskOverview.postureLevel} posture`
-            : "Security Program",
-          status: "awaiting_review",
-          generatedAt: p.meta?.generatedAt || p.createdAt,
-          kind: "program",
-        });
-      }
+      const gen = p.status || "complete";
+      const reviewable = ["complete", "awaiting_review", "pending", "in_review", "draft"].includes(gen);
+      if (!reviewable) continue;
+      const reviewStatus = ["approved", "changes_requested"].includes(p.reviewStatus)
+        ? p.reviewStatus
+        : "awaiting_review";
+      queue.push({
+        id: p.id,
+        type: "Security Program",
+        label: p.sections?.riskOverview?.postureLevel
+          ? `Program — ${p.sections.riskOverview.postureLevel} posture`
+          : "Security Program",
+        status: reviewStatus,
+        generatedAt: p.meta?.generatedAt || p.createdAt,
+        kind: "program",
+      });
     }
 
-    // Policy documents not yet marked approved.
+    // Policy documents: reviewStatus drives the queue state.
     for (const pd of db.data.policyDocs || []) {
       if (pd.userId !== clientId) continue;
-      const status = pd.status || "draft";
-      if (status !== "approved") {
-        queue.push({
-          id: pd.id,
-          type: "Policy",
-          label: pd.policyName || "Policy document",
-          status: status === "draft" ? "awaiting_review" : status,
-          generatedAt: pd.createdAt,
-          kind: "policy",
-        });
-      }
+      const reviewStatus = ["approved", "changes_requested"].includes(pd.reviewStatus)
+        ? pd.reviewStatus
+        : "awaiting_review";
+      queue.push({
+        id: pd.id,
+        type: "Policy",
+        label: pd.policyName || "Policy document",
+        status: reviewStatus,
+        generatedAt: pd.createdAt,
+        kind: "policy",
+      });
     }
 
     queue.sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt));
     res.json({ clientId, queue });
+  });
+
+  // ── Phase 3c: client security work (programs / assessments / policies) ──
+  // These let an assigned analyst READ the same security artifacts the client
+  // admin sees — scoped by assignment, read-only. Shapes mirror the client
+  // endpoints in server.js so the frontend can reuse its existing renderers.
+
+  // List a client's programs (summary rows).
+  app.get("/api/analyst/clients/:id/programs", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const rows = (db.data.programs || [])
+      .filter(p => p.userId === clientId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(p => ({
+        id: p.id,
+        assessmentId: p.assessmentId,
+        createdAt: p.createdAt,
+        status: p.status,
+        reviewStatus: p.reviewStatus || null,
+        postureScore: p.sections?.riskOverview?.postureScore ?? null,
+        postureLevel: p.sections?.riskOverview?.postureLevel ?? null,
+      }));
+    res.json(rows);
+  });
+
+  // Full program detail (the whole sections payload the client admin sees).
+  app.get("/api/analyst/clients/:id/programs/:programId", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const program = (db.data.programs || []).find(
+      p => p.id === req.params.programId && p.userId === clientId
+    );
+    if (!program) return res.status(404).json({ error: "Program not found." });
+    res.json(program);
+  });
+
+  // List a client's assessments (summary rows).
+  app.get("/api/analyst/clients/:id/assessments", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const rows = (db.data.assessments || [])
+      .filter(a => a.userId === clientId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(a => ({
+        id: a.id,
+        createdAt: a.createdAt,
+        company: a.data?.company || null,
+        compliance: a.data?.compliance || [],
+      }));
+    res.json(rows);
+  });
+
+  // Full assessment detail.
+  app.get("/api/analyst/clients/:id/assessments/:assessmentId", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const a = (db.data.assessments || []).find(
+      x => x.id === req.params.assessmentId && x.userId === clientId
+    );
+    if (!a) return res.status(404).json({ error: "Assessment not found." });
+    res.json(a);
+  });
+
+  // List a client's policy documents (summary rows).
+  app.get("/api/analyst/clients/:id/policies", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const rows = (db.data.policyDocs || [])
+      .filter(p => p.userId === clientId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map(p => ({
+        id: p.id,
+        policyId: p.policyId,
+        policyName: p.policyName,
+        status: p.status || "draft",
+        reviewStatus: p.reviewStatus || null,
+        createdAt: p.createdAt,
+      }));
+    res.json(rows);
+  });
+
+  // Full policy document detail (includes content).
+  app.get("/api/analyst/clients/:id/policies/:policyDocId", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const doc = (db.data.policyDocs || []).find(
+      p => p.id === req.params.policyDocId && p.userId === clientId
+    );
+    if (!doc) return res.status(404).json({ error: "Policy document not found." });
+    res.json(doc);
+  });
+
+  // ── Phase 3d: analyst WRITE — approve / request changes on review items ──
+  // Sets a review status on a program or policy document and records an audit
+  // entry via logClientAction. Assignment-scoped; analysts act only on their
+  // own clients. This is the write action behind the review-queue buttons.
+  //
+  // POST body: { kind: "program"|"policy", id, decision: "approve"|"request_changes", note? }
+  app.post("/api/analyst/clients/:id/review-decision", requireAnalyst, async (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const { kind, id, decision, note } = req.body || {};
+    if (!["program", "policy"].includes(kind)) {
+      return res.status(400).json({ error: "kind must be 'program' or 'policy'." });
+    }
+    if (!id) return res.status(400).json({ error: "id is required." });
+    if (!["approve", "request_changes"].includes(decision)) {
+      return res.status(400).json({ error: "decision must be 'approve' or 'request_changes'." });
+    }
+
+    const newStatus = decision === "approve" ? "approved" : "changes_requested";
+
+    // Locate the target item, scoped to this client.
+    const item = kind === "program"
+      ? (db.data.programs || []).find(p => p.id === id && p.userId === clientId)
+      : (db.data.policyDocs || []).find(p => p.id === id && p.userId === clientId);
+    if (!item) return res.status(404).json({ error: `${kind} not found for this client.` });
+
+    // Apply the review decision. IMPORTANT: programs use a SEPARATE reviewStatus
+    // field so we never clobber the generation `status` ("complete"), which the
+    // client's own views depend on. Policies have no such conflict, but we use
+    // reviewStatus for them too for consistency.
+    item.reviewStatus = newStatus;
+    item.reviewedAt = nowIso();
+    item.reviewedBy = req.userId;
+    item.reviewHistory = item.reviewHistory || [];
+    item.reviewHistory.push({
+      at: nowIso(),
+      analystUserId: req.userId,
+      decision,
+      note: (note || "").slice(0, 1000),
+    });
+
+    // Accountable audit entry in the shared client action log.
+    const label = kind === "program" ? "Security program" : (item.policyName || "Policy");
+    logClientAction(db, {
+      clientUserId: clientId,
+      actorUserId: req.userId,
+      actorRole: "analyst",
+      action: decision === "approve" ? "review_approved" : "review_changes_requested",
+      detail: `${label} ${decision === "approve" ? "approved" : "sent back for changes"}${note ? `: ${note}` : "."}`,
+    });
+
+    await db.write();
+    res.json({ ok: true, kind, id, status: newStatus });
   });
 
   console.log("ShieldAI portfolio routes registered.");

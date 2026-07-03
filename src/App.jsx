@@ -6149,7 +6149,11 @@ function AnalystConsole({ user, onExit }) {
   const [portfolio, setPortfolio] = useState(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState(null);
-  const [clientDetail, setClientDetail] = useState({}); // { [clientId]: { history, alerts, reviewQueue, loaded } }
+  const [clientDetail, setClientDetail] = useState({}); // { [clientId]: { history, alerts, reviewQueue, programs, policies, loaded } }
+  const [programDetail, setProgramDetail] = useState({}); // { "clientId:programId": <full program> }
+  const [policyDetail, setPolicyDetail] = useState({});   // { "clientId:policyDocId": <full policy> }
+  const [openProgram, setOpenProgram] = useState(null);   // programId currently expanded
+  const [openPolicy, setOpenPolicy] = useState(null);     // policyDocId currently expanded
 
   async function loadPortfolio() {
     setPortfolioLoading(true); setPortfolioError(null);
@@ -6164,18 +6168,69 @@ function AnalystConsole({ user, onExit }) {
   async function loadClientDetail(clientId) {
     if (clientDetail[clientId]?.loaded) return;
     try {
-      const [hRes, aRes, rRes] = await Promise.all([
+      const [hRes, aRes, rRes, pgRes, polRes] = await Promise.all([
         authFetch(`${API_BASE}/api/analyst/clients/${clientId}/posture-history`),
         authFetch(`${API_BASE}/api/analyst/clients/${clientId}/alerts`),
         authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-queue`),
+        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/programs`),
+        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/policies`),
       ]);
       const history = hRes.ok ? (await hRes.json()).points || [] : [];
       const alerts = aRes.ok ? (await aRes.json()).alerts || [] : [];
       const reviewQueue = rRes.ok ? (await rRes.json()).queue || [] : [];
-      setClientDetail(d => ({ ...d, [clientId]: { history, alerts, reviewQueue, loaded: true } }));
+      const programs = pgRes.ok ? await pgRes.json() : [];
+      const policies = polRes.ok ? await polRes.json() : [];
+      setClientDetail(d => ({ ...d, [clientId]: { history, alerts, reviewQueue, programs, policies, loaded: true } }));
     } catch {
-      setClientDetail(d => ({ ...d, [clientId]: { history: [], alerts: [], reviewQueue: [], loaded: true } }));
+      setClientDetail(d => ({ ...d, [clientId]: { history: [], alerts: [], reviewQueue: [], programs: [], policies: [], loaded: true } }));
     }
+  }
+
+  // Analyst approves or requests changes on a review-queue item, then refreshes.
+  const [reviewBusy, setReviewBusy] = useState(null); // item id being acted on
+  async function submitReviewDecision(clientId, item, decision) {
+    setReviewBusy(item.id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: item.kind, id: item.id, decision }),
+      });
+      if (res.ok) {
+        // Force a fresh reload of this client's detail so the queue + programs/
+        // policies reflect the new status.
+        setClientDetail(d => { const n = { ...d }; delete n[clientId]; return n; });
+        await loadClientDetail(clientId);
+      }
+    } finally {
+      setReviewBusy(null);
+    }
+  }
+
+  // Fetch and cache a full program's detail on demand (for the expand view).
+  async function loadProgramDetail(clientId, programId) {
+    const key = `${clientId}:${programId}`;
+    if (programDetail[key]) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/programs/${programId}`);
+      if (res.ok) {
+        const full = await res.json();
+        setProgramDetail(d => ({ ...d, [key]: full }));
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Fetch and cache a full policy document on demand.
+  async function loadPolicyDetail(clientId, policyDocId) {
+    const key = `${clientId}:${policyDocId}`;
+    if (policyDetail[key]) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/policies/${policyDocId}`);
+      if (res.ok) {
+        const full = await res.json();
+        setPolicyDetail(d => ({ ...d, [key]: full }));
+      }
+    } catch { /* ignore */ }
   }
 
   // Map a live portfolio row + any loaded detail into the shape the console
@@ -6209,10 +6264,12 @@ function AnalystConsole({ user, onExit }) {
         title: a.title, time: a.time, detail: a.type || "",
       })),
       reviewQueue: (detail.reviewQueue || []).map(r => ({
-        type: r.label || r.type, status: r.status, generated: r.generatedAt,
+        id: r.id, kind: r.kind, type: r.label || r.type, status: r.status, generated: r.generatedAt,
       })),
       chat: [],                   // messaging is a later phase; empty for now
       training: null,             // training campaigns are a later phase
+      programs: detail.programs || [],
+      policies: detail.policies || [],
       mrr: 0,
     };
   }
@@ -6767,17 +6824,28 @@ function AnalystConsole({ user, onExit }) {
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {c.reviewQueue.map((item,i)=>{
-                    const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, draft:{label:"Draft",color:SOC.textMut} }[item.status];
+                    const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, changes_requested:{label:"Changes Requested",color:SOC.red}, draft:{label:"Draft",color:SOC.textMut} }[item.status] || {label:item.status,color:SOC.textMut};
+                    const busy = reviewBusy === item.id;
                     return (
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
+                      <div key={item.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
                         <span style={{fontSize:15}}>📄</span>
-                        <div style={{flex:1}}>
+                        <div style={{flex:1,minWidth:0}}>
                           <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
-                          <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated}</div>
+                          <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated ? new Date(item.generated).toLocaleDateString() : ""}</div>
                         </div>
                         {item.status==="awaiting_review" ? (
-                          <button style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
-                            borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:"pointer"}}>Approve</button>
+                          <div style={{display:"flex",gap:6}}>
+                            <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"request_changes")}
+                              style={{padding:"5px 10px",background:`${SOC.red}14`,border:`1px solid ${SOC.red}44`,
+                                borderRadius:6,color:SOC.red,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
+                              {busy?"…":"Request Changes"}
+                            </button>
+                            <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"approve")}
+                              style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
+                                borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
+                              {busy?"…":"Approve"}
+                            </button>
+                          </div>
                         ) : (
                           <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
                         )}
@@ -6786,6 +6854,164 @@ function AnalystConsole({ user, onExit }) {
                   })}
                 </div>
               )}
+            </SocPanel>
+          </div>
+
+          {/* Security Program & Deliverables — the real client work */}
+          <div style={{marginBottom:14}}>
+            <SocPanel title="Security Program & Deliverables" accent={SOC.cyan}>
+              {(() => {
+                const programs = c.programs || [];
+                const policies = c.policies || [];
+                const latest = programs[0];
+                const latestFull = latest ? programDetail[`${c.id}:${latest.id}`] : null;
+                const ro = latestFull?.sections?.riskOverview;
+                return (
+                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                    {/* Program summary + expand */}
+                    <div>
+                      <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,marginBottom:8}}>SECURITY PROGRAM</div>
+                      {programs.length === 0 ? (
+                        <div style={{color:SOC.textSec,fontSize:12,padding:"10px 0"}}>
+                          No program generated for this client yet.
+                        </div>
+                      ) : (
+                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                          {programs.map(pg => {
+                            const isOpen = openProgram === pg.id;
+                            const full = programDetail[`${c.id}:${pg.id}`];
+                            const fro = full?.sections?.riskOverview;
+                            return (
+                              <div key={pg.id} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:8,overflow:"hidden"}}>
+                                <div onClick={()=>{ const next = isOpen?null:pg.id; setOpenProgram(next); if(next) loadProgramDetail(c.id, pg.id); }}
+                                  style={{display:"flex",alignItems:"center",gap:10,padding:"11px 13px",cursor:"pointer"}}>
+                                  <span style={{fontSize:15}}>🛡️</span>
+                                  <div style={{flex:1}}>
+                                    <div style={{color:SOC.text,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
+                                      Security Program {pg.postureLevel ? `— ${pg.postureLevel}` : ""}
+                                      {pg.reviewStatus === "approved" && (
+                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.green}22`,color:SOC.green}}>APPROVED</span>
+                                      )}
+                                      {pg.reviewStatus === "changes_requested" && (
+                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.red}22`,color:SOC.red}}>CHANGES REQUESTED</span>
+                                      )}
+                                    </div>
+                                    <div style={{color:SOC.textMut,fontSize:9}}>
+                                      {pg.status||"complete"} · {new Date(pg.createdAt).toLocaleDateString()}
+                                    </div>
+                                  </div>
+                                  {pg.postureScore != null && (
+                                    <div style={{fontSize:18,fontWeight:800,color:pColor(pg.postureScore)}}>{pg.postureScore}</div>
+                                  )}
+                                  <span style={{color:SOC.textMut,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                                </div>
+                                {isOpen && (
+                                  <div style={{padding:"0 13px 13px",borderTop:`1px solid ${SOC.border}`}}>
+                                    {!full ? (
+                                      <div style={{color:SOC.textSec,fontSize:11,padding:"12px 0"}}>Loading program…</div>
+                                    ) : (
+                                      <div style={{display:"flex",flexDirection:"column",gap:12,paddingTop:12}}>
+                                        {fro?.executiveSummary && (
+                                          <div>
+                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:4}}>EXECUTIVE SUMMARY</div>
+                                            <div style={{fontSize:12,color:SOC.text,lineHeight:1.6}}>{fro.executiveSummary}</div>
+                                          </div>
+                                        )}
+                                        {Array.isArray(fro?.breakdown?.functions) && fro.breakdown.functions.length>0 && (
+                                          <div>
+                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:6}}>NIST FUNCTION SCORES</div>
+                                            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                                              {fro.breakdown.functions.map((f,i)=>(
+                                                <div key={i}>
+                                                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+                                                    <span style={{color:SOC.textSec}}>{f.name}</span>
+                                                    <span style={{color:pColor(f.score),fontWeight:700}}>{f.score}</span>
+                                                  </div>
+                                                  <div style={{height:4,background:SOC.grid,borderRadius:2,overflow:"hidden"}}>
+                                                    <div style={{width:`${f.score}%`,height:"100%",background:pColor(f.score)}}/>
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {Array.isArray(fro?.topThreats) && fro.topThreats.length>0 && (
+                                          <div>
+                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:6}}>TOP THREATS</div>
+                                            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                                              {fro.topThreats.map((t,i)=>(
+                                                <div key={i} style={{padding:"8px 10px",background:SOC.panelHi,borderRadius:6}}>
+                                                  <div style={{fontSize:11,color:SOC.text,fontWeight:600}}>{t.threat}</div>
+                                                  <div style={{fontSize:10,color:SOC.textMut,marginTop:2}}>
+                                                    Likelihood {t.likelihood} · Impact {t.impact}
+                                                  </div>
+                                                  {t.description && <div style={{fontSize:10,color:SOC.textSec,marginTop:3,lineHeight:1.5}}>{t.description}</div>}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Policy documents */}
+                    <div>
+                      <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,marginBottom:8}}>POLICY DOCUMENTS ({policies.length})</div>
+                      {policies.length === 0 ? (
+                        <div style={{color:SOC.textSec,fontSize:12,padding:"6px 0"}}>No policies generated yet.</div>
+                      ) : (
+                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                          {policies.map(pol => {
+                            const isOpen = openPolicy === pol.id;
+                            const full = policyDetail[`${c.id}:${pol.id}`];
+                            return (
+                              <div key={pol.id} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:8,overflow:"hidden"}}>
+                                <div onClick={()=>{ const next = isOpen?null:pol.id; setOpenPolicy(next); if(next) loadPolicyDetail(c.id, pol.id); }}
+                                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
+                                  <span style={{fontSize:14}}>📄</span>
+                                  <div style={{flex:1}}>
+                                    <div style={{color:SOC.text,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
+                                      {pol.policyName}
+                                      {pol.reviewStatus === "approved" && (
+                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.green}22`,color:SOC.green}}>APPROVED</span>
+                                      )}
+                                      {pol.reviewStatus === "changes_requested" && (
+                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.red}22`,color:SOC.red}}>CHANGES REQUESTED</span>
+                                      )}
+                                    </div>
+                                    <div style={{color:SOC.textMut,fontSize:9}}>{pol.status||"draft"} · {new Date(pol.createdAt).toLocaleDateString()}</div>
+                                  </div>
+                                  <span style={{color:SOC.textMut,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                                </div>
+                                {isOpen && (
+                                  <div style={{padding:"0 13px 13px",borderTop:`1px solid ${SOC.border}`}}>
+                                    {!full ? (
+                                      <div style={{color:SOC.textSec,fontSize:11,padding:"12px 0"}}>Loading policy…</div>
+                                    ) : (
+                                      <pre style={{whiteSpace:"pre-wrap",fontFamily:"Inter,system-ui,sans-serif",
+                                        fontSize:11,color:SOC.textSec,lineHeight:1.6,margin:0,paddingTop:12,maxHeight:320,overflowY:"auto"}}>
+                                        {full.content || "(No content)"}
+                                      </pre>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </SocPanel>
           </div>
 

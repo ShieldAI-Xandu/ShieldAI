@@ -144,3 +144,92 @@ client / + assigned 3 clients" lines.
 - Full migration simulation from the legacy-account state: legacy removed, 3
   clients created + assigned, stale assignment cleaned, one program each,
   second run fully idempotent.
+
+---
+
+# Update — Analyst can now see full client security work
+
+## The gap
+The analyst console showed client names + action history only. Programs,
+assessments, and policies (everything the client admin sees) were invisible,
+because those endpoints (`/api/programs`, `/api/policies`, `/api/assessments`)
+are scoped to `req.userId` — the client's own login — with no analyst path.
+
+## Fix — new analyst read endpoints (portfolioRoutes.js)
+All assignment-scoped and read-only:
+- GET /api/analyst/clients/:id/programs                  — program summary rows
+- GET /api/analyst/clients/:id/programs/:programId       — full program sections
+- GET /api/analyst/clients/:id/assessments               — assessment rows
+- GET /api/analyst/clients/:id/assessments/:assessmentId — full assessment
+- GET /api/analyst/clients/:id/policies                  — policy rows
+- GET /api/analyst/clients/:id/policies/:policyDocId      — full policy (content)
+
+Each returns the same shape as the corresponding client endpoint, so the
+frontend reuses its renderers. Access is gated by `canSee` (assignment or
+admin); unassigned or cross-client access returns 403.
+
+## Frontend (src/App.jsx)
+- `loadClientDetail` now also fetches the client's programs + policies.
+- New on-demand loaders `loadProgramDetail` / `loadPolicyDetail` with caches.
+- New "Security Program & Deliverables" panel in the analyst client detail:
+  - Expandable program(s) showing posture score, executive summary, NIST
+    function scores, and top threats — the real generated program.
+  - Expandable policy documents showing full policy content.
+  - Clean empty states when a client has no program/policies yet.
+
+## Verified
+- Frontend `vite build` — succeeds (caught + fixed an `await`-in-object parse
+  issue along the way).
+- Backend syntax + eslint — clean.
+- Runtime smoke test: program list/detail, assessments, policy list/detail all
+  return real data; unassigned + cross-client access both return 403.
+
+## To apply
+Redeploy portfolioRoutes.js and src/App.jsx (server.js already registers the
+routes; no new registration needed). No schema changes.
+
+---
+
+# Update — Analyst write access + working Approve button
+
+## What changed
+Analysts can now ACT on client work, not just view it. The review queue's
+Approve button is wired to a real backend action, plus a "Request Changes"
+option. Every decision is assignment-scoped and audited.
+
+## Backend (portfolioRoutes.js)
+- New: POST /api/analyst/clients/:id/review-decision
+  Body: { kind: "program"|"policy", id, decision: "approve"|"request_changes", note? }
+  - Sets a **separate `reviewStatus`** field ("approved" | "changes_requested")
+    — deliberately NOT the program's generation `status`, so the client's own
+    program views (which check status==="complete") never break.
+  - Records reviewedAt/reviewedBy + a reviewHistory trail on the item.
+  - Writes an audit entry via logClientAction (imported from assignmentRoutes)
+    with actor role "analyst" and a human-readable detail line.
+  - 403 unassigned client / 400 bad decision / 404 missing item.
+- Review-queue read now reflects `reviewStatus` (awaiting_review → approved /
+  changes_requested) and correctly treats a generated program (status
+  "complete") as reviewable — previously programs never appeared in the queue.
+- Program/policy list endpoints now include `reviewStatus` for badges.
+
+## Frontend (src/App.jsx)
+- Review & Approval Queue: real **Approve** and **Request Changes** buttons,
+  with busy state; on success it reloads the client detail so the queue and
+  deliverables reflect the new status.
+- Security Program & Deliverables panel: APPROVED / CHANGES REQUESTED badges on
+  programs and policies.
+- reviewQueue mapping now carries id + kind so actions can target the right item.
+
+## Design note — read vs write
+This is a scoped write: analysts can approve / request-changes on programs and
+policies for their ASSIGNED clients. It does not let analysts edit content or
+regenerate programs (still the client's action). The generation status is never
+overwritten; approval is tracked in a parallel reviewStatus field.
+
+## Verified
+- Backend syntax + eslint — clean.
+- Frontend vite build — succeeds.
+- Full write-flow smoke test: approve program (reviewStatus set, generation
+  status preserved), request-changes on policy (note captured), audit log gets
+  both entries, queue reflects new statuses, and access control returns
+  403/400/404 for unassigned/bad-decision/missing cases.
