@@ -91,13 +91,17 @@ export function registerPortfolioRoutes(
   // Analyst-or-admin gate (self-contained; matches the pattern used by the
   // other analyst routes so we don't depend on a shared middleware export).
   function requireAnalyst(req, res, next) {
-    if (!req.userId) return res.status(401).json({ error: "Not authenticated." });
-    const u = (db.data.users || []).find(x => x.id === req.userId);
-    if (!u || (!u.isAnalyst && !u.isAdmin)) {
-      return res.status(403).json({ error: "Analyst access required." });
-    }
-    req.isAdmin = !!u.isAdmin;
-    next();
+    // Run requireAuth first to populate req.userId / req.isAnalyst / req.isAdmin,
+    // then enforce the analyst-or-admin role. (Mirrors the gate used by the
+    // other analyst routes — req.userId is NOT set by any global middleware.)
+    requireAuth(req, res, () => {
+      const u = (db.data.users || []).find(x => x.id === req.userId);
+      if (!u || (!u.isAnalyst && !u.isAdmin)) {
+        return res.status(403).json({ error: "Analyst access required." });
+      }
+      req.isAdmin = !!u.isAdmin;
+      next();
+    });
   }
 
   const users = () => db.data.users || [];
