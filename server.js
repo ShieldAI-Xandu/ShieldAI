@@ -35,7 +35,7 @@ dotenv.config();
 
 const app = express();
 const gate = makeTierGate(db);
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -1027,8 +1027,8 @@ registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, e
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
-const server = app.listen(PORT, () => {
-  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ ShieldAI backend running on port ${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
 });
