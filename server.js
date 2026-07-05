@@ -21,11 +21,11 @@ import { clientDomain, domainExposure } from "./darkwebService.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { buildCustomFrameworkBlock, registerCustomFrameworkRoutes } from "./customFrameworks.js";
+import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
-import { registerPortfolioRoutes, recordPostureSnapshot } from "./portfolioRoutes.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import {
@@ -768,8 +768,6 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
 
   program.status = "complete";
   program.sections.meta = program.meta; // surfaced to the UI (results === sections)
-  // Record a real posture point for the analyst-console trend line.
-  recordPostureSnapshot(db, program.userId, posture.postureScore, posture.postureLevel);
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }
@@ -1256,19 +1254,6 @@ app.post("/api/admin/clear-stuck", requireAdmin, async (req, res) => {
   res.json({ ok: true, cleared: stuckIds.length, ids: stuckIds });
 });
 
-// Admin: repair the demo analyst account + its client assignments on demand,
-// without waiting for a redeploy/boot cycle. Ensures analyst@shieldai.com has
-// the analyst role and is assigned every demo client.
-app.post("/api/admin/repair-demo", requireAdmin, async (req, res) => {
-  try {
-    const { ensureDemoAnalyst } = await import("./seedDemo.js");
-    const result = await ensureDemoAnalyst();
-    res.json({ ok: true, result });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 // Admin: fetch any program's full content (bypasses user scoping)
 app.get("/api/admin/programs/:id", requireAdmin, (req, res) => {
   const program = (db.data.programs || []).find(p => p.id === req.params.id);
@@ -1300,9 +1285,9 @@ registerAdminRoutes(app, { db, requireAdmin, registerUser });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
+registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
-registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
 //  SERVE THE BUILT FRONTEND (production)
@@ -1357,19 +1342,14 @@ const server = app.listen(PORT, "0.0.0.0", () => {
   if (String(process.env.SEED_ON_BOOT).toLowerCase() === "true") {
     (async () => {
       try {
-        const { demoExists, seedDemo, ensureDemoAnalyst } = await import("./seedDemo.js");
+        const { demoExists, seedDemo } = await import("./seedDemo.js");
         if (await demoExists()) {
-          console.log("   SEED_ON_BOOT: demo data already present — skipping company seed.");
-          // Still ensure the demo analyst account + client assignment exist, so
-          // existing deployments get a working analyst-console login without a
-          // full re-seed.
-          await ensureDemoAnalyst();
+          console.log("   SEED_ON_BOOT: demo data already present — skipping.");
           return;
         }
         console.log("   SEED_ON_BOOT: no demo data found — seeding in background…");
         const r = await seedDemo({ force: false });
         console.log(`   SEED_ON_BOOT: ${r.seeded ? `seeded ${r.companies} companies.` : "skipped."}`);
-        // seedDemo already calls ensureDemoAnalyst on success.
       } catch (e) {
         console.error("   SEED_ON_BOOT failed (server still running):", e.message);
       }

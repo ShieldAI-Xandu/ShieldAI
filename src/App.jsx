@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, createContext, useContext, Component } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -3945,24 +3945,6 @@ function AdminPanel({ onClose }) {
     }
   }
 
-  async function repairDemo() {
-    setBusy("repair-demo");
-    try {
-      const res = await authFetch(`${API_BASE}/api/admin/repair-demo`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || "Repair failed.");
-      const r = data.result || {};
-      setNotice(r.ok
-        ? `Demo repaired: analyst ready, ${(r.clientIds||[]).length} client(s) assigned.`
-        : `Repair ran, but: ${r.reason || "no demo clients found"}.`);
-      await load();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function openUser(id) {
     setDetailLoading(true);
     setError(null);
@@ -4498,23 +4480,6 @@ function AdminPanel({ onClose }) {
             </button>
           </div>
         )}
-
-        {/* Demo maintenance — ensure the demo analyst + client assignments exist */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,
-          padding:"12px 16px",marginBottom:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10}}>
-          <div>
-            <div style={{color:C.text,fontSize:13,fontWeight:700}}>Repair Demo Accounts</div>
-            <div style={{color:C.textSec,fontSize:12,marginTop:2}}>
-              Ensures analyst@shieldai.com has the analyst role and is assigned every demo client.
-            </div>
-          </div>
-          <button onClick={repairDemo} disabled={busy==="repair-demo"}
-            style={{padding:"9px 18px",background:busy==="repair-demo"?C.border:C.accent,
-              color:busy==="repair-demo"?C.textMut:C.bg,border:"none",borderRadius:8,
-              fontSize:13,fontWeight:700,cursor:busy==="repair-demo"?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
-            {busy==="repair-demo" ? "Repairing…" : "Repair Demo"}
-          </button>
-        </div>
 
         {banners}
 
@@ -5259,21 +5224,10 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
 // Light-theme trend chart for the company console
 function TrendChartLight({ data, color }) {
   const w = 560, h = 130, pad = 8;
-  const series = Array.isArray(data) ? data.filter(v => typeof v === "number") : [];
-  if (series.length < 2) {
-    return (
-      <div style={{height:h, display:"flex",alignItems:"center",justifyContent:"center",
-        color:C.textMut,fontSize:12,textAlign:"center",padding:"0 16px"}}>
-        {series.length === 1
-          ? "Only one reading so far — a trend line appears with two or more."
-          : "No history yet — the trend builds over time."}
-      </div>
-    );
-  }
-  const min = Math.min(...series) - 5, max = Math.max(...series) + 5;
+  const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
   const range = max - min || 1;
-  const pts = series.map((v,i)=>{
-    const x = pad + (i/(series.length-1))*(w-pad*2);
+  const pts = data.map((v,i)=>{
+    const x = pad + (i/(data.length-1))*(w-pad*2);
     const y = h - pad - ((v-min)/range)*(h-pad*2);
     return [x,y];
   });
@@ -5295,89 +5249,6 @@ function TrendChartLight({ data, color }) {
       <path d={path} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round"/>
       <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="4" fill={color}/>
     </svg>
-  );
-}
-
-// ── Notification bell (client-facing) ──
-// Shows unread count + a dropdown of recent notifications. Polls lightly so a
-// client sees analyst decisions without a manual refresh.
-function NotificationBell() {
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState([]);
-  const [unread, setUnread] = useState(0);
-
-  async function load() {
-    try {
-      const res = await authFetch(`${API_BASE}/api/notifications`);
-      if (res.ok) {
-        const data = await res.json();
-        setItems(data.notifications || []);
-        setUnread(data.unread || 0);
-      }
-    } catch { /* ignore */ }
-  }
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 60000); // light poll every 60s
-    return () => clearInterval(t);
-  }, []);
-
-  async function markAllRead() {
-    try {
-      await authFetch(`${API_BASE}/api/notifications/read-all`, { method: "POST" });
-      setUnread(0);
-      setItems(items.map(n => ({ ...n, read: true })));
-    } catch { /* ignore */ }
-  }
-
-  async function openAndMark() {
-    const next = !open;
-    setOpen(next);
-    if (next && unread > 0) await markAllRead();
-  }
-
-  return (
-    <div style={{position:"relative"}}>
-      <button onClick={openAndMark}
-        style={{position:"relative",width:42,height:42,borderRadius:10,background:C.surface,
-          border:`1px solid ${C.border}`,color:C.text,fontSize:18,cursor:"pointer",
-          display:"flex",alignItems:"center",justifyContent:"center"}}>
-        🔔
-        {unread > 0 && (
-          <span style={{position:"absolute",top:-4,right:-4,minWidth:18,height:18,padding:"0 4px",
-            borderRadius:9,background:C.red,color:"#fff",fontSize:10,fontWeight:700,
-            display:"flex",alignItems:"center",justifyContent:"center"}}>{unread}</span>
-        )}
-      </button>
-      {open && (
-        <div style={{position:"absolute",top:48,right:0,width:340,maxHeight:420,overflowY:"auto",
-          background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,zIndex:100,
-          boxShadow:"0 10px 40px rgba(0,0,0,0.4)"}}>
-          <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,
-            display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{fontWeight:700,fontSize:13,color:C.text}}>Notifications</span>
-            <button onClick={()=>setOpen(false)} style={{background:"none",border:"none",color:C.textSec,cursor:"pointer",fontSize:14}}>✕</button>
-          </div>
-          {items.length === 0 ? (
-            <div style={{padding:"28px 14px",textAlign:"center",color:C.textSec,fontSize:12}}>
-              No notifications yet.
-            </div>
-          ) : (
-            items.map(n => (
-              <div key={n.id} style={{padding:"11px 14px",borderBottom:`1px solid ${C.border}`,
-                background: n.read ? "transparent" : `${C.accent}0C`}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-                  <span style={{fontSize:13}}>{n.type==="review_approved"?"✅":n.type==="review_changes_requested"?"✏️":"🔔"}</span>
-                  <span style={{fontSize:12,fontWeight:700,color:C.text}}>{n.title}</span>
-                </div>
-                <div style={{fontSize:11,color:C.textSec,lineHeight:1.5}}>{n.body}</div>
-                <div style={{fontSize:9,color:C.textMut,marginTop:4}}>{new Date(n.createdAt).toLocaleString()}</div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -5457,7 +5328,6 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
               cursor:"pointer",whiteSpace:"nowrap",boxShadow:`0 0 30px ${C.accent}33`}}>
             + New Assessment
           </button>
-          <NotificationBell/>
         </div>
 
         {error && (
@@ -5867,7 +5737,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
 //  with believable sample data.
 // ─────────────────────────────────────────────────────────────
 
-const ANALYST_EMAIL = "analyst@shieldai.com";
+const ANALYST_EMAIL = "analyst@xandultd.com";
 
 // SOC palette (dark, data-dense)
 const SOC = {
@@ -5905,25 +5775,158 @@ function agentMeta(status) {
   }
 }
 
+// 12 months of posture history per client (trend story)
+const SAMPLE_CLIENTS = [
+  {
+    id: "c1", name: "Meridian Dental Group", industry: "Healthcare", employees: "45",
+    posture: 53, level: "Developing", plan: "Managed vCISO", mrr: 1800,
+    status: "needs_review", lastActivity: "2h ago", compliance: ["HIPAA"],
+    weakest: ["Identify", "Respond"], openItems: 3,
+    history: [31, 34, 38, 38, 41, 44, 44, 47, 49, 49, 51, 53],
+    agent: { status: "healthy", endpoints: 38, lastSeen: "3 min ago", coverage: 84 },
+    compliancePct: { current: 62, target: 90, framework: "HIPAA" },
+    alerts: [
+      { sev: "high", title: "Phishing email reported by 2 staff", time: "18 min ago", detail: "Spoofed invoice from 'billing@meridian-dental.co' — quarantined." },
+      { sev: "medium", title: "Outdated OS on 3 endpoints", time: "2h ago", detail: "Workstations running unsupported Windows build." },
+      { sev: "low", title: "New device joined network", time: "5h ago", detail: "Unmanaged tablet on guest VLAN." },
+    ],
+    reviewQueue: [
+      { type: "Incident Response Policy", status: "awaiting_review", generated: "2h ago" },
+      { type: "Q2 Risk Reassessment", status: "awaiting_review", generated: "2h ago" },
+    ],
+    chat: [
+      { from: "client", who: "Dr. Patel", text: "We had a staff member click something suspicious — should we be worried?", time: "20 min ago" },
+      { from: "analyst", who: "You", text: "Saw the alert come through — it was quarantined before any payload ran. I'm resetting that account's credentials as a precaution and will send a short refresher to the team.", time: "12 min ago" },
+      { from: "client", who: "Dr. Patel", text: "Thank you, that's a relief.", time: "8 min ago" },
+    ],
+    training: { active: "Phishing Awareness Q2", completion: 71, enrolled: 45, nextDue: "Jun 30",
+      modules: [
+        { name: "Phishing & Social Engineering", done: 38, avgScore: 84 },
+        { name: "Passwords & MFA", done: 41, avgScore: 91 },
+        { name: "Device & Mobile Security", done: 28, avgScore: 78 },
+        { name: "Incident Reporting", done: 25, avgScore: 73 },
+      ],
+      campaigns: [
+        { name: "Q2 Phishing Simulation", status: "active", sent: 45, clicked: 6, reported: 22, date: "Jun 12" },
+        { name: "Q1 Phishing Simulation", status: "complete", sent: 45, clicked: 11, reported: 14, date: "Mar 10" },
+      ] },
+  },
+  {
+    id: "c2", name: "Lakeside Financial Advisors", industry: "Finance", employees: "28",
+    posture: 91, level: "Strong", plan: "Managed vCISO", mrr: 2400,
+    status: "on_track", lastActivity: "1d ago", compliance: ["SEC", "SOC 2"],
+    weakest: ["Respond"], openItems: 1,
+    history: [68, 70, 72, 74, 77, 79, 81, 83, 85, 87, 89, 91],
+    agent: { status: "healthy", endpoints: 26, lastSeen: "1 min ago", coverage: 96 },
+    compliancePct: { current: 88, target: 95, framework: "SOC 2" },
+    alerts: [
+      { sev: "low", title: "Impossible-travel login flagged & cleared", time: "6h ago", detail: "VP logged in from two cities; confirmed VPN, no action needed." },
+    ],
+    reviewQueue: [
+      { type: "Backup & Recovery Policy", status: "approved", generated: "1d ago" },
+    ],
+    chat: [
+      { from: "analyst", who: "You", text: "Your SOC 2 evidence package is 88% complete — we're on track for the audit window.", time: "1d ago" },
+      { from: "client", who: "Sandra Kim", text: "Excellent. The board will be pleased.", time: "1d ago" },
+    ],
+    training: { active: "Annual Security Refresher", completion: 96, enrolled: 28, nextDue: "Complete",
+      modules: [
+        { name: "Phishing & Social Engineering", done: 28, avgScore: 95 },
+        { name: "Business Email Compromise", done: 27, avgScore: 92 },
+        { name: "Data Protection & Privacy", done: 28, avgScore: 97 },
+        { name: "Secure Payment Verification", done: 26, avgScore: 90 },
+      ],
+      campaigns: [
+        { name: "Q2 Phishing Simulation", status: "complete", sent: 28, clicked: 1, reported: 26, date: "Jun 5" },
+        { name: "Wire-Fraud Drill", status: "complete", sent: 28, clicked: 0, reported: 27, date: "May 2" },
+      ] },
+  },
+  {
+    id: "c3", name: "Apex Manufacturing", industry: "Manufacturing", employees: "120",
+    posture: 24, level: "At Risk", plan: "Assessment + Roadmap", mrr: 950,
+    status: "attention", lastActivity: "4h ago", compliance: ["CMMC"],
+    weakest: ["Protect", "Identify"], openItems: 7,
+    history: [18, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24],
+    agent: { status: "offline", endpoints: 0, lastSeen: "never", coverage: 0 },
+    compliancePct: { current: 19, target: 80, framework: "CMMC L2" },
+    alerts: [
+      { sev: "high", title: "No MFA on email — active brute-force attempts", time: "1h ago", detail: "47 failed logins on shared mailbox in past hour." },
+      { sev: "high", title: "Unpatched VPN appliance (critical CVE)", time: "3h ago", detail: "Internet-facing device vulnerable to known exploit." },
+      { sev: "medium", title: "Local admin rights on all workstations", time: "4h ago", detail: "Standard users can install software / disable controls." },
+    ],
+    reviewQueue: [
+      { type: "Initial Security Program", status: "awaiting_review", generated: "4h ago" },
+      { type: "Access Control Policy", status: "awaiting_review", generated: "4h ago" },
+      { type: "Data Classification Policy", status: "draft", generated: "5h ago" },
+    ],
+    chat: [
+      { from: "analyst", who: "You", text: "We've finished your initial assessment — there are a few urgent items I'd like to walk you through. Do you have 15 minutes tomorrow?", time: "3h ago" },
+      { from: "client", who: "Mike Torres", text: "Yeah, mornings are best. How bad is it?", time: "2h ago" },
+      { from: "analyst", who: "You", text: "Fixable, but we should move quickly on MFA and the VPN patch. I'll prep a prioritized list.", time: "2h ago" },
+    ],
+    training: { active: "Not yet deployed", completion: 0, enrolled: 0, nextDue: "—",
+      modules: [], campaigns: [] },
+  },
+  {
+    id: "c4", name: "BrightPath Marketing", industry: "Professional Services", employees: "16",
+    posture: 84, level: "Strong", plan: "Self-Serve + Quarterly Review", mrr: 450,
+    status: "on_track", lastActivity: "3d ago", compliance: ["GDPR"],
+    weakest: ["Detect"], openItems: 0,
+    history: [70, 72, 73, 75, 76, 78, 79, 80, 81, 82, 83, 84],
+    agent: { status: "degraded", endpoints: 14, lastSeen: "8 min ago", coverage: 64 },
+    compliancePct: { current: 80, target: 90, framework: "GDPR" },
+    alerts: [],
+    reviewQueue: [],
+    chat: [
+      { from: "client", who: "Jordan Lee", text: "Quick one — is it safe to use that new AI tool with client data?", time: "3d ago" },
+      { from: "analyst", who: "You", text: "Let me review their data-handling terms and get back to you with a recommendation.", time: "3d ago" },
+    ],
+    training: { active: "Data Privacy Essentials", completion: 88, enrolled: 16, nextDue: "Jul 15",
+      modules: [
+        { name: "Data Protection & Privacy", done: 15, avgScore: 89 },
+        { name: "Phishing & Social Engineering", done: 14, avgScore: 86 },
+        { name: "Remote Work & Wi-Fi Security", done: 13, avgScore: 82 },
+      ],
+      campaigns: [
+        { name: "Q2 Phishing Simulation", status: "complete", sent: 16, clicked: 2, reported: 12, date: "Jun 8" },
+      ] },
+  },
+  {
+    id: "c5", name: "Coastal Property Mgmt", industry: "Real Estate", employees: "33",
+    posture: 61, level: "Moderate", plan: "Managed vCISO", mrr: 1600,
+    status: "needs_review", lastActivity: "6h ago", compliance: ["State Privacy"],
+    weakest: ["Respond"], openItems: 2,
+    history: [44, 46, 47, 49, 51, 52, 54, 55, 57, 58, 60, 61],
+    agent: { status: "healthy", endpoints: 29, lastSeen: "12 min ago", coverage: 79 },
+    compliancePct: { current: 64, target: 85, framework: "State Privacy" },
+    alerts: [
+      { sev: "medium", title: "Shared password detected in cloud drive", time: "6h ago", detail: "Plaintext credentials file found in shared folder." },
+    ],
+    reviewQueue: [
+      { type: "Vendor Risk Policy", status: "awaiting_review", generated: "6h ago" },
+    ],
+    chat: [
+      { from: "client", who: "Rosa Mendes", text: "Got the vendor policy draft — looks good. One question on the cloud storage section.", time: "5h ago" },
+    ],
+    training: { active: "Phishing Awareness Q2", completion: 58, enrolled: 33, nextDue: "Jun 30",
+      modules: [
+        { name: "Phishing & Social Engineering", done: 24, avgScore: 79 },
+        { name: "Passwords & MFA", done: 22, avgScore: 81 },
+        { name: "Data Protection & Privacy", done: 18, avgScore: 75 },
+      ],
+      campaigns: [
+        { name: "Q2 Phishing Simulation", status: "active", sent: 33, clicked: 9, reported: 13, date: "Jun 14" },
+      ] },
+  },
+];
+
 // ── Small SVG sparkline / trend chart ──
 function TrendChart({ data, color, height = 120 }) {
   const w = 520, h = height, pad = 8;
-  const series = Array.isArray(data) ? data.filter(v => typeof v === "number") : [];
-  // Need at least 2 points to draw a trend line; otherwise show a friendly note.
-  if (series.length < 2) {
-    return (
-      <div style={{height, display:"flex",alignItems:"center",justifyContent:"center",
-        color:SOC.textMut,fontSize:12,textAlign:"center",padding:"0 16px"}}>
-        {series.length === 1
-          ? "Only one posture reading so far — the trend line appears once there are at least two."
-          : "No posture history yet. A trend builds as programs are re-scored over time."}
-      </div>
-    );
-  }
-  const min = Math.min(...series) - 5, max = Math.max(...series) + 5;
+  const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
   const range = max - min || 1;
-  const pts = series.map((v, i) => {
-    const x = pad + (i / (series.length - 1)) * (w - pad * 2);
+  const pts = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
     const y = h - pad - ((v - min) / range) * (h - pad * 2);
     return [x, y];
   });
@@ -5947,7 +5950,7 @@ function TrendChart({ data, color, height = 120 }) {
         <circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?4:0} fill={color}/>
       ))}
       {months.map((m,i)=>(
-        i % 2 === 0 ? <text key={i} x={pad+(i/(series.length-1))*(w-pad*2)} y={h+14} fill={SOC.textMut} fontSize="9" textAnchor="middle">{m}</text> : null
+        i % 2 === 0 ? <text key={i} x={pad+(i/(data.length-1))*(w-pad*2)} y={h+14} fill={SOC.textMut} fontSize="9" textAnchor="middle">{m}</text> : null
       ))}
     </svg>
   );
@@ -6177,45 +6180,6 @@ function mastermindReply(quickId, client) {
 }
 
 
-// ── Error boundary — turns a render crash into a readable message instead
-// of a blank white screen, and surfaces the error so it can be diagnosed. ──
-class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) { console.error("Console render error:", error, info); }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{minHeight:"100vh",background:"#0A0E1A",color:"#E2EDFF",
-          fontFamily:"Inter,system-ui,sans-serif",padding:"40px",boxSizing:"border-box"}}>
-          <div style={{maxWidth:720,margin:"40px auto",background:"#0F1626",
-            border:"1px solid #2A1A1A",borderRadius:12,padding:"24px"}}>
-            <div style={{fontSize:18,fontWeight:800,color:"#FF6B6B",marginBottom:8}}>Something went wrong rendering this view</div>
-            <div style={{fontSize:13,color:"#9FB0C9",lineHeight:1.6,marginBottom:16}}>
-              The console hit an unexpected error. Your data is safe. You can go back and try again.
-            </div>
-            <pre style={{whiteSpace:"pre-wrap",fontSize:11,color:"#C0704F",background:"#0A0E1A",
-              padding:"12px",borderRadius:8,overflowX:"auto",margin:"0 0 16px"}}>
-              {String(this.state.error?.message || this.state.error)}
-            </pre>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>this.setState({error:null})}
-                style={{padding:"9px 18px",background:"#00E0C6",color:"#0A0E1A",border:"none",
-                  borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>Try again</button>
-              {this.props.onExit && (
-                <button onClick={this.props.onExit}
-                  style={{padding:"9px 18px",background:"transparent",color:"#9FB0C9",
-                    border:"1px solid #1A2D47",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>Exit console</button>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -6323,149 +6287,10 @@ function AnalystConsole({ user, onExit }) {
     }, 650);
   }
 
-  // ── Live portfolio (replaces the SAMPLE_CLIENTS mockup) ──
-  // The rollup comes from /api/analyst/portfolio; richer per-client panels
-  // (posture history, alerts, review queue) are lazy-loaded when a client is
-  // opened and merged into that client's record via clientDetail.
-  const [portfolio, setPortfolio] = useState(null);
-  const [portfolioLoading, setPortfolioLoading] = useState(false);
-  const [portfolioError, setPortfolioError] = useState(null);
-  const [clientDetail, setClientDetail] = useState({}); // { [clientId]: { history, alerts, reviewQueue, programs, policies, loaded } }
-  const [programDetail, setProgramDetail] = useState({}); // { "clientId:programId": <full program> }
-  const [policyDetail, setPolicyDetail] = useState({});   // { "clientId:policyDocId": <full policy> }
-  const [openProgram, setOpenProgram] = useState(null);   // programId currently expanded
-  const [openPolicy, setOpenPolicy] = useState(null);     // policyDocId currently expanded
-
-  async function loadPortfolio() {
-    setPortfolioLoading(true); setPortfolioError(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/analyst/portfolio`);
-      if (!res.ok) throw new Error("Could not load portfolio (analyst access required).");
-      setPortfolio(await res.json());
-    } catch (e) { setPortfolioError(e.message); } finally { setPortfolioLoading(false); }
-  }
-  useEffect(() => { if (view === "portfolio" && portfolio === null) loadPortfolio(); }, [view]);
-
-  async function loadClientDetail(clientId) {
-    if (clientDetail[clientId]?.loaded) return;
-    try {
-      const [hRes, aRes, rRes, pgRes, polRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/posture-history`),
-        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/alerts`),
-        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-queue`),
-        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/programs`),
-        authFetch(`${API_BASE}/api/analyst/clients/${clientId}/policies`),
-      ]);
-      const history = hRes.ok ? (await hRes.json()).points || [] : [];
-      const alerts = aRes.ok ? (await aRes.json()).alerts || [] : [];
-      const reviewQueue = rRes.ok ? (await rRes.json()).queue || [] : [];
-      const programs = pgRes.ok ? await pgRes.json() : [];
-      const policies = polRes.ok ? await polRes.json() : [];
-      setClientDetail(d => ({ ...d, [clientId]: { history, alerts, reviewQueue, programs, policies, loaded: true } }));
-    } catch {
-      setClientDetail(d => ({ ...d, [clientId]: { history: [], alerts: [], reviewQueue: [], programs: [], policies: [], loaded: true } }));
-    }
-  }
-
-  // Analyst approves or requests changes on a review-queue item, then refreshes.
-  const [reviewBusy, setReviewBusy] = useState(null); // item id being acted on
-  const [notePromptFor, setNotePromptFor] = useState(null); // item id showing note input
-  const [reviewNote, setReviewNote] = useState("");
-  async function submitReviewDecision(clientId, item, decision, note) {
-    setReviewBusy(item.id);
-    try {
-      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: item.kind, id: item.id, decision, note: note || "" }),
-      });
-      if (res.ok) {
-        setNotePromptFor(null);
-        setReviewNote("");
-        // Force a fresh reload of this client's detail so the queue + programs/
-        // policies reflect the new status.
-        setClientDetail(d => { const n = { ...d }; delete n[clientId]; return n; });
-        await loadClientDetail(clientId);
-      }
-    } finally {
-      setReviewBusy(null);
-    }
-  }
-
-  // Fetch and cache a full program's detail on demand (for the expand view).
-  async function loadProgramDetail(clientId, programId) {
-    const key = `${clientId}:${programId}`;
-    if (programDetail[key]) return;
-    try {
-      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/programs/${programId}`);
-      if (res.ok) {
-        const full = await res.json();
-        setProgramDetail(d => ({ ...d, [key]: full }));
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Fetch and cache a full policy document on demand.
-  async function loadPolicyDetail(clientId, policyDocId) {
-    const key = `${clientId}:${policyDocId}`;
-    if (policyDetail[key]) return;
-    try {
-      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/policies/${policyDocId}`);
-      if (res.ok) {
-        const full = await res.json();
-        setPolicyDetail(d => ({ ...d, [key]: full }));
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Map a live portfolio row + any loaded detail into the shape the console
-  // panels expect. Real data where we have it; empty (not fabricated) elsewhere.
-  function toClientRecord(p) {
-    const detail = clientDetail[p.id] || {};
-    const health = p.agent || { status: "pending", endpoints: 0, healthy: 0, lastSeen: null };
-    return {
-      id: p.id,
-      name: p.name,
-      industry: p.industry || "—",
-      employees: p.employees || "—",
-      posture: p.posture ?? 0,
-      level: p.level || "—",
-      plan: p.plan || p.tier || "free",
-      status: p.status || "on_track",
-      weakest: p.weakest || [],
-      openItems: p.openItems || 0,
-      lastActivity: health.lastSeen || p.scoredAt || null,
-      compliance: [],
-      history: (detail.history || []).map(pt => pt.score),
-      agent: {
-        status: health.status,
-        endpoints: health.endpoints,
-        lastSeen: health.lastSeen || "never",
-        coverage: health.endpoints ? Math.round((health.healthy / health.endpoints) * 100) : 0,
-      },
-      compliancePct: null,        // no live compliance-% source yet; panel guards on null
-      alerts: (detail.alerts || []).map(a => ({
-        sev: a.severity === "critical" ? "high" : (a.severity || "low"),
-        title: a.title, time: a.time, detail: a.type || "",
-      })),
-      reviewQueue: (detail.reviewQueue || []).map(r => ({
-        id: r.id, kind: r.kind, type: r.label || r.type, status: r.status, generated: r.generatedAt,
-      })),
-      chat: [],                   // messaging is a later phase; empty for now
-      training: null,             // training campaigns are a later phase
-      programs: detail.programs || [],
-      policies: detail.policies || [],
-      mrr: 0,
-    };
-  }
-
-  const clients = (portfolio || []).map(toClientRecord);
-  const totalClients = clients.length;
-  const avgPosture = clients.length
-    ? Math.round(clients.filter(c => c.posture > 0).reduce((s, c) => s + c.posture, 0) /
-        Math.max(1, clients.filter(c => c.posture > 0).length))
-    : 0;
-  const reviewCount = clients.reduce((s, c) => s + c.openItems, 0);
+  const clients = SAMPLE_CLIENTS;
+  const totalMRR = clients.reduce((s, c) => s + c.mrr, 0);
+  const avgPosture = Math.round(clients.reduce((s, c) => s + c.posture, 0) / clients.length);
+  const reviewCount = clients.reduce((s, c) => s + c.reviewQueue.filter(r => r.status === "awaiting_review").length, 0);
   const highAlerts = clients.reduce((s, c) => s + c.alerts.filter(a => a.sev === "high").length, 0);
   const agentsOnline = clients.filter(c => c.agent.status === "healthy").length;
 
@@ -6482,6 +6307,8 @@ function AnalystConsole({ user, onExit }) {
       <span style={{fontWeight:700,fontSize:15,color:SOC.text}}>{title}</span>
       <span style={{fontSize:10,color:SOC.cyan,letterSpacing:2,padding:"2px 10px",
         background:`${SOC.cyan}18`,borderRadius:20,border:`1px solid ${SOC.cyan}33`}}>ANALYST CONSOLE</span>
+      <span style={{fontSize:9,color:SOC.textMut,padding:"2px 8px",background:SOC.bg,
+        border:`1px solid ${SOC.border}`,borderRadius:4}}>VISION MOCKUP</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
         <span style={{fontSize:11,color:SOC.textSec}}>{user.email}</span>
         <button onClick={()=>setView(view==="myclients"?"portfolio":"myclients")}
@@ -6859,16 +6686,10 @@ function AnalystConsole({ user, onExit }) {
   }
 
   if (view === "client" && active) {
-    // Re-derive from the live portfolio so lazily-loaded detail (history,
-    // alerts, review queue) shows up after the client was opened.
-    const c = clients.find(x => x.id === active.id) || active;
+    const c = active;
     const clr = pColor(c.posture);
     const chatLog = [...(c.chat || []), ...((localChats[c.id]) || [])];
-    const hist = Array.isArray(c.history) ? c.history : [];
-    const trend = hist.length >= 2 ? hist[hist.length-1] - hist[0] : 0;
-    // Null-safe view of compliance readiness (no live source yet → hidden gracefully).
-    const comp = c.compliancePct || null;
-    const training = c.training || null;
+    const trend = c.history[c.history.length-1] - c.history[0];
 
     function sendChat() {
       if (!chatDraft.trim()) return;
@@ -6916,23 +6737,17 @@ function AnalystConsole({ user, onExit }) {
               ); })()}
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              {comp ? (<>
-                <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{comp.framework} READINESS</div>
-                <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{comp.current}%</div>
-                <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
-                  <div style={{width:`${comp.current}%`,height:"100%",background:SOC.cyan}}/>
-                </div>
-                <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {comp.target}%</div>
-              </>) : (<>
-                <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>COMPLIANCE</div>
-                <div style={{fontSize:13,fontWeight:700,color:SOC.textSec,marginTop:14}}>No framework tracked</div>
-                <div style={{fontSize:9,color:SOC.textMut,marginTop:6}}>Run an assessment to begin</div>
-              </>)}
+              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct.framework} READINESS</div>
+              <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{c.compliancePct.current}%</div>
+              <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
+                <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:SOC.cyan}}/>
+              </div>
+              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {c.compliancePct.target}%</div>
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>PLAN</div>
-              <div style={{fontSize:18,fontWeight:800,color:SOC.green,marginTop:12,textTransform:"capitalize"}}>{c.plan}</div>
-              <div style={{fontSize:9,color:SOC.textMut,marginTop:6}}>{c.openItems} open item{c.openItems===1?"":"s"}</div>
+              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>MONTHLY VALUE</div>
+              <div style={{fontSize:24,fontWeight:800,color:SOC.green,marginTop:6}}>${c.mrr.toLocaleString()}</div>
+              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.plan}</div>
             </div>
           </div>
 
@@ -7009,216 +6824,25 @@ function AnalystConsole({ user, onExit }) {
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {c.reviewQueue.map((item,i)=>{
-                    const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, changes_requested:{label:"Changes Requested",color:SOC.red}, draft:{label:"Draft",color:SOC.textMut} }[item.status] || {label:item.status,color:SOC.textMut};
-                    const busy = reviewBusy === item.id;
-                    const promptingNote = notePromptFor === item.id;
+                    const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, draft:{label:"Draft",color:SOC.textMut} }[item.status];
                     return (
-                      <div key={item.id||i} style={{background:SOC.bg,borderRadius:8,padding:"9px 11px"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          <span style={{fontSize:15}}>📄</span>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
-                            <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated ? new Date(item.generated).toLocaleDateString() : ""}</div>
-                          </div>
-                          {item.status==="awaiting_review" ? (
-                            <div style={{display:"flex",gap:6}}>
-                              <button disabled={busy} onClick={()=>{ setNotePromptFor(promptingNote?null:item.id); setReviewNote(""); }}
-                                style={{padding:"5px 10px",background:promptingNote?`${SOC.red}28`:`${SOC.red}14`,border:`1px solid ${SOC.red}44`,
-                                  borderRadius:6,color:SOC.red,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
-                                Request Changes
-                              </button>
-                              <button disabled={busy} onClick={()=>submitReviewDecision(c.id,item,"approve")}
-                                style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
-                                  borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:busy?"wait":"pointer",opacity:busy?0.6:1}}>
-                                {busy?"…":"Approve"}
-                              </button>
-                            </div>
-                          ) : (
-                            <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
-                          )}
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
+                        <span style={{fontSize:15}}>📄</span>
+                        <div style={{flex:1}}>
+                          <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
+                          <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated}</div>
                         </div>
-                        {promptingNote && (
-                          <div style={{marginTop:9,display:"flex",flexDirection:"column",gap:8}}>
-                            <textarea value={reviewNote} onChange={e=>setReviewNote(e.target.value)}
-                              placeholder="What needs to change? (the client will see this)"
-                              rows={2}
-                              style={{width:"100%",padding:"8px 10px",background:SOC.panel,border:`1px solid ${SOC.border}`,
-                                borderRadius:6,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif",resize:"vertical"}}/>
-                            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                              <button onClick={()=>{ setNotePromptFor(null); setReviewNote(""); }}
-                                style={{padding:"5px 12px",background:"transparent",border:`1px solid ${SOC.border}`,
-                                  borderRadius:6,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>Cancel</button>
-                              <button disabled={busy || !reviewNote.trim()} onClick={()=>submitReviewDecision(c.id,item,"request_changes",reviewNote.trim())}
-                                style={{padding:"5px 14px",background:reviewNote.trim()?SOC.red:`${SOC.red}44`,border:"none",
-                                  borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:reviewNote.trim()&&!busy?"pointer":"default",opacity:busy?0.6:1}}>
-                                {busy?"Sending…":"Send to Client"}
-                              </button>
-                            </div>
-                          </div>
+                        {item.status==="awaiting_review" ? (
+                          <button style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
+                            borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:"pointer"}}>Approve</button>
+                        ) : (
+                          <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
                         )}
                       </div>
                     );
                   })}
                 </div>
               )}
-            </SocPanel>
-          </div>
-
-          {/* Security Program & Deliverables — the real client work */}
-          <div style={{marginBottom:14}}>
-            <SocPanel title="Security Program & Deliverables" accent={SOC.cyan}>
-              {(() => {
-                const programs = c.programs || [];
-                const policies = c.policies || [];
-                const latest = programs[0];
-                const latestFull = latest ? programDetail[`${c.id}:${latest.id}`] : null;
-                const ro = latestFull?.sections?.riskOverview;
-                return (
-                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
-                    {/* Program summary + expand */}
-                    <div>
-                      <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,marginBottom:8}}>SECURITY PROGRAM</div>
-                      {programs.length === 0 ? (
-                        <div style={{color:SOC.textSec,fontSize:12,padding:"10px 0"}}>
-                          No program generated for this client yet.
-                        </div>
-                      ) : (
-                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                          {programs.map(pg => {
-                            const isOpen = openProgram === pg.id;
-                            const full = programDetail[`${c.id}:${pg.id}`];
-                            const fro = full?.sections?.riskOverview;
-                            return (
-                              <div key={pg.id} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:8,overflow:"hidden"}}>
-                                <div onClick={()=>{ const next = isOpen?null:pg.id; setOpenProgram(next); if(next) loadProgramDetail(c.id, pg.id); }}
-                                  style={{display:"flex",alignItems:"center",gap:10,padding:"11px 13px",cursor:"pointer"}}>
-                                  <span style={{fontSize:15}}>🛡️</span>
-                                  <div style={{flex:1}}>
-                                    <div style={{color:SOC.text,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
-                                      Security Program {pg.postureLevel ? `— ${pg.postureLevel}` : ""}
-                                      {pg.reviewStatus === "approved" && (
-                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.green}22`,color:SOC.green}}>APPROVED</span>
-                                      )}
-                                      {pg.reviewStatus === "changes_requested" && (
-                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.red}22`,color:SOC.red}}>CHANGES REQUESTED</span>
-                                      )}
-                                    </div>
-                                    <div style={{color:SOC.textMut,fontSize:9}}>
-                                      {pg.status||"complete"} · {new Date(pg.createdAt).toLocaleDateString()}
-                                    </div>
-                                  </div>
-                                  {pg.postureScore != null && (
-                                    <div style={{fontSize:18,fontWeight:800,color:pColor(pg.postureScore)}}>{pg.postureScore}</div>
-                                  )}
-                                  <span style={{color:SOC.textMut,fontSize:12}}>{isOpen?"▲":"▼"}</span>
-                                </div>
-                                {isOpen && (
-                                  <div style={{padding:"0 13px 13px",borderTop:`1px solid ${SOC.border}`}}>
-                                    {!full ? (
-                                      <div style={{color:SOC.textSec,fontSize:11,padding:"12px 0"}}>Loading program…</div>
-                                    ) : (
-                                      <div style={{display:"flex",flexDirection:"column",gap:12,paddingTop:12}}>
-                                        {fro?.executiveSummary && (
-                                          <div>
-                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:4}}>EXECUTIVE SUMMARY</div>
-                                            <div style={{fontSize:12,color:SOC.text,lineHeight:1.6}}>{fro.executiveSummary}</div>
-                                          </div>
-                                        )}
-                                        {Array.isArray(fro?.breakdown?.functions) && fro.breakdown.functions.length>0 && (
-                                          <div>
-                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:6}}>NIST FUNCTION SCORES</div>
-                                            <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                                              {fro.breakdown.functions.map((f,i)=>(
-                                                <div key={i}>
-                                                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-                                                    <span style={{color:SOC.textSec}}>{f.name}</span>
-                                                    <span style={{color:pColor(f.score),fontWeight:700}}>{f.score}</span>
-                                                  </div>
-                                                  <div style={{height:4,background:SOC.grid,borderRadius:2,overflow:"hidden"}}>
-                                                    <div style={{width:`${f.score}%`,height:"100%",background:pColor(f.score)}}/>
-                                                  </div>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )}
-                                        {Array.isArray(fro?.topThreats) && fro.topThreats.length>0 && (
-                                          <div>
-                                            <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginBottom:6}}>TOP THREATS</div>
-                                            <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                                              {fro.topThreats.map((t,i)=>(
-                                                <div key={i} style={{padding:"8px 10px",background:SOC.panelHi,borderRadius:6}}>
-                                                  <div style={{fontSize:11,color:SOC.text,fontWeight:600}}>{t.threat}</div>
-                                                  <div style={{fontSize:10,color:SOC.textMut,marginTop:2}}>
-                                                    Likelihood {t.likelihood} · Impact {t.impact}
-                                                  </div>
-                                                  {t.description && <div style={{fontSize:10,color:SOC.textSec,marginTop:3,lineHeight:1.5}}>{t.description}</div>}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Policy documents */}
-                    <div>
-                      <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,marginBottom:8}}>POLICY DOCUMENTS ({policies.length})</div>
-                      {policies.length === 0 ? (
-                        <div style={{color:SOC.textSec,fontSize:12,padding:"6px 0"}}>No policies generated yet.</div>
-                      ) : (
-                        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                          {policies.map(pol => {
-                            const isOpen = openPolicy === pol.id;
-                            const full = policyDetail[`${c.id}:${pol.id}`];
-                            return (
-                              <div key={pol.id} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:8,overflow:"hidden"}}>
-                                <div onClick={()=>{ const next = isOpen?null:pol.id; setOpenPolicy(next); if(next) loadPolicyDetail(c.id, pol.id); }}
-                                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 13px",cursor:"pointer"}}>
-                                  <span style={{fontSize:14}}>📄</span>
-                                  <div style={{flex:1}}>
-                                    <div style={{color:SOC.text,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
-                                      {pol.policyName}
-                                      {pol.reviewStatus === "approved" && (
-                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.green}22`,color:SOC.green}}>APPROVED</span>
-                                      )}
-                                      {pol.reviewStatus === "changes_requested" && (
-                                        <span style={{fontSize:8,fontWeight:700,padding:"1px 6px",borderRadius:8,background:`${SOC.red}22`,color:SOC.red}}>CHANGES REQUESTED</span>
-                                      )}
-                                    </div>
-                                    <div style={{color:SOC.textMut,fontSize:9}}>{pol.status||"draft"} · {new Date(pol.createdAt).toLocaleDateString()}</div>
-                                  </div>
-                                  <span style={{color:SOC.textMut,fontSize:12}}>{isOpen?"▲":"▼"}</span>
-                                </div>
-                                {isOpen && (
-                                  <div style={{padding:"0 13px 13px",borderTop:`1px solid ${SOC.border}`}}>
-                                    {!full ? (
-                                      <div style={{color:SOC.textSec,fontSize:11,padding:"12px 0"}}>Loading policy…</div>
-                                    ) : (
-                                      <pre style={{whiteSpace:"pre-wrap",fontFamily:"Inter,system-ui,sans-serif",
-                                        fontSize:11,color:SOC.textSec,lineHeight:1.6,margin:0,paddingTop:12,maxHeight:320,overflowY:"auto"}}>
-                                        {full.content || "(No content)"}
-                                      </pre>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
             </SocPanel>
           </div>
 
@@ -7251,64 +6875,48 @@ function AnalystConsole({ user, onExit }) {
 
             {/* Compliance progress */}
             <SocPanel title="Compliance Progress" accent={SOC.purple}>
-              {comp ? (
-                <>
-                  <div style={{textAlign:"center",padding:"6px 0"}}>
-                    <div style={{fontSize:11,color:SOC.textSec}}>{comp.framework}</div>
-                    <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{comp.current}%</div>
-                    <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
-                      <div style={{width:`${comp.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
-                    </div>
-                    <div style={{fontSize:10,color:SOC.textMut}}>
-                      {comp.target - comp.current}% to target ({comp.target}%)
-                    </div>
-                  </div>
-                  <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
-                    {comp.current >= comp.target - 10
-                      ? "On track for certification window."
-                      : "Remediation roadmap in progress."}
-                  </div>
-                </>
-              ) : (
-                <div style={{color:SOC.textSec,fontSize:11,padding:"14px 0",lineHeight:1.6,textAlign:"center"}}>
-                  No compliance framework is being tracked for this client yet.
+              <div style={{textAlign:"center",padding:"6px 0"}}>
+                <div style={{fontSize:11,color:SOC.textSec}}>{c.compliancePct.framework}</div>
+                <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
+                <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
+                  <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
                 </div>
-              )}
+                <div style={{fontSize:10,color:SOC.textMut}}>
+                  {c.compliancePct.target - c.compliancePct.current}% to target ({c.compliancePct.target}%)
+                </div>
+              </div>
+              <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
+                {c.compliancePct.current >= c.compliancePct.target - 10
+                  ? "On track for certification window."
+                  : "Remediation roadmap in progress."}
+              </div>
             </SocPanel>
 
             {/* Training program */}
             <SocPanel title="Training Program" accent={SOC.cyan}>
-              {training ? (
+              <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>{c.training.active}</div>
+              {c.training.enrolled > 0 ? (
                 <>
-                  <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>{training.active}</div>
-                  {training.enrolled > 0 ? (
-                    <>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
-                        <span>{training.enrolled} enrolled</span><span>Due {training.nextDue}</span>
-                      </div>
-                      <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
-                        <div style={{width:`${training.completion}%`,height:"100%",
-                          background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
-                      </div>
-                      <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
-                        {training.completion}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
-                      No active program. Deploy a tailored awareness campaign for this client.
-                    </div>
-                  )}
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
+                    <span>{c.training.enrolled} enrolled</span><span>Due {c.training.nextDue}</span>
+                  </div>
+                  <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
+                    <div style={{width:`${c.training.completion}%`,height:"100%",
+                      background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
+                  </div>
+                  <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
+                    {c.training.completion}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
+                  </div>
                 </>
               ) : (
-                <div style={{color:SOC.textSec,fontSize:11,padding:"14px 0",lineHeight:1.6,textAlign:"center"}}>
-                  No training program for this client yet.
+                <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
+                  No active program. Deploy a tailored awareness campaign for this client.
                 </div>
               )}
               <button onClick={()=>setTrainingClient(c)} style={{marginTop:10,width:"100%",padding:"8px",
                 background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,borderRadius:7,
                 color:SOC.cyan,fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                {training?.enrolled>0?"Manage Training":"Build Training Program"} →
+                {c.training.enrolled>0?"Manage Training":"Build Training Program"} →
               </button>
             </SocPanel>
           </div>
@@ -7332,36 +6940,11 @@ function AnalystConsole({ user, onExit }) {
       <Mastermind/>
       <div style={{maxWidth:1180,margin:"0 auto",padding:"20px"}}>
 
-        {portfolioLoading && portfolio === null && (
-          <div style={{padding:"60px 0",textAlign:"center",color:SOC.textSec,fontSize:13}}>
-            Loading your client portfolio…
-          </div>
-        )}
-        {portfolioError && (
-          <div style={{padding:"16px",marginBottom:16,background:`${SOC.red}12`,
-            border:`1px solid ${SOC.red}44`,borderRadius:10,color:SOC.red,fontSize:12}}>
-            {portfolioError}
-            <button onClick={loadPortfolio} style={{marginLeft:12,padding:"4px 12px",
-              background:`${SOC.red}22`,border:`1px solid ${SOC.red}55`,borderRadius:6,
-              color:SOC.red,fontSize:11,fontWeight:600,cursor:"pointer"}}>Retry</button>
-          </div>
-        )}
-        {portfolio !== null && !portfolioError && clients.length === 0 && (
-          <div style={{padding:"60px 20px",textAlign:"center"}}>
-            <div style={{fontSize:15,fontWeight:700,color:SOC.text,marginBottom:8}}>No clients assigned yet</div>
-            <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.7,maxWidth:440,margin:"0 auto"}}>
-              Clients you're assigned to will appear here with their live posture, agent health,
-              alerts, and review queue. An admin can assign clients from the Admin panel.
-            </div>
-          </div>
-        )}
-        {portfolio !== null && clients.length > 0 && (<>
-
         {/* KPI row */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:18}}>
           {[
             { label:"Active Clients", value:clients.length, color:SOC.cyan },
-            { label:"Open Items", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
+            { label:"Monthly Recurring", value:`$${(totalMRR/1000).toFixed(1)}k`, color:SOC.green },
             { label:"Avg Posture", value:avgPosture, color:pColor(avgPosture) },
             { label:"Agents Online", value:`${agentsOnline}/${clients.length}`, color:SOC.blue },
             { label:"Pending Reviews", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
@@ -7405,7 +6988,7 @@ function AnalystConsole({ user, onExit }) {
                 const pend = c.reviewQueue.filter(r=>r.status==="awaiting_review").length;
                 const highA = c.alerts.filter(a=>a.sev==="high").length;
                 return (
-                  <div key={c.id} onClick={()=>{loadClientDetail(c.id);setActive(c);setView("client");}}
+                  <div key={c.id} onClick={()=>{setActive(c);setView("client");}}
                     style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,
                       padding:"13px 15px",cursor:"pointer",display:"flex",alignItems:"center",gap:13}}>
                     <div style={{width:46,height:46,borderRadius:"50%",flexShrink:0,
@@ -7433,8 +7016,8 @@ function AnalystConsole({ user, onExit }) {
                       </div>
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{color:SOC.text,fontWeight:700,fontSize:14,textTransform:"capitalize"}}>{c.plan}</div>
-                      <div style={{color:SOC.textMut,fontSize:9,marginTop:2}}>{c.openItems} open</div>
+                      <div style={{color:SOC.green,fontWeight:700,fontSize:14}}>${c.mrr.toLocaleString()}</div>
+                      <div style={{color:SOC.textMut,fontSize:9,marginTop:2}}>per month</div>
                     </div>
                   </div>
                 );
@@ -7528,10 +7111,9 @@ function AnalystConsole({ user, onExit }) {
         <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
           border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
           <span style={{color:SOC.textSec,fontSize:11}}>
-            Click any client to open their full command center.
+            Vision mockup with representative data. Click any client to open their full command center.
           </span>
         </div>
-        </>)}
       </div>
     </div>
   );
@@ -8948,6 +8530,237 @@ function AdminCveExposure({ userId }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  COMPLIANCE WORKSPACE — click framework → controls → detail
+//  Hybrid status (agent-measured + client-attested) + on-demand AI remediation.
+// ─────────────────────────────────────────────────────────────
+function ComplianceWorkspace({ onClose }) {
+  const [frameworks, setFrameworks] = useState(null);
+  const [fw, setFw] = useState(null);           // selected framework status view
+  const [loading, setLoading] = useState(true);
+  const [control, setControl] = useState(null); // selected control (detail)
+  const [remediation, setRemediation] = useState(null);
+  const [remLoading, setRemLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const STATUS_META = {
+    met:     { label:"Met",       color:C.green },
+    partial: { label:"Partial",   color:C.amber },
+    not_met: { label:"Not Met",   color:C.red },
+    unknown: { label:"Not Assessed", color:C.textMut },
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await authFetch(`${API_BASE}/api/frameworks`);
+        if (r.ok) setFrameworks((await r.json()).frameworks || []);
+      } catch { /* ignore */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  async function openFramework(id) {
+    setLoading(true); setControl(null); setRemediation(null);
+    try {
+      const r = await authFetch(`${API_BASE}/api/compliance/${id}/status`);
+      if (r.ok) setFw(await r.json());
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }
+
+  async function attest(status) {
+    if (!fw || !control) return;
+    setSaving(true);
+    try {
+      const r = await authFetch(`${API_BASE}/api/compliance/${fw.id}/control/${control.id}/status`, {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (r.ok) {
+        await openFramework(fw.id);
+        setControl({ ...control, status, source:"client" });
+      }
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  }
+
+  async function getRemediation() {
+    if (!fw || !control) return;
+    setRemLoading(true); setRemediation(null);
+    try {
+      const r = await authFetch(`${API_BASE}/api/compliance/${fw.id}/control/${control.id}/remediation`, {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body:"{}",
+      });
+      if (r.ok) setRemediation((await r.json()).remediation);
+      else setRemediation({ error:true });
+    } catch { setRemediation({ error:true }); }
+    finally { setRemLoading(false); }
+  }
+
+  const badge = (status) => {
+    const m = STATUS_META[status] || STATUS_META.unknown;
+    return <span style={{padding:"2px 9px",borderRadius:20,fontSize:10.5,fontWeight:700,
+      background:`${m.color}18`,border:`1px solid ${m.color}55`,color:m.color}}>{m.label}</span>;
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:740,width:"100%",padding:"24px 26px",maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+          <div style={{color:C.text,fontSize:18,fontWeight:700}}>✓ Compliance Workspace</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.textMut,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+
+        {/* Breadcrumb */}
+        <div style={{fontSize:12,color:C.textMut,marginBottom:16}}>
+          <span style={{cursor:"pointer",color:fw?C.accent:C.textMut}} onClick={()=>{setFw(null);setControl(null);}}>Frameworks</span>
+          {fw && <> › <span style={{cursor:"pointer",color:control?C.accent:C.textMut}} onClick={()=>setControl(null)}>{fw.name}</span></>}
+          {control && <> › <span>{control.id}</span></>}
+        </div>
+
+        {loading && <div style={{color:C.textMut,fontSize:13}}>Loading…</div>}
+
+        {/* View 1: framework list */}
+        {!loading && !fw && (
+          frameworks && frameworks.length > 0 ? (
+            <div style={{display:"grid",gap:10}}>
+              {frameworks.map(f => (
+                <div key={f.id} onClick={()=>openFramework(f.id)}
+                  style={{cursor:"pointer",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:10,padding:"14px 16px"}}>
+                  <div style={{color:C.text,fontSize:15,fontWeight:700}}>{f.name}</div>
+                  {f.description && <div style={{color:C.textSec,fontSize:12,margin:"3px 0 6px",lineHeight:1.4}}>{f.description}</div>}
+                  <div style={{color:C.textMut,fontSize:11.5}}>{f.controlCount} control{f.controlCount===1?"":"s"} · click to assess</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{color:C.textSec,fontSize:13,lineHeight:1.6,background:C.surface,borderRadius:8,padding:"14px 16px"}}>
+              No frameworks are available yet. An administrator can add a compliance framework (with its controls) for you to work through here.
+            </div>
+          )
+        )}
+
+        {/* View 2: control list with statuses */}
+        {!loading && fw && !control && (
+          <>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,
+              background:C.surface,borderRadius:10,padding:"14px 16px"}}>
+              <div style={{fontSize:30,fontWeight:800,color:fw.compliancePct>=80?C.green:fw.compliancePct>=50?C.amber:C.red}}>
+                {fw.compliancePct}%
+              </div>
+              <div>
+                <div style={{color:C.text,fontSize:13,fontWeight:600}}>Overall compliance</div>
+                <div style={{color:C.textMut,fontSize:11.5}}>
+                  {(fw.counts.met||0)} met · {(fw.counts.partial||0)} partial · {(fw.counts.not_met||0)} not met · {(fw.counts.unknown||0)} not assessed
+                </div>
+              </div>
+            </div>
+            <div style={{color:C.textMut,fontSize:11,marginBottom:10,lineHeight:1.5}}>
+              Controls the monitoring agent can measure are filled in automatically. Click any control to assess it and get remediation guidance.
+            </div>
+            <div style={{display:"grid",gap:8}}>
+              {fw.controls.map(c => (
+                <div key={c.id} onClick={()=>{setControl(c);setRemediation(null);}}
+                  style={{cursor:"pointer",display:"flex",alignItems:"center",gap:10,
+                    background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                  <span style={{color:C.textMut,fontSize:11,fontWeight:700,minWidth:44}}>{c.id}</span>
+                  <span style={{color:C.text,fontSize:12.5,flex:1,lineHeight:1.4}}>{c.title}</span>
+                  {c.source==="agent" && <span title="Measured by agent" style={{fontSize:10}}>📡</span>}
+                  {badge(c.status)}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* View 3: control detail */}
+        {!loading && fw && control && (
+          <>
+            <div style={{background:C.surface,borderRadius:10,padding:"16px",marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8}}>
+                <span style={{color:C.textMut,fontSize:12,fontWeight:700}}>{control.id}{control.category?` · ${control.category}`:""}</span>
+                {badge(control.status)}
+              </div>
+              <div style={{color:C.text,fontSize:14,fontWeight:600,lineHeight:1.4,marginBottom:6}}>{control.title}</div>
+              {control.description && <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.5}}>{control.description}</div>}
+              {control.source==="agent" && (
+                <div style={{color:C.accent,fontSize:11,marginTop:8}}>
+                  📡 Measured by your monitoring agent{control.note?`: ${control.note}`:""}. {control.agentSuggests && control.agentSuggests!==control.status ? `(Agent suggests: ${STATUS_META[control.agentSuggests]?.label}.)` : ""}
+                </div>
+              )}
+            </div>
+
+            {/* Attestation */}
+            <div style={{marginBottom:16}}>
+              <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Your assessment</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {["met","partial","not_met"].map(s => (
+                  <button key={s} onClick={()=>attest(s)} disabled={saving}
+                    style={{padding:"7px 13px",borderRadius:8,fontSize:12,fontWeight:600,
+                      cursor:saving?"default":"pointer",
+                      background: control.status===s ? `${STATUS_META[s].color}22` : "transparent",
+                      border:`1px solid ${control.status===s ? STATUS_META[s].color : C.border}`,
+                      color: control.status===s ? STATUS_META[s].color : C.textSec}}>
+                    {STATUS_META[s].label}
+                  </button>
+                ))}
+              </div>
+              <div style={{color:C.textMut,fontSize:10.5,marginTop:6,lineHeight:1.4}}>
+                You attest to the status based on your environment. {control.source==="agent" && "Overriding a measured value records your judgment but keeps the agent's reading visible."}
+              </div>
+            </div>
+
+            {/* On-demand remediation */}
+            {control.status !== "met" && (
+              <div>
+                <button onClick={getRemediation} disabled={remLoading}
+                  style={{padding:"9px 16px",borderRadius:8,fontSize:12.5,fontWeight:700,border:"none",
+                    cursor:remLoading?"default":"pointer",color:C.bg,
+                    background:`linear-gradient(135deg,${C.accent},${C.accentDm})`}}>
+                  {remLoading ? "Generating guidance…" : "✎ How do I fix this?"}
+                </button>
+
+                {remediation && !remediation.error && (
+                  <div style={{marginTop:14,background:C.surface,borderRadius:10,padding:"16px"}}>
+                    {remediation.summary && <div style={{color:C.text,fontSize:12.5,lineHeight:1.5,marginBottom:12}}>{remediation.summary}</div>}
+                    {(remediation.steps||[]).map((s,i)=>(
+                      <div key={i} style={{display:"flex",gap:10,marginBottom:10}}>
+                        <span style={{color:C.accent,fontWeight:700,fontSize:12}}>{i+1}</span>
+                        <div>
+                          <div style={{color:C.text,fontSize:12.5,fontWeight:600}}>{s.action} {s.effort && <span style={{color:C.textMut,fontWeight:400}}>· {s.effort} effort</span>}</div>
+                          {s.how && <div style={{color:C.textSec,fontSize:12,lineHeight:1.5,marginTop:2}}>{s.how}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    {remediation.evidence && (
+                      <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+                        <span style={{color:C.textSec,fontSize:11.5,fontWeight:600}}>Evidence to keep: </span>
+                        <span style={{color:C.textMut,fontSize:11.5}}>{remediation.evidence}</span>
+                      </div>
+                    )}
+                    {remediation.commonPitfalls && (
+                      <div style={{color:C.textMut,fontSize:11,marginTop:6,fontStyle:"italic"}}>⚠ {remediation.commonPitfalls}</div>
+                    )}
+                    <div style={{color:C.textMut,fontSize:10,marginTop:10}}>AI-generated guidance — review for your specific environment.</div>
+                  </div>
+                )}
+                {remediation && remediation.error && (
+                  <div style={{marginTop:12,color:C.amber,fontSize:12}}>Couldn't generate guidance right now. Please try again.</div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  THREAT INTELLIGENCE — reference databases + live CVE exposure
 // ─────────────────────────────────────────────────────────────
 function ThreatIntelPanel({ onClose }) {
@@ -9206,6 +9019,7 @@ export default function ShieldAI() {
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
   const [showThreatIntel, setShowThreatIntel] = useState(false);
+  const [showCompliance, setShowCompliance] = useState(false);
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
@@ -9393,7 +9207,7 @@ export default function ShieldAI() {
 
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
-    return <ErrorBoundary onExit={() => setShowAnalyst(false)}><AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/></ErrorBoundary>;
+    return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
   }
 
   // Top bar showing the logged-in company + sign out
@@ -9428,6 +9242,9 @@ export default function ShieldAI() {
     )}
     {showThreatIntel && (
       <ThreatIntelPanel onClose={() => setShowThreatIntel(false)}/>
+    )}
+    {showCompliance && (
+      <ComplianceWorkspace onClose={() => setShowCompliance(false)}/>
     )}
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
@@ -9469,6 +9286,12 @@ export default function ShieldAI() {
             border:`1px solid ${C.amber}55`,borderRadius:6,
             color:C.amber,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🛡️ Threat Intel
+        </button>
+        <button onClick={() => setShowCompliance(true)}
+          style={{padding:"5px 12px",background:`${C.accent}18`,
+            border:`1px solid ${C.accent}55`,borderRadius:6,
+            color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          ✓ Compliance
         </button>
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermind")
