@@ -1,92 +1,166 @@
 // aiProviders.js
-// Registry + routes for additional AI providers.
+// Unified AI provider layer for ShieldAI.
 //
-// ShieldAI currently runs on Anthropic (Claude) for all live generation.
-// Gemini, ChatGPT (OpenAI), and Perplexity are SCAFFOLDED but INACTIVE — the
-// routes exist so the surface is stable and discoverable, but they do not call
-// any external API and cannot be enabled by accident. Each returns a clear
-// "not yet available" response.
+// One entry point — callAI({ provider, system, messages, max_tokens }) — that
+// dispatches to Claude (Anthropic), Gemini (Google), or GPT (OpenAI), each
+// with its own request/response shape absorbed here so the rest of the app
+// stays provider-agnostic.
 //
-// Activating a provider later is deliberate and explicit: implement its call
-// function, set its env key, and flip `active: true` in the registry (guarded
-// by the presence of the key). Nothing here fabricates a response or silently
-// falls back to another provider.
+// FALLBACK POLICY (by design): if a requested provider has no API key, or its
+// call fails for any reason, we SILENTLY fall back to Claude. The app must
+// keep working end-to-end regardless of which third-party keys are present.
+// Claude itself has no fallback — if Claude is unconfigured, that's a real
+// error the caller must handle.
+//
+// Keys (from .env):
+//   ANTHROPIC_API_KEY   (required — the fallback + default engine)
+//   GEMINI_API_KEY      (optional — enables real Gemini)
+//   OPENAI_API_KEY      (optional — enables real GPT)
 
-export const AI_PROVIDERS = {
-  anthropic: {
-    id: "anthropic",
-    name: "Claude (Anthropic)",
-    active: true,                 // the only live provider today
-    role: "Primary — assessment intake, program generation, Mastermind",
-    envKey: "ANTHROPIC_API_KEY",
-  },
-  gemini: {
-    id: "gemini",
-    name: "Gemini (Google)",
-    active: false,                // scaffolded, not serviced yet
-    role: "Planned — threat-intel summarization",
-    envKey: "GEMINI_API_KEY",
-  },
-  chatgpt: {
-    id: "chatgpt",
-    name: "ChatGPT (OpenAI)",
-    active: false,                // scaffolded, not serviced yet
-    role: "Planned — report drafting",
-    envKey: "OPENAI_API_KEY",
-  },
-  perplexity: {
-    id: "perplexity",
-    name: "Perplexity",
-    active: false,                // scaffolded, not serviced yet
-    role: "Planned — live research / citations",
-    envKey: "PERPLEXITY_API_KEY",
-  },
-};
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+const GEMINI_MODEL    = process.env.GEMINI_MODEL    || "gemini-2.0-flash";
+const OPENAI_MODEL    = process.env.OPENAI_MODEL    || "gpt-4o";
 
-// A provider counts as available only if it's explicitly marked active AND its
-// key is present. This double gate means flipping `active: true` alone won't
-// expose a broken integration — the key must also be configured.
-export function providerAvailable(id) {
-  const p = AI_PROVIDERS[id];
-  if (!p || !p.active) return false;
-  return !!process.env[p.envKey];
+// Normalize a provider id from either the frontend labels (claude/gemini/gpt4)
+// or common aliases, to one of: "claude" | "gemini" | "openai".
+export function normalizeProvider(p) {
+  const v = String(p || "").toLowerCase();
+  if (v === "gemini" || v === "google") return "gemini";
+  if (v === "gpt" || v === "gpt4" || v === "gpt-4o" || v === "openai" || v === "chatgpt") return "openai";
+  return "claude";
 }
 
-// Public-facing status (never leaks key values — only whether one is present).
+// Which providers are actually usable right now (key present).
 export function providerStatus() {
-  return Object.values(AI_PROVIDERS).map(p => ({
-    id: p.id,
-    name: p.name,
-    role: p.role,
-    active: p.active,
-    available: providerAvailable(p.id),
-    status: !p.active ? "coming_soon" : (providerAvailable(p.id) ? "active" : "needs_configuration"),
-  }));
+  return {
+    claude: { configured: !!process.env.ANTHROPIC_API_KEY, model: ANTHROPIC_MODEL },
+    gemini: { configured: !!process.env.GEMINI_API_KEY,    model: GEMINI_MODEL },
+    openai: { configured: !!process.env.OPENAI_API_KEY,    model: OPENAI_MODEL },
+  };
 }
 
-export function registerAiProviderRoutes(app, { requireAuth }) {
-  // Status of all providers — for a settings/admin "AI integrations" view.
-  app.get("/api/ai/providers", requireAuth, (req, res) => {
-    res.json({ providers: providerStatus() });
-  });
+// ── Anthropic (Claude) ──────────────────────────────────────────
+async function callClaudeRaw({ system, messages, max_tokens = 1500 }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  // Inactive provider endpoints. They intentionally do NOT call any external
-  // API. Each returns 503 with a clear, honest message so the frontend can show
-  // "coming soon" instead of appearing wired up.
-  function inactiveHandler(id) {
-    return (req, res) => {
-      const p = AI_PROVIDERS[id];
-      res.status(503).json({
-        provider: id,
-        active: false,
-        error: `${p ? p.name : id} is not available yet. This integration is planned but not currently serviced.`,
-        status: "coming_soon",
-      });
-    };
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens, system, messages }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Anthropic API error ${res.status}: ${body}`);
+  }
+  const data = await res.json();
+  return data?.content?.map(c => c.text || "").join("") || "";
+}
+
+// ── Google (Gemini) ─────────────────────────────────────────────
+// Gemini uses: system in `systemInstruction`, user/assistant turns as
+// `contents` with role "user"/"model", API key in the URL query param.
+async function callGeminiRaw({ system, messages, max_tokens = 1500 }) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set");
+
+  const contents = (messages || []).map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: String(m.content || "") }],
+  }));
+
+  const body = {
+    contents,
+    generationConfig: { maxOutputTokens: max_tokens },
+  };
+  if (system) body.systemInstruction = { parts: [{ text: String(system) }] };
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Gemini API error ${res.status}: ${errBody}`);
+  }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map(p => p.text || "").join("") || "";
+}
+
+// ── OpenAI (GPT) ────────────────────────────────────────────────
+// OpenAI uses: system as the first message with role "system",
+// Authorization: Bearer header, text at choices[0].message.content.
+async function callOpenAIRaw({ system, messages, max_tokens = 1500 }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not set");
+
+  const msgs = [];
+  if (system) msgs.push({ role: "system", content: String(system) });
+  for (const m of messages || []) {
+    msgs.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || ""),
+    });
   }
 
-  // Scaffolded routes — present but inactive.
-  app.post("/api/ai/gemini", requireAuth, inactiveHandler("gemini"));
-  app.post("/api/ai/chatgpt", requireAuth, inactiveHandler("chatgpt"));
-  app.post("/api/ai/perplexity", requireAuth, inactiveHandler("perplexity"));
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ model: OPENAI_MODEL, max_tokens, messages: msgs }),
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`OpenAI API error ${res.status}: ${errBody}`);
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content || "";
+}
+
+// ── Unified entry point ─────────────────────────────────────────
+// Returns { text, provider, fallback } where `provider` is the engine that
+// actually answered and `fallback` is true if we fell back to Claude.
+export async function callAI({ provider, system, messages, max_tokens = 1500 }) {
+  const want = normalizeProvider(provider);
+
+  // Claude path (also the fallback target).
+  if (want === "claude") {
+    const text = await callClaudeRaw({ system, messages, max_tokens });
+    return { text, provider: "claude", fallback: false };
+  }
+
+  const runner = want === "gemini" ? callGeminiRaw : callOpenAIRaw;
+  const keyPresent = want === "gemini" ? !!process.env.GEMINI_API_KEY : !!process.env.OPENAI_API_KEY;
+
+  // No key → silent fallback to Claude (by design).
+  if (!keyPresent) {
+    const text = await callClaudeRaw({ system, messages, max_tokens });
+    return { text, provider: "claude", fallback: true };
+  }
+
+  // Key present → try the real provider; on ANY failure, silently fall back.
+  try {
+    const text = await runner({ system, messages, max_tokens });
+    return { text, provider: want, fallback: false };
+  } catch (err) {
+    console.warn(`[aiProviders] ${want} failed, falling back to Claude: ${err.message}`);
+    const text = await callClaudeRaw({ system, messages, max_tokens });
+    return { text, provider: "claude", fallback: true };
+  }
+}
+
+// Convenience: text-only, provider-agnostic. Drop-in for callClaudeText but
+// with an optional provider. Defaults to Claude when no provider given.
+export async function callAIText({ provider, system, messages, max_tokens }) {
+  const { text } = await callAI({ provider, system, messages, max_tokens });
+  return text;
 }
