@@ -34,18 +34,22 @@ export const TIERS = {
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
     },
+    // What the client-facing Mastermind may see/answer about at this tier.
+    // Mirrors the services the tier unlocks — the assistant's knowledge is
+    // scoped to features the client actually has. null = no Mastermind.
+    mastermindScope: null,
     features: ["Security assessment only", "Upgrade to unlock programs, policies & monitoring"],
   },
   starter: {
     id: "starter",
-    name: "Self-Serve",
+    name: "Starter",
     rank: 1,
-    priceCents: 12900,              // $129/mo — plan's Self-Serve tier
+    priceCents: 9900,               // $99/mo  (your "Tier 1")
     interval: "month",
     stripePriceId: null,
-    description: "Automated assessment, NIST posture score, full program, and policy generation — no human time.",
+    description: "Multiple assessments, programs, up to 6 policies, and a training program. Monitor up to 15 endpoints.",
     limits: {
-      endpoints: 5,
+      endpoints: 15,
       policies: 6,
       programs: null,               // multiple
       trainingPrograms: 1,
@@ -57,22 +61,37 @@ export const TIERS = {
       createPolicies: true,         // capped at 6 via limits
       trainingPrograms: true,
       downloadExports: false,       // no downloads at this tier
-      endpoints: true,              // up to 5
+      endpoints: true,              // up to 15
       analystSupport: false,
-      mastermind: false,
+      mastermind: true,             // basic Q&A, scoped to Starter services
     },
-    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Training program", "5 endpoints", "No downloads"],
+    // Starter Mastermind: help with the things Starter unlocks — assessments,
+    // programs, policies, training — plus a light view of their few endpoints.
+    // No recommendation-lifecycle or analyst context (those are higher tiers).
+    mastermindScope: {
+      level: "basic",
+      assessments: true,
+      programs: true,
+      policies: true,
+      training: true,
+      endpoints: "summary",         // posture summary only, no per-check detail
+      events: false,
+      recommendations: false,
+      historyTurns: 8,
+      maxTokens: 900,
+    },
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Training program", "15 endpoints", "Basic Mastermind Q&A", "No downloads"],
   },
   pro: {
     id: "pro",
-    name: "Guided",
+    name: "Pro",
     rank: 2,
-    priceCents: 59900,              // $599/mo — plan's Guided tier
+    priceCents: 29900,              // $299/mo  (your "Tier 2")
     interval: "month",
     stripePriceId: null,
-    description: "Self-serve plus periodic engineer review, compliance tracking, check-ins, and downloads.",
+    description: "All functions with downloads, up to 50 endpoints, and limited engineer support.",
     limits: {
-      endpoints: 25,
+      endpoints: 50,
       policies: 10,
       programs: null,
       trainingPrograms: null,
@@ -84,20 +103,35 @@ export const TIERS = {
       createPolicies: true,
       trainingPrograms: true,
       downloadExports: true,        // full downloads/exports
-      endpoints: true,              // up to 25
+      endpoints: true,              // up to 50
       analystSupport: true,         // limited
-      mastermind: false,
+      mastermind: true,             // fuller Q&A, scoped to Pro services
     },
-    features: ["Everything in Self-Serve", "Periodic engineer review", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints", "Compliance tracking"],
+    // Pro Mastermind: everything Starter sees, plus full per-endpoint posture
+    // detail, security events, and the recommendation lifecycle (since Pro has
+    // downloads, more endpoints, and limited analyst support to act on advice).
+    mastermindScope: {
+      level: "standard",
+      assessments: true,
+      programs: true,
+      policies: true,
+      training: true,
+      endpoints: "detailed",        // per-check detail
+      events: true,
+      recommendations: true,
+      historyTurns: 12,
+      maxTokens: 1200,
+    },
+    features: ["All functions", "Up to 10 policies", "Downloads & exports", "Up to 50 endpoints", "Standard Mastermind Q&A", "Limited engineer support"],
   },
   enterprise: {
     id: "enterprise",
-    name: "Managed vCISO",
+    name: "Enterprise",
     rank: 3,
-    priceCents: 195000,            // $1,950/mo — plan's Managed vCISO tier
+    priceCents: null,              // custom / contact sales  (your "Tier 3")
     interval: "month",
     stripePriceId: null,
-    description: "A ShieldAI engineer runs your security program end-to-end, with unlimited endpoints, full agent access, Mastermind Q&A, and full engineer support.",
+    description: "Everything, unlimited endpoints, full agent access, limited Mastermind Q&A, and full engineer support.",
     limits: {
       endpoints: null,
       policies: null,
@@ -113,9 +147,24 @@ export const TIERS = {
       downloadExports: true,
       endpoints: true,              // unlimited
       analystSupport: true,         // full
-      mastermind: true,             // limited client-facing Q&A
+      mastermind: true,             // full client-facing Q&A
     },
-    features: ["Everything in Guided", "Engineer-run program", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+    // Enterprise Mastermind: full scope over all of the client's own data,
+    // including endpoint detail, events, recommendations, and the longest
+    // conversation memory. Still strictly isolated to this client.
+    mastermindScope: {
+      level: "full",
+      assessments: true,
+      programs: true,
+      policies: true,
+      training: true,
+      endpoints: "detailed",
+      events: true,
+      recommendations: true,
+      historyTurns: 16,
+      maxTokens: 1500,
+    },
+    features: ["Everything in Pro", "Unlimited endpoints", "Full agent access", "Full Mastermind Q&A", "Full engineer support"],
   },
 };
 
@@ -131,6 +180,12 @@ export function getTier(tierId) {
 // Does this tier have a given capability? Unknown capability → false (deny by default).
 export function hasCapability(tierId, capability) {
   return !!getTier(tierId).capabilities?.[capability];
+}
+
+// The client-facing Mastermind scope for a tier, or null if it has none.
+// Controls what data the assistant may see and how much it can answer about.
+export function mastermindScope(tierId) {
+  return getTier(tierId).mastermindScope || null;
 }
 
 // Is a given count within the tier's limit for a resource? null limit = unlimited.
