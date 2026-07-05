@@ -5,6 +5,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 import db from "./db.js";
 import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
@@ -46,6 +49,11 @@ app.use((req, res, next) => {
 });
 
 const progressStore = {};
+
+// Lightweight liveness probe for Railway's healthcheck. No auth, no DB work.
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
 
 // ─────────────────────────────────────────────────────────────
 //  CLAUDE CORE
@@ -1025,6 +1033,31 @@ registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
+
+// ─────────────────────────────────────────────────────────────
+//  STATIC FRONTEND (serve the built React app from ./dist)
+//  Must come AFTER all /api routes so it never shadows them.
+//  The SPA fallback returns index.html for any non-API GET so
+//  client-side routing works on deep links / refreshes.
+// ─────────────────────────────────────────────────────────────
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = path.join(__dirname, "dist");
+
+if (existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+
+  // SPA fallback: any GET that isn't an API call gets the app shell.
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(DIST_DIR, "index.html"));
+  });
+  console.log(`Serving frontend from ${DIST_DIR}`);
+} else {
+  console.warn(`⚠️  No dist/ build found at ${DIST_DIR} — frontend will not be served. Run "npm run build".`);
+  // Friendly root response instead of Express's default "Cannot GET /".
+  app.get("/", (req, res) => {
+    res.status(503).send("ShieldAI backend is running, but the frontend build (dist/) is missing. Run the build step.");
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 const server = app.listen(PORT, "0.0.0.0", () => {
