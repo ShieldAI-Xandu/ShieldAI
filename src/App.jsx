@@ -4491,6 +4491,7 @@ function AdminPanel({ onClose }) {
             { id:"assignments", label:"Assignments" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
+            { id:"frameworks", label:"Frameworks" },
             { id:"ai", label:"AI Integrations" },
           ].map(t => {
             const on = listTab === t.id;
@@ -4753,6 +4754,7 @@ function AdminPanel({ onClose }) {
           </div>
         )}
 
+        {listTab === "frameworks" && <FrameworkEditor />}
         {listTab === "ai" && <AiIntegrations />}
 
         {listTab === "assignments" && (
@@ -8281,6 +8283,192 @@ function PlanPanel({ user, usage, loading, onClose, onTierChanged }) {
 //  Shows which models are live vs. planned. Honest by construction:
 //  status comes from the backend registry, not hardcoded claims.
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  FRAMEWORK EDITOR (admin) — create/edit/delete compliance frameworks
+//  and their controls. Frameworks appear in the client Compliance Workspace.
+// ─────────────────────────────────────────────────────────────
+function FrameworkEditor() {
+  const [frameworks, setFrameworks] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);   // framework being edited, or {new:true}
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [bulk, setBulk] = useState("");            // controls as text
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await authFetch(`${API_BASE}/api/frameworks`);
+      if (r.ok) setFrameworks((await r.json()).frameworks || []);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  // Parse the bulk textarea into control objects. Each non-empty line is one
+  // control. Supported formats (pipe-separated, fields optional after title):
+  //   ID | Title | Category | Description
+  //   Title                         (id auto-assigned)
+  function parseControls(text) {
+    return text.split("\n").map(l => l.trim()).filter(Boolean).map((line, i) => {
+      const parts = line.split("|").map(p => p.trim());
+      if (parts.length === 1) return { title: parts[0] };
+      return { id: parts[0] || undefined, title: parts[1] || "", category: parts[2] || "", description: parts[3] || "" };
+    }).filter(c => c.title);
+  }
+
+  // Serialize controls back into the bulk text format for editing.
+  function controlsToText(controls) {
+    return (controls || []).map(c =>
+      [c.id, c.title, c.category, c.description].map(x => x || "").join(" | ").replace(/(\s\|\s)+$/,"")
+    ).join("\n");
+  }
+
+  async function openEdit(fw) {
+    setError("");
+    if (fw) {
+      // fetch full framework (list view omits controls)
+      try {
+        const r = await authFetch(`${API_BASE}/api/frameworks/${fw.id}`);
+        const full = r.ok ? (await r.json()).framework : fw;
+        setEditing(full);
+        setName(full.name || "");
+        setDescription(full.description || "");
+        setBulk(controlsToText(full.controls));
+      } catch { setEditing(fw); setName(fw.name||""); setDescription(fw.description||""); setBulk(""); }
+    } else {
+      setEditing({ new:true });
+      setName(""); setDescription(""); setBulk("");
+    }
+  }
+
+  async function save() {
+    setError("");
+    if (!name.trim()) { setError("Framework name is required."); return; }
+    setSaving(true);
+    try {
+      const body = {
+        ...(editing && editing.id ? { id: editing.id } : {}),
+        name: name.trim(), description: description.trim(),
+        controls: parseControls(bulk),
+      };
+      const r = await authFetch(`${API_BASE}/api/frameworks`, {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body),
+      });
+      if (r.ok) { setEditing(null); await load(); }
+      else { const d = await r.json().catch(()=>({})); setError(d.error || "Could not save."); }
+    } catch { setError("Could not save."); }
+    finally { setSaving(false); }
+  }
+
+  async function remove(fw) {
+    if (!window.confirm(`Delete "${fw.name}"? Clients will no longer see it in the Compliance Workspace.`)) return;
+    try {
+      const r = await authFetch(`${API_BASE}/api/frameworks/${fw.id}`, { method:"DELETE" });
+      if (r.ok) await load();
+    } catch { /* ignore */ }
+  }
+
+  const previewCount = parseControls(bulk).length;
+
+  // ── Edit / create form ──
+  if (editing) {
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+          <SectionLabel text={editing.new ? "New Framework" : "Edit Framework"}/>
+          <button onClick={()=>setEditing(null)} style={{marginLeft:"auto",padding:"5px 12px",
+            borderRadius:6,background:"none",border:`1px solid ${C.border}`,color:C.textMut,fontSize:12,cursor:"pointer"}}>← Back</button>
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <label style={{color:C.textSec,fontSize:12,fontWeight:600,display:"block",marginBottom:5}}>Framework name</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. SOC 2, HIPAA Security Rule, ISO 27001"
+            style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <label style={{color:C.textSec,fontSize:12,fontWeight:600,display:"block",marginBottom:5}}>Description <span style={{color:C.textMut,fontWeight:400}}>(optional)</span></label>
+          <input value={description} onChange={e=>setDescription(e.target.value)} placeholder="What this framework covers"
+            style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+        </div>
+
+        <div style={{marginBottom:8}}>
+          <label style={{color:C.textSec,fontSize:12,fontWeight:600,display:"block",marginBottom:5}}>
+            Controls <span style={{color:C.textMut,fontWeight:400}}>· one per line</span>
+          </label>
+          <div style={{color:C.textMut,fontSize:11,lineHeight:1.5,marginBottom:8}}>
+            Format: <code style={{color:C.accent}}>ID | Title | Category | Description</code> — only the title is required.
+            Example:<br/>
+            <code style={{color:C.textSec}}>CC6.1 | Host firewall enabled | Protect | Firewalls active on all endpoints</code><br/>
+            <code style={{color:C.textSec}}>Data at rest is encrypted</code>
+          </div>
+          <textarea value={bulk} onChange={e=>setBulk(e.target.value)} rows={12}
+            placeholder="CC6.1 | Host firewall enabled | Protect&#10;CC6.7 | Data at rest is encrypted | Protect&#10;CC1.1 | Board reviews security policy annually | Governance"
+            style={{width:"100%",padding:"11px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:12.5,fontFamily:"monospace",lineHeight:1.6,
+              boxSizing:"border-box",resize:"vertical"}}/>
+          <div style={{color:C.textMut,fontSize:11,marginTop:5}}>{previewCount} control{previewCount===1?"":"s"} parsed</div>
+        </div>
+
+        {error && <div style={{color:C.red,fontSize:12,marginBottom:10}}>{error}</div>}
+
+        <button onClick={save} disabled={saving}
+          style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,border:"none",
+            cursor:saving?"default":"pointer",color:C.bg,
+            background:`linear-gradient(135deg,${C.accent},${C.accentDm})`}}>
+          {saving ? "Saving…" : (editing.new ? "Create framework" : "Save changes")}
+        </button>
+      </div>
+    );
+  }
+
+  // ── List view ──
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Compliance Frameworks"/>
+        <button onClick={()=>openEdit(null)} style={{marginLeft:"auto",padding:"7px 14px",
+          borderRadius:8,border:"none",cursor:"pointer",color:C.bg,fontSize:12.5,fontWeight:700,
+          background:`linear-gradient(135deg,${C.accent},${C.accentDm})`}}>+ New Framework</button>
+      </div>
+      <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
+        Add compliance frameworks that aren't built in. Each becomes available to clients in their
+        Compliance Workspace, where they assess control-by-control and get remediation guidance.
+      </p>
+
+      {loading ? <div style={{color:C.textMut,fontSize:13}}>Loading…</div>
+       : !frameworks || frameworks.length===0 ? (
+        <div style={{color:C.textSec,fontSize:13,background:C.surface,borderRadius:8,padding:"14px 16px"}}>
+          No custom frameworks yet. Click <b>New Framework</b> to add one.
+        </div>
+       ) : (
+        <div style={{display:"grid",gap:10}}>
+          {frameworks.map(f => (
+            <div key={f.id} style={{display:"flex",alignItems:"center",gap:12,
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 16px"}}>
+              <div style={{flex:1}}>
+                <div style={{color:C.text,fontSize:14,fontWeight:700}}>{f.name}</div>
+                {f.description && <div style={{color:C.textSec,fontSize:12,margin:"2px 0",lineHeight:1.4}}>{f.description}</div>}
+                <div style={{color:C.textMut,fontSize:11.5}}>{f.controlCount} control{f.controlCount===1?"":"s"}</div>
+              </div>
+              <button onClick={()=>openEdit(f)} style={{padding:"6px 12px",borderRadius:6,
+                background:"none",border:`1px solid ${C.border}`,color:C.textSec,fontSize:12,cursor:"pointer"}}>Edit</button>
+              <button onClick={()=>remove(f)} style={{padding:"6px 12px",borderRadius:6,
+                background:"none",border:`1px solid ${C.red}55`,color:C.red,fontSize:12,cursor:"pointer"}}>Delete</button>
+            </div>
+          ))}
+        </div>
+       )}
+    </div>
+  );
+}
+
+
 function AiIntegrations() {
   const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
