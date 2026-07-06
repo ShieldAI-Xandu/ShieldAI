@@ -81,7 +81,7 @@ Your specialty: ${modelInfo.specialty}
 
 ${systemPrompt}`;
 
-  const res = await authFetch("http://localhost:3001/api/claude", {
+  const res = await authFetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { 
        "Content-Type": "application/json",
@@ -129,7 +129,7 @@ ${systemPrompt}`;
 
   // Non-streaming call so any provider (Claude/Gemini/GPT) works uniformly.
   // The backend returns Anthropic content-shape regardless of engine.
-  const res = await authFetch("http://localhost:3001/api/claude", {
+  const res = await authFetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -562,7 +562,13 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:3001";
+// API base URL:
+//  - In production the frontend is served by the same Express server that
+//    hosts the API, so we use RELATIVE URLs ("" → same origin). This is what
+//    makes login work on Railway (no hardcoded localhost).
+//  - In local Vite dev the frontend runs on a different port than the API,
+//    so we point at the local backend.
+const API_BASE = import.meta.env.PROD ? "" : "http://localhost:3001";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
