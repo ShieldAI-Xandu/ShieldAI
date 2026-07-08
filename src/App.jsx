@@ -33,25 +33,28 @@ const AI_MODELS = {
     label: "Claude (Anthropic)",
     color: "#CC785C",
     icon: "🟠",
-    specialty: "Risk analysis, policy drafting, compliance reasoning",
+    specialty: "Risk analysis, policy drafting, compliance reasoning & advisory",
   },
   gemini: {
     id: "gemini",
     label: "Gemini (Google)",
     color: "#4285F4",
     icon: "🔵",
-    specialty: "Threat intelligence, real-time web search, vendor research",
+    specialty: "Threat intelligence, real-time web grounding, vendor research",
   },
   gpt4: {
     id: "gpt4",
     label: "GPT-4o (OpenAI)",
     color: "#10A37F",
     icon: "🟢",
-    specialty: "Security awareness training, executive summaries, reporting",
+    specialty: "Training modules, executive summaries, incident reporting",
   },
 };
 
-// Task → model routing rules
+// Task → model routing rules.
+// Governed by the AI Provider Usage Map spec: Claude = reasoning/writing/
+// client-facing core (+ universal fallback); Gemini = current/web-grounded;
+// GPT = high-volume structured generation. Keep this table in sync with that spec.
 function routeTask(taskType) {
   const routes = {
     intake:          "claude",
@@ -81,7 +84,7 @@ Your specialty: ${modelInfo.specialty}
 
 ${systemPrompt}`;
 
-  const res = await authFetch(`${API_BASE}/api/claude`, {
+  const res = await authFetch("http://localhost:3001/api/claude", {
     method: "POST",
     headers: { 
        "Content-Type": "application/json",
@@ -120,29 +123,7 @@ ${systemPrompt}`;
 }
 
 async function callAIJson(taskType, prompt, systemPrompt) {
-  const model = routeTask(taskType);
-  const modelInfo = AI_MODELS[model];
-  const enrichedSystem = `You are operating as the ${modelInfo.label} engine within ShieldAI, a virtual CISO platform.
-Your specialty: ${modelInfo.specialty}
-
-${systemPrompt}`;
-
-  // Non-streaming call so any provider (Claude/Gemini/GPT) works uniformly.
-  // The backend returns Anthropic content-shape regardless of engine.
-  const res = await authFetch(`${API_BASE}/api/claude`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider: model,
-      max_tokens: 4096,
-      system: enrichedSystem,
-      messages: [{ role: "user", content: prompt }],
-      stream: false,
-    }),
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  const data = await res.json();
-  const text = (data?.content || []).map(c => c.text || "").join("");
+  const { text } = await callAI(taskType, [{ role: "user", content: prompt }], systemPrompt, null);
   const clean = text.replace(/```json|```/g, "").trim();
   return JSON.parse(clean);
 }
@@ -562,13 +543,7 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-// API base URL:
-//  - In production the frontend is served by the same Express server that
-//    hosts the API, so we use RELATIVE URLs ("" → same origin). This is what
-//    makes login work on Railway (no hardcoded localhost).
-//  - In local Vite dev the frontend runs on a different port than the API,
-//    so we point at the local backend.
-const API_BASE = import.meta.env.PROD ? "" : "http://localhost:3001";
+const API_BASE = "http://localhost:3001";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
@@ -2837,9 +2812,12 @@ function Dashboard({ assessment, results, onReset }) {
         <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,marginBottom:8}}>AI ENGINES</div>
           {Object.values(AI_MODELS).map(m=>(
-            <div key={m.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:C.green}}/>
-              <span style={{fontSize:11,color:m.color}}>{m.label.split(" ")[0]}</span>
+            <div key={m.id} style={{display:"flex",alignItems:"flex-start",gap:7,marginBottom:8}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:C.green,marginTop:5,flexShrink:0}}/>
+              <div style={{minWidth:0}}>
+                <span style={{fontSize:11,color:m.color,fontWeight:600}}>{m.label.split(" ")[0]}</span>
+                <div style={{fontSize:9,color:C.textMut,lineHeight:1.3,marginTop:1}}>{m.specialty}</div>
+              </div>
             </div>
           ))}
         </div>
@@ -2922,7 +2900,317 @@ function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10,
   );
 }
 
-function MarketingPage({ onEnterApp, onLogin }) {
+// ─────────────────────────────────────────────────────────────
+//  PUBLIC CONTENT PAGES — About / Privacy / Terms
+//  Shared shell styled to match the marketing site. Rendered when
+//  publicView is "about" | "privacy" | "terms".
+// ─────────────────────────────────────────────────────────────
+function PublicPage({ page, onHome, onEnterApp, onLogin, onNav }) {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent;
+  const navy = "#0A1428";
+  const Section = ({ children, style }) => (
+    <section style={{maxWidth:860,margin:"0 auto",padding:"0 24px",...style}}>{children}</section>
+  );
+  const H = ({ children }) => (
+    <h2 style={{fontSize:22,fontWeight:700,color:ink,margin:"34px 0 12px"}}>{children}</h2>
+  );
+  const P = ({ children }) => (
+    <p style={{fontSize:15,lineHeight:1.7,color:dim,margin:"0 0 14px"}}>{children}</p>
+  );
+  const LI = ({ children }) => (
+    <li style={{fontSize:15,lineHeight:1.7,color:dim,marginBottom:8}}>{children}</li>
+  );
+  const effective = "Effective date: to be set on publication";
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",overflowX:"hidden"}}>
+      {/* Nav */}
+      <div style={{padding:"16px 0",borderBottom:`1px solid ${line}`,background:navy,position:"sticky",top:0,zIndex:10}}>
+        <Section style={{maxWidth:1080,display:"flex",alignItems:"center",gap:14}}>
+          <span onClick={onHome} style={{cursor:"pointer",display:"inline-flex"}}>
+            <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
+          </span>
+          <span style={{fontSize:11,color:dim,letterSpacing:2}}>VIRTUAL CISO</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center"}}>
+            <button onClick={onHome} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Home</button>
+            <button onClick={()=>onNav("about")} style={{background:"none",border:"none",color:page==="about"?cyan:dim,fontSize:13,cursor:"pointer"}}>About</button>
+            <button onClick={onLogin} style={{background:cyan,border:"none",color:navy,fontSize:13,fontWeight:600,padding:"7px 16px",borderRadius:8,cursor:"pointer"}}>Client Login</button>
+          </div>
+        </Section>
+      </div>
+
+      {/* Body */}
+      <Section style={{padding:"52px 24px 40px"}}>
+        {page === "about" && <AboutContent ink={ink} dim={dim} cyan={cyan} line={line} navy={navy} onEnterApp={onEnterApp} H={H} P={P} LI={LI}/>}
+        {page === "privacy" && <>
+          <div style={{fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:cyan,marginBottom:12}}>Legal</div>
+          <h1 style={{fontSize:40,fontWeight:800,color:ink,margin:"0 0 8px"}}>Privacy Policy</h1>
+          <p style={{fontSize:13,color:C.textMut,margin:"0 0 8px"}}>{effective}</p>
+          <PrivacyContent H={H} P={P} LI={LI}/>
+        </>}
+        {page === "terms" && <>
+          <div style={{fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:cyan,marginBottom:12}}>Legal</div>
+          <h1 style={{fontSize:40,fontWeight:800,color:ink,margin:"0 0 8px"}}>Terms of Service</h1>
+          <p style={{fontSize:13,color:C.textMut,margin:"0 0 8px"}}>{effective}</p>
+          <TermsContent H={H} P={P} LI={LI}/>
+        </>}
+      </Section>
+
+      {/* Footer */}
+      <div style={{borderTop:`1px solid ${line}`,padding:"28px 0",background:navy,marginTop:40}}>
+        <Section style={{maxWidth:1080,display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
+          <ShieldLockup logoSize={22} textSize={15} ink={ink}/>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>onNav("about")} style={{background:"none",border:"none",color:dim,fontSize:12,cursor:"pointer"}}>About</button>
+            <button onClick={()=>onNav("privacy")} style={{background:"none",border:"none",color:dim,fontSize:12,cursor:"pointer"}}>Privacy</button>
+            <button onClick={()=>onNav("terms")} style={{background:"none",border:"none",color:dim,fontSize:12,cursor:"pointer"}}>Terms</button>
+            <span style={{fontSize:12,color:dim}}>© 2026 Xandu Limited, LLC</span>
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function AboutContent({ ink, dim, cyan, line, navy, onEnterApp, H, P, LI }) {
+  return (
+    <div>
+      <div style={{fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:cyan,marginBottom:12}}>About ShieldAI</div>
+      <h1 style={{fontSize:40,fontWeight:800,color:ink,margin:"0 0 16px",lineHeight:1.15}}>
+        Enterprise-grade security, built for the businesses that need it most.
+      </h1>
+      <p style={{fontSize:17,lineHeight:1.7,color:dim,margin:"0 0 10px"}}>
+        ShieldAI is a virtual Chief Information Security Officer (vCISO) platform for small and mid-sized
+        businesses — the millions of companies that face enterprise-level threats but can't afford a
+        full-time security leader. We make a complete, continuously-managed security program affordable,
+        understandable, and defensible.
+      </p>
+
+      <H>Our mission</H>
+      <P>
+        A full-time CISO costs $200,000–$400,000 a year, so nearly half of small businesses run with no
+        security budget at all — even as their insurers, customers, and regulators increasingly require a
+        real security program. ShieldAI closes that gap. Our mission is simple: put credible, enterprise-grade
+        cybersecurity leadership within reach of every business, not just the ones that can afford a dedicated team.
+      </P>
+
+      <H>How we're different</H>
+      <ul style={{margin:"0 0 14px",paddingLeft:20}}>
+        <LI><b style={{color:ink}}>AI advises, humans act.</b> Frontier AI does the heavy lifting — analysis, drafting, monitoring — but a qualified security engineer reviews and approves the work before it reaches you. The AI accelerates expert judgment; it never replaces it.</LI>
+        <LI><b style={{color:ink}}>A real, defensible score.</b> Our posture score is computed by a deterministic engine built on the NIST Cybersecurity Framework — explainable and repeatable, the kind of result an insurer or auditor can actually trust.</LI>
+        <LI><b style={{color:ink}}>Built to serve small business specifically.</b> Not an enterprise tool awkwardly scaled down — a platform designed from the ground up for the realities and budgets of smaller organizations.</LI>
+      </ul>
+
+      <H>Founder</H>
+      <div style={{display:"flex",gap:22,flexWrap:"wrap",alignItems:"flex-start",
+        background:C.surface,border:`1px solid ${line}`,borderRadius:14,padding:22,margin:"6px 0 14px"}}>
+        <div style={{width:110,height:110,borderRadius:"50%",overflow:"hidden",flexShrink:0,
+          background:navy,border:`2px solid ${cyan}44`}}>
+          <img src="/founder.jpg" alt="Derrick Brooks"
+            style={{width:"100%",height:"100%",objectFit:"cover"}}
+            onError={(e)=>{e.currentTarget.style.display="none";}}/>
+        </div>
+        <div style={{flex:1,minWidth:240}}>
+          <div style={{fontSize:20,fontWeight:700,color:ink}}>Derrick Brooks</div>
+          <div style={{fontSize:14,color:cyan,marginBottom:2}}>Founder &amp; Chief Executive Officer</div>
+          <div style={{fontSize:12,color:dim,marginBottom:10}}>Former U.S. Navy Lieutenant Commander · CISSP, CISM · 20+ years in cybersecurity</div>
+          <p style={{fontSize:14,lineHeight:1.65,color:dim,margin:0}}>
+            ShieldAI is founded and built by Derrick Brooks, a cybersecurity leader whose career spans
+            national-security operations, enterprise security leadership, and hands-on security work for
+            the exact small businesses ShieldAI serves. He has served as a division officer on the NSA Red
+            Team, provided cybersecurity expertise to U.S. Navy SPAWAR through Booz Allen Hamilton, and
+            directed intelligence operations for U.S. Pacific Fleet.
+          </p>
+        </div>
+      </div>
+      <P>
+        As a Chief Information Security Officer, Derrick built entire security programs from the ground up —
+        deploying Zero Trust, running incident response, and achieving compliance across SOC&nbsp;2, CMMC,
+        ISO&nbsp;27001, and NIST, reducing one organization's attack surface by 80% with zero breaches. He
+        holds a doctorate in Cybersecurity (in progress) from Westcliff University, an MBA in Information
+        Technology Management from SNHU, and a double master's in Cybersecurity. ShieldAI is the direct
+        expression of two decades of building and running security programs — now encoded into software so a
+        small team can protect many businesses at once.
+      </P>
+
+      <H>The company</H>
+      <P>
+        ShieldAI is operated by Xandu Limited, LLC. We're building the platform that lets a handful of
+        security engineers, amplified by AI, deliver the protection that used to require a full in-house team —
+        at a price a small business can actually afford.
+      </P>
+
+      <div style={{marginTop:22}}>
+        <button onClick={onEnterApp}
+          style={{background:cyan,border:"none",color:navy,fontSize:15,fontWeight:700,
+            padding:"13px 26px",borderRadius:10,cursor:"pointer"}}>
+          See where your business stands →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PrivacyContent({ H, P, LI }) {
+  const ink = C.text;
+  return (
+    <div>
+      <P>
+        This Privacy Policy explains how Xandu Limited, LLC (&quot;ShieldAI,&quot; &quot;we,&quot; &quot;us&quot;)
+        collects, uses, and protects information when you use the ShieldAI platform and website (the &quot;Service&quot;).
+        We take privacy seriously — it is core to what we do. This document is provided for transparency and does
+        not constitute legal advice; the final published version should be reviewed by legal counsel.
+      </P>
+
+      <H>1. Information we collect</H>
+      <ul style={{margin:"0 0 14px",paddingLeft:20}}>
+        <LI><b style={{color:ink}}>Account information</b> — name, email, company name, and credentials you provide when registering.</LI>
+        <LI><b style={{color:ink}}>Assessment and program data</b> — the security information you enter about your business, and the programs, policies, and reports generated for you.</LI>
+        <LI><b style={{color:ink}}>Endpoint and monitoring data</b> — where you deploy our monitoring agents, technical posture data from those endpoints (agents operate read-only and do not take actions on your systems).</LI>
+        <LI><b style={{color:ink}}>Usage and device data</b> — standard log information such as IP address, browser type, and interactions with the Service, used to operate and secure the platform.</LI>
+      </ul>
+
+      <H>2. How we use information</H>
+      <P>
+        We use your information to provide and improve the Service: to run assessments, generate your security
+        program, deliver managed services through our engineers, communicate with you, secure the platform, and
+        meet legal obligations. We do not sell your personal information.
+      </P>
+
+      <H>3. AI processing</H>
+      <P>
+        ShieldAI uses third-party AI providers (including Anthropic, Google, and OpenAI) to analyze assessment
+        data and generate documents. Data sent to these providers is used to produce your outputs. We select
+        providers with enterprise data-handling commitments and send only what is necessary to perform the
+        requested task.
+      </P>
+
+      <H>4. How we share information</H>
+      <P>
+        We share information only with service providers who help us operate the platform (such as hosting and
+        AI providers) under appropriate confidentiality obligations, when required by law, or to protect the
+        rights and safety of our users and the public. We do not sell or rent your data.
+      </P>
+
+      <H>5. Data security</H>
+      <P>
+        We apply administrative, technical, and physical safeguards appropriate to the sensitivity of the data,
+        including encryption in transit, access controls, and the principle of least privilege. As a security
+        company, protecting your data is central to our credibility and our operations.
+      </P>
+
+      <H>6. Data retention</H>
+      <P>
+        We retain your information for as long as your account is active or as needed to provide the Service and
+        meet legal obligations. You may request deletion of your account data, subject to records we are required
+        to keep.
+      </P>
+
+      <H>7. Your rights</H>
+      <P>
+        Depending on your location, you may have rights to access, correct, export, or delete your personal
+        information. To exercise these rights, contact us using the details below.
+      </P>
+
+      <H>8. Changes to this policy</H>
+      <P>
+        We may update this Privacy Policy from time to time. Material changes will be reflected by an updated
+        effective date, and where appropriate we will notify you.
+      </P>
+
+      <H>9. Contact</H>
+      <P>
+        Questions about this policy or your data can be directed to Xandu Limited, LLC at the contact address
+        published on our website.
+      </P>
+    </div>
+  );
+}
+
+function TermsContent({ H, P, LI }) {
+  const ink = C.text;
+  return (
+    <div>
+      <P>
+        These Terms of Service (&quot;Terms&quot;) govern your access to and use of the ShieldAI platform and
+        website (the &quot;Service&quot;), operated by Xandu Limited, LLC (&quot;ShieldAI,&quot; &quot;we,&quot;
+        &quot;us&quot;). By creating an account or using the Service, you agree to these Terms. This document is
+        provided for transparency and does not constitute legal advice; the final published version should be
+        reviewed by legal counsel.
+      </P>
+
+      <H>1. The Service</H>
+      <P>
+        ShieldAI provides virtual CISO tools and services, including security assessments, a deterministic
+        posture score, generated policies and programs, compliance mapping, training, threat intelligence, and —
+        on applicable plans — managed services delivered by our security engineers.
+      </P>
+
+      <H>2. Advisory nature of the Service</H>
+      <P>
+        ShieldAI provides guidance, analysis, and recommendations to help you improve your security posture. It is
+        a decision-support and program-management tool — not a guarantee against security incidents. You remain
+        responsible for decisions about, and the operation of, your own systems. Our AI features are advisory and
+        operate under human review on managed plans; our monitoring agents are read-only and do not take
+        autonomous action on your systems.
+      </P>
+
+      <H>3. Accounts</H>
+      <P>
+        You are responsible for maintaining the confidentiality of your account credentials and for all activity
+        under your account. You agree to provide accurate information and to notify us of any unauthorized use.
+      </P>
+
+      <H>4. Acceptable use</H>
+      <ul style={{margin:"0 0 14px",paddingLeft:20}}>
+        <LI>Do not use the Service to violate any law or the rights of others.</LI>
+        <LI>Do not attempt to disrupt, reverse-engineer, or gain unauthorized access to the Service or its infrastructure.</LI>
+        <LI>Do not use the Service to test or attack systems you do not own or are not authorized to assess.</LI>
+      </ul>
+
+      <H>5. Plans, billing, and cancellation</H>
+      <P>
+        Paid plans are billed according to the pricing presented at signup. You may cancel in accordance with the
+        terms of your plan. Fees already incurred are non-refundable except where required by law or expressly
+        stated.
+      </P>
+
+      <H>6. Intellectual property</H>
+      <P>
+        The Service, including its scoring methodology, software, and content, is owned by Xandu Limited, LLC. The
+        security program, policies, and documents generated for your business are provided for your use. You
+        retain ownership of the business information you provide.
+      </P>
+
+      <H>7. Disclaimers</H>
+      <P>
+        The Service is provided &quot;as is&quot; and &quot;as available.&quot; To the maximum extent permitted by
+        law, we disclaim implied warranties. We do not warrant that the Service will be uninterrupted or error-free,
+        or that it will prevent all security incidents.
+      </P>
+
+      <H>8. Limitation of liability</H>
+      <P>
+        To the maximum extent permitted by law, ShieldAI and Xandu Limited, LLC will not be liable for indirect,
+        incidental, or consequential damages, and our total liability for any claim relating to the Service is
+        limited as set out in your plan agreement.
+      </P>
+
+      <H>9. Changes to the Service and Terms</H>
+      <P>
+        We may modify the Service or these Terms. Material changes to these Terms will be reflected by an updated
+        effective date, and continued use of the Service after changes take effect constitutes acceptance.
+      </P>
+
+      <H>10. Contact</H>
+      <P>
+        Questions about these Terms can be directed to Xandu Limited, LLC at the contact address published on our website.
+      </P>
+    </div>
+  );
+}
+
+function MarketingPage({ onEnterApp, onLogin, onNav }) {
   const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -3244,7 +3532,10 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <Section style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
           <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
           <span style={{fontSize:12,color:dim}}>Virtual CISO for small business</span>
-          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center"}}>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>onNav && onNav("about")} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>About</button>
+            <button onClick={()=>onNav && onNav("privacy")} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Privacy</button>
+            <button onClick={()=>onNav && onNav("terms")} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Terms</button>
             <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Client Login</button>
             <span style={{fontSize:12,color:dim}}>© 2026 Xandu Ltd</span>
           </div>
@@ -8111,9 +8402,18 @@ export default function ShieldAI() {
     if (publicView === "auth") {
       return <AuthScreen onAuthenticated={handleAuthenticated} onBack={() => setPublicView("marketing")}/>;
     }
+    if (publicView === "about" || publicView === "privacy" || publicView === "terms") {
+      return <PublicPage
+        page={publicView}
+        onHome={() => setPublicView("marketing")}
+        onEnterApp={() => setPublicView("auth")}
+        onLogin={() => setPublicView("auth")}
+        onNav={(p) => setPublicView(p)}/>;
+    }
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
-      onLogin={() => setPublicView("auth")}/>;
+      onLogin={() => setPublicView("auth")}
+      onNav={(p) => setPublicView(p)}/>;
   }
 
   // Forced first-login password change — blocks everything until done.
