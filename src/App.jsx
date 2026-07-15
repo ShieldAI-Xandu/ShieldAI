@@ -1,7 +1,4 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
-import {
-  DEFAULT_BRANDING, applyBrandToPalette, resetPalette, fetchBranding, normalizeBranding,
-} from "./branding.js";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -23,35 +20,6 @@ const C = {
   textSec:  "#7B92B2",
   textMut:  "#2E4A6A",
 };
-
-// ─────────────────────────────────────────────────────────────
-//  BRANDING (white-label)
-//  `C` above is mutated in place by applyBrandToPalette() when a brand loads,
-//  so every existing C.* reference picks up the MSP's accent automatically.
-//
-//  The root component renders from ~10 separate `return` statements (one per
-//  phase), so a Context.Provider would have to wrap each one. Instead the
-//  brand *identity* (name, logo, tagline) lives in a tiny module-level store
-//  that components subscribe to via useBranding(). Same ergonomics, no
-//  structural surgery.
-// ─────────────────────────────────────────────────────────────
-const brandStore = {
-  value: DEFAULT_BRANDING,
-  listeners: new Set(),
-  get() { return this.value; },
-  set(b) {
-    this.value = b || DEFAULT_BRANDING;
-    this.listeners.forEach(fn => fn(this.value));
-  },
-  subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
-};
-
-/** Read the active white-label brand. Re-renders on brand change. */
-export function useBranding() {
-  const [b, setB] = useState(brandStore.get());
-  useEffect(() => brandStore.subscribe(setB), []);
-  return b;
-}
 
 // ─────────────────────────────────────────────────────────────
 //  AI ROUTER  – routes tasks to the right model
@@ -113,7 +81,7 @@ Your specialty: ${modelInfo.specialty}
 
 ${systemPrompt}`;
 
-  const res = await authFetch(`${API_BASE}/api/claude`, {
+  const res = await authFetch("http://localhost:3001/api/claude", {
     method: "POST",
     headers: { 
        "Content-Type": "application/json",
@@ -478,7 +446,7 @@ function IntakeChat({ onComplete }) {
       if (match) {
         try {
           const data = JSON.parse(match[1].trim());
-          const finalMsg = "Excellent! I have a complete picture of your security landscape. Spinning up the full analysis now — generating your risk model, policies, roadmap, and executive report, and pulling live CVE and breach data from the NIST NVD and Have I Been Pwned. This takes about 30 seconds...";
+          const finalMsg = "Excellent! I have a complete picture of your security landscape. Spinning up the full AI analysis now — Claude will handle risk modeling, Gemini will pull threat intelligence, and GPT-4o will draft your executive summary. This takes about 30 seconds...";
           setMessages([...newMsgs, { role:"assistant", content:finalMsg, model }]);
           setLoading(false);
           setTimeout(() => onComplete(data), 1800);
@@ -495,14 +463,18 @@ function IntakeChat({ onComplete }) {
       {/* AI model indicator */}
       <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
         display:"flex",alignItems:"center",gap:12}}>
-        <div style={{fontSize:12,color:C.textSec}}>Analysis engine:</div>
-        <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",
-          borderRadius:20,background:"#D9770633",border:"1px solid #D9770655",
-          color:"#D97706",fontSize:11,fontWeight:600}}>
-          ⚡ Claude
-        </div>
+        <div style={{fontSize:12,color:C.textSec}}>Active AI:</div>
+        {Object.values(AI_MODELS).map(m => (
+          <div key={m.id} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 10px",
+            borderRadius:20,background:m.color+(activeModel===m.id?"33":"11"),
+            border:`1px solid ${m.color}${activeModel===m.id?"55":"22"}`,
+            color:activeModel===m.id?m.color:C.textMut,fontSize:11,fontWeight:600,
+            transition:"all 0.3s"}}>
+            {m.icon} {m.label.split(" ")[0]}
+          </div>
+        ))}
         <div style={{marginLeft:"auto",fontSize:11,color:C.textMut}}>
-          Generation by Claude · Live CVE data → NIST NVD · Breach data → Have I Been Pwned
+          Intake routed to Claude · Threat Intel → Gemini · Reports → GPT-4o
         </div>
       </div>
 
@@ -567,34 +539,45 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-// In production the frontend is served by the same Express server as the API,
-// so calls are same-origin (empty base = relative URLs). In local dev, Vite
-// serves the frontend on a different port, so point at the local backend.
-// Vite exposes import.meta.env.DEV (true during `vite dev`, false in a build).
-const API_BASE =
-  typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:3001"
-    : "";
+const API_BASE = "http://localhost:3001";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
 // ─────────────────────────────────────────────────────────────
 let AUTH_TOKEN = null;
-const TOKEN_KEY = "shieldai_token";
 
 function setAuthToken(token) {
   AUTH_TOKEN = token;
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch { /* storage unavailable (e.g. private mode) — fall back to memory only */ }
+  if (!token) IS_DEMO_SESSION = false;
+  // For persistence across refreshes in your local Vite app, uncomment:
+  // if (token) localStorage.setItem("shieldai_token", token);
+  // else localStorage.removeItem("shieldai_token");
+}
+
+// ── DEMO SANDBOX ─────────────────────────────────────────────
+// Starts a read-only demo session with no credentials. The token returned is
+// signed with the demo secret and binds every subsequent request to the demo
+// data store on the backend — a visitor in the demo can never reach real
+// client data, and nothing they do can write to it.
+let IS_DEMO_SESSION = false;
+function isDemoSession() { return IS_DEMO_SESSION; }
+
+async function startDemoSession(persona = "client") {
+  const res = await fetch(`${API_BASE}/api/demo/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Could not start the demo.");
+  IS_DEMO_SESSION = true;
+  setAuthToken(data.token);
+  return { ...data.user, isDemo: true, readOnly: true };
 }
 
 function getAuthToken() {
-  if (!AUTH_TOKEN) {
-    try { AUTH_TOKEN = localStorage.getItem(TOKEN_KEY); }
-    catch { /* storage unavailable — memory only */ }
-  }
+  // For persistence across refreshes, uncomment:
+  // if (!AUTH_TOKEN) AUTH_TOKEN = localStorage.getItem("shieldai_token");
   return AUTH_TOKEN;
 }
 
@@ -883,8 +866,7 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
 
   const pct = Math.round((progress.step / progress.total) * 100);
 
-  // All program generation runs on Claude today. The threat-intel step also
-  // pulls live data from external databases (NVD, HIBP) — reflected below.
+  // Map pipeline step labels to a representative AI model badge for display
   const stepModelMap = {
     "Risk overview & top threats": "claude",
     "Prioritized roadmap & quick wins": "claude",
@@ -892,10 +874,10 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
     "Operational security policies": "claude",
     "Compliance framework gap analysis": "claude",
     "Incident response workflows": "claude",
-    "Threat intelligence": "claude",
-    "Recommended tool categories": "claude",
-    "Awareness training program": "claude",
-    "Executive summary report": "claude",
+    "Threat intelligence": "gemini",
+    "Recommended tool stack": "gemini",
+    "Awareness training program": "gpt4",
+    "Executive summary report": "gpt4",
   };
   const activeModel = stepModelMap[progress.label] || "claude";
 
@@ -941,16 +923,15 @@ function AnalysisScreen({ assessment, regenerate, onComplete }) {
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
-          {[
-            { icon:"⚡", label:"Claude", sub:"Generation", color:"#D97706" },
-            { icon:"🛡️", label:"NIST NVD", sub:"Live CVEs", color:C.accent },
-            { icon:"🕵️", label:"HIBP", sub:"Breach data", color:C.green },
-          ].map((s,i) => (
-            <div key={i} style={{padding:"12px",background:C.surface,
-              border:`1px solid ${C.border}`,borderRadius:10,textAlign:"center"}}>
-              <div style={{fontSize:20,marginBottom:4}}>{s.icon}</div>
-              <div style={{color:s.color,fontSize:11,fontWeight:600}}>{s.label}</div>
-              <div style={{color:C.textMut,fontSize:10,marginTop:2}}>{s.sub}</div>
+          {Object.values(AI_MODELS).map(m => (
+            <div key={m.id} style={{padding:"12px",background:C.surface,
+              border:`1px solid ${activeModel===m.id?m.color+"55":C.border}`,
+              borderRadius:10,textAlign:"center",transition:"border-color 0.3s"}}>
+              <div style={{fontSize:20,marginBottom:4}}>{m.icon}</div>
+              <div style={{color:m.color,fontSize:11,fontWeight:600}}>{m.label.split(" ")[0]}</div>
+              <div style={{color:C.textMut,fontSize:10,marginTop:2}}>
+                {activeModel===m.id?"● Active":"Standby"}
+              </div>
             </div>
           ))}
         </div>
@@ -1353,47 +1334,14 @@ function ThreatIntelSection({ results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Threat Intelligence"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="claude"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
       </div>
-      {(() => {
-        const dw = tl.darkWeb;
-        if (!dw) {
-          // legacy shape fallback
-          return tl.darkWebMentions && tl.darkWebMentions !== "No intel" ? (
-            <div style={{padding:"12px 16px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
-              borderRadius:8,marginBottom:14,color:C.red,fontSize:13}}>
-              ⚠️ Dark web monitoring: {tl.darkWebMentions}
-            </div>
-          ) : null;
-        }
-        const lvl = dw.statusLevel || "Unknown";
-        const active = dw.monitored && (dw.breachedAccounts != null);
-        const tone = lvl === "High alert" ? C.red : lvl === "Elevated" ? "#FF7A45"
-          : lvl === "Low risk" ? C.amber : lvl === "No intel" ? C.green : C.textMut;
-        return (
-          <div style={{padding:"12px 16px",background:`${tone}15`,border:`1px solid ${tone}40`,
-            borderRadius:8,marginBottom:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-              <span style={{color:tone,fontSize:13,fontWeight:700}}>
-                🕵️ Dark-web / breach exposure: {lvl}
-              </span>
-              <span style={{color:C.textMut,fontSize:11}}>
-                via Have I Been Pwned{dw.domain ? ` · ${dw.domain}` : ""}
-              </span>
-            </div>
-            {active ? (
-              <div style={{color:C.textSec,fontSize:12,marginTop:6}}>
-                {dw.breachedAccounts} breached account{dw.breachedAccounts===1?"":"s"} across {dw.distinctBreaches} breach{dw.distinctBreaches===1?"":"es"}.
-                {(dw.breaches||[]).length > 0 && (
-                  <span style={{color:C.textMut}}> Breaches: {dw.breaches.slice(0,8).join(", ")}{dw.breaches.length>8?"…":""}.</span>
-                )}
-              </div>
-            ) : (
-              <div style={{color:C.textMut,fontSize:12,marginTop:6}}>{dw.reason || "Not monitored."}</div>
-            )}
-          </div>
-        );
-      })()}
+      {tl.darkWebMentions && tl.darkWebMentions !== "No intel" && (
+        <div style={{padding:"12px 16px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
+          borderRadius:8,marginBottom:14,color:C.red,fontSize:13}}>
+          ⚠️ Dark web monitoring: {tl.darkWebMentions}
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
         <Card>
           <SectionLabel text="Industry Threats"/>
@@ -1413,31 +1361,18 @@ function ThreatIntelSection({ results }) {
         </Card>
         <Card>
           <SectionLabel text="Recent CVEs & Vulnerabilities"/>
-          {(tl.recentCVEs||[]).length === 0 && (
-            <div style={{color:C.textMut,fontSize:12,lineHeight:1.5,padding:"4px 0 8px"}}>
-              {tl.cveSource || "No CVEs matched. CVE matching needs a software inventory (from the monitoring agent or the assessment's tech stack)."}
-            </div>
-          )}
           {(tl.recentCVEs||[]).map((c,i)=>(
             <div key={i} style={{marginBottom:10,padding:"8px 12px",
               background:C.surface,borderRadius:6}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                {c.url
-                  ? <a href={c.url} target="_blank" rel="noreferrer" style={{color:C.accent,fontSize:12,fontWeight:700,textDecoration:"none"}}>{c.id}</a>
-                  : <span style={{color:C.accent,fontSize:12,fontWeight:700}}>{c.id}</span>}
-                <span style={{display:"inline-flex",alignItems:"center",gap:6}}>
-                  {c.score != null && <span style={{color:C.textMut,fontSize:11}}>CVSS {c.score}</span>}
-                  <Badge label={c.severity}/>
-                </span>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                <span style={{color:C.accent,fontSize:12,fontWeight:700}}>{c.id}</span>
+                <Badge label={c.severity}/>
               </div>
               <div style={{color:C.textSec,fontSize:12,marginBottom:3}}>{c.description}</div>
-              {c.affected && <div style={{color:C.textMut,fontSize:11}}>Affected: {c.affected}</div>}
+              <div style={{color:C.textMut,fontSize:11}}>Affected: {c.affected}</div>
               {c.patch && <div style={{color:C.green,fontSize:11}}>Patch: {c.patch}</div>}
             </div>
           ))}
-          {(tl.recentCVEs||[]).length > 0 && tl.cveSource && (
-            <div style={{color:C.textMut,fontSize:10.5,marginTop:4,fontStyle:"italic"}}>{tl.cveSource}</div>
-          )}
         </Card>
       </div>
     </div>
@@ -1450,14 +1385,8 @@ function ToolsSection({ results }) {
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-        <SectionLabel text="Recommended Tool Categories"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="claude"/></div>
-      </div>
-      <div style={{color:C.textMut,fontSize:11.5,lineHeight:1.5,marginBottom:16,
-        background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
-        These describe the <b>capabilities to look for</b> in each category, not specific
-        products. Evaluate vendors against these criteria and your budget — ShieldAI doesn't
-        endorse particular brands.
+        <SectionLabel text="Recommended Security Tool Stack"/>
+        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
       </div>
       {categories.map(cat=>(
         <div key={cat} style={{marginBottom:18}}>
@@ -1466,22 +1395,22 @@ function ToolsSection({ results }) {
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
             {tools.filter(t=>t.category===cat).map((t,i)=>(
               <Card key={i} style={{padding:"14px 16px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,gap:8}}>
-                  <span style={{color:C.accent,fontWeight:700,fontSize:13.5}}>{t.subcategory || t.category}</span>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                  <span style={{color:C.accent,fontWeight:700,fontSize:15}}>{t.recommended}</span>
                   <Badge label={t.cost}/>
                 </div>
-                <p style={{color:C.text,fontSize:12.5,margin:"0 0 6px",lineHeight:1.5}}>
-                  {t.capability || t.recommended}
+                {t.subcategory && (
+                  <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>{t.subcategory}</div>
+                )}
+                <p style={{color:C.textSec,fontSize:12,margin:"0 0 8px",lineHeight:1.6}}>
+                  {t.rationale}
                 </p>
-                {(t.selectionCriteria || t.alternative) && (
-                  <p style={{color:C.textMut,fontSize:11.5,margin:"0 0 8px",lineHeight:1.5}}>
-                    <b>How to choose:</b> {t.selectionCriteria || t.alternative}
-                  </p>
-                )}
-                {t.rationale && (
-                  <p style={{color:C.textSec,fontSize:12,margin:"0 0 8px",lineHeight:1.5}}>{t.rationale}</p>
-                )}
-                <Badge label={t.implementation}/>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <Badge label={t.implementation}/>
+                  {t.alternative && (
+                    <span style={{color:C.textMut,fontSize:11}}>Alt: {t.alternative}</span>
+                  )}
+                </div>
               </Card>
             ))}
           </div>
@@ -2928,20 +2857,6 @@ function Dashboard({ assessment, results, onReset }) {
 
       {/* Main content */}
       <div style={{flex:1,overflowY:"auto",padding:"24px"}}>
-        {results?.meta?.isSample && (
-          <div style={{marginBottom:16,padding:"10px 14px",borderRadius:8,
-            background:`${C.amber}14`,border:`1px solid ${C.amber}55`,
-            color:C.amber,fontSize:12.5,fontWeight:600,display:"flex",alignItems:"center",gap:8}}>
-            🧪 Sample data — this is a demonstration account. The content below is illustrative and not a real security assessment.
-          </div>
-        )}
-        {!results?.meta?.isSample && ["priorities","policies","workflows","tools","training","report"].includes(section) && (
-          <div style={{marginBottom:14,padding:"8px 12px",borderRadius:8,
-            background:C.surface,border:`1px solid ${C.border}`,
-            color:C.textMut,fontSize:11.5,lineHeight:1.5}}>
-            ✎ AI-drafted from your assessment inputs — professional guidance intended for review by a qualified person, not verified fact. Scores, compliance mappings, CVEs, and breach status are drawn from real/deterministic sources.
-          </div>
-        )}
         {sectionMap[section]}
       </div>
     </div>
@@ -2980,54 +2895,71 @@ function ShieldLogo({ size = 28, glow = false }) {
   );
 }
 
-// Wordmark: renders the active brand's product name. Under the default brand
-// this is "Shield" + "AI" (accent-coloured "AI"); under a white-label brand it
-// renders the MSP's product name, with the last word accented if there is one.
+// Wordmark: "Shield" in the current ink color + "AI" in brand cyan
 function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
-  const brand = useBranding();
-  const name = (brand?.productName || "ShieldAI").trim();
-
-  // Default brand keeps the original Shield/AI split.
-  if (!brand || brand.isDefault || name === "ShieldAI") {
-    return (
-      <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
-        <span style={{ color: ink }}>Shield</span>
-        <span style={{ color: C.accent }}>AI</span>
-      </span>
-    );
-  }
-
-  // White-label: accent the final word so the lockup keeps its two-tone look.
-  const parts = name.split(/\s+/);
-  const head = parts.length > 1 ? parts.slice(0, -1).join(" ") + " " : "";
-  const tail = parts.length > 1 ? parts[parts.length - 1] : name;
   return (
     <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
-      {head && <span style={{ color: ink }}>{head}</span>}
-      <span style={{ color: parts.length > 1 ? C.accent : ink }}>{tail}</span>
+      <span style={{ color: ink }}>Shield</span>
+      <span style={{ color: "#00C8FF" }}>AI</span>
     </span>
   );
 }
 
-// Logo + wordmark lockup. Uses the MSP's uploaded logo when one is set.
+// Logo + wordmark lockup
 function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
-  const brand = useBranding();
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap }}>
-      {brand?.logoUrl
-        ? <img src={brand.logoUrl} alt={brand.companyName || "Logo"}
-            style={{ height:logoSize, width:"auto", maxWidth:logoSize*3, objectFit:"contain", display:"block" }}/>
-        : <ShieldLogo size={logoSize} glow={glow}/>}
+      <ShieldLogo size={logoSize} glow={glow}/>
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
   );
 }
 
-function MarketingPage({ onEnterApp, onLogin }) {
+// Persistent, unmissable marker that the user is in the sandbox. Without this,
+// a visitor could mistake seeded sample companies for real client data.
+function DemoBanner({ onExit }) {
+  return (
+    <div style={{position:"sticky",top:0,zIndex:9999,display:"flex",alignItems:"center",
+      justifyContent:"center",gap:14,flexWrap:"wrap",padding:"9px 16px",
+      background:"linear-gradient(90deg,#7C3AED,#4F46E5)",color:"#fff",
+      fontSize:13,fontWeight:600,letterSpacing:0.2}}>
+      <span>DEMO SANDBOX — sample data only, read-only. Nothing here is a real client.</span>
+      <button onClick={onExit}
+        style={{padding:"4px 12px",background:"rgba(255,255,255,0.16)",
+          border:"1px solid rgba(255,255,255,0.4)",borderRadius:6,color:"#fff",
+          fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        Exit demo
+      </button>
+    </div>
+  );
+}
+
+function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
   const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [formErr, setFormErr] = useState(null);
+  const [demoState, setDemoState] = useState({ seeded: null, personas: [] });
+  const [demoBusy, setDemoBusy] = useState(null);
+  const [demoErr, setDemoErr] = useState(null);
+
+  // Ask the backend whether the sandbox is seeded before offering the button —
+  // better to hide the entry point than to hand someone a broken demo.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/api/demo/status`)
+      .then(r => r.json())
+      .then(d => { if (alive && d && Array.isArray(d.personas)) setDemoState({ seeded: !!d.seeded, personas: d.personas }); })
+      .catch(() => { if (alive) setDemoState({ seeded: false, personas: [] }); });
+    return () => { alive = false; };
+  }, []);
+
+  async function enterDemo(persona) {
+    setDemoBusy(persona); setDemoErr(null);
+    try { await onStartDemo(persona); }
+    catch (e) { setDemoErr(e.message || "Could not start the demo."); }
+    finally { setDemoBusy(null); }
+  }
 
   async function submitLead() {
     if (!form.email.includes("@")) { setFormErr("Please enter a valid email address."); return; }
@@ -3059,17 +2991,17 @@ function MarketingPage({ onEnterApp, onLogin }) {
   const steps = [
     { n:"01", t:"Assess", d:"Answer a short, structured assessment about your business and current security posture." },
     { n:"02", t:"Score", d:"Our deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork." },
-    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, staff training, and live threat intelligence — real CVEs from the NIST NVD and breach exposure from Have I Been Pwned." },
-    { n:"04", t:"Manage", d:"Coming soon: our security engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
+    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training." },
+    { n:"04", t:"Manage", d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Available now", points:["Automated assessment & NIST score","Full security program & policies","Live threat intelligence (CVEs & breach exposure)","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Coming soon", upcoming:true, featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Join the waitlist" },
-    { name:"Managed vCISO", tag:"Coming soon", upcoming:true, points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Join the waitlist" },
+    { name:"Self-Serve", tag:"Get started", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
   ];
 
-  const trust = ["NIST Cybersecurity Framework","CIS Controls v8.1","HIPAA","SOC 2","CMMC","PCI-DSS"];
+  const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
 
   return (
     <div style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
@@ -3105,8 +3037,8 @@ function MarketingPage({ onEnterApp, onLogin }) {
           The cybersecurity expert<br/>your business is required to have.
         </h1>
         <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 auto 36px"}}>
-          A full-time CISO costs $200,000–$400,000 a year. ShieldAI gives you an AI-powered
-          security program today — with expert-managed service coming soon — for the price of a subscription.
+          A full-time CISO costs $200,000 a year. ShieldAI gives you the same protection —
+          AI-powered, expert-reviewed — for the price of a subscription.
         </p>
         <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
           <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
@@ -3120,14 +3052,30 @@ function MarketingPage({ onEnterApp, onLogin }) {
               borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
             Try the assessment →
           </button>
+          {demoState.seeded && demoState.personas.map(p => (
+            <button key={p.id} onClick={()=>enterDemo(p.id)} disabled={!!demoBusy}
+              style={{padding:"14px 28px",background:"none",border:`1px solid ${cyan}66`,
+                borderRadius:10,color:cyan,fontSize:15,fontWeight:600,
+                cursor:demoBusy?"wait":"pointer",opacity:demoBusy&&demoBusy!==p.id?0.5:1}}>
+              {demoBusy===p.id ? "Opening…" : `Try the demo · ${p.label}`}
+            </button>
+          ))}
         </div>
+        {demoState.seeded && (
+          <p style={{fontSize:12.5,color:dim,marginTop:14}}>
+            No signup, no credentials. A read-only sandbox with sample companies — completely separate from live client data.
+          </p>
+        )}
+        {demoErr && (
+          <p style={{fontSize:13,color:"#F87171",marginTop:10}}>{demoErr}</p>
+        )}
 
         {/* Signature: posture score motif */}
         <div style={{marginTop:60,display:"inline-flex",alignItems:"center",gap:28,
           padding:"24px 36px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:46,fontWeight:800,color:C.green,lineHeight:1}}>91</div>
-            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE · EXAMPLE</div>
+            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE</div>
           </div>
           <div style={{width:1,height:48,background:line}}/>
           <div style={{textAlign:"left",maxWidth:280}}>
@@ -3219,31 +3167,24 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
           {tiers.map((t,i)=>(
             <div key={i} style={{flex:"1 1 280px",background:t.featured?`${cyan}0C`:C.card,
-              border:`1px solid ${t.upcoming?C.amber+"66":(t.featured?cyan:line)}`,borderRadius:16,padding:"28px 26px",position:"relative"}}>
-              {(t.featured || t.upcoming) && (
+              border:`1px solid ${t.featured?cyan:line}`,borderRadius:16,padding:"28px 26px",position:"relative"}}>
+              {t.featured && (
                 <div style={{position:"absolute",top:-11,left:26,padding:"3px 12px",borderRadius:20,
-                  background:t.upcoming?C.amber:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
+                  background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
               )}
-              <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && !t.upcoming && t.tag}</div>
-              <div style={{fontSize:22,fontWeight:800,marginBottom:18,display:"flex",alignItems:"center",gap:8}}>
-                {t.name}
-              </div>
+              <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:18}}>{t.name}</div>
               <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
                 {t.points.map((p,j)=>(
                   <div key={j} style={{display:"flex",gap:9,fontSize:14,color:dim,lineHeight:1.4}}>
-                    <span style={{color:t.upcoming?C.amber:C.green,flexShrink:0}}>{t.upcoming?"○":"✓"}</span>{p}
+                    <span style={{color:C.green,flexShrink:0}}>✓</span>{p}
                   </div>
                 ))}
               </div>
-              {t.upcoming && (
-                <div style={{fontSize:11.5,color:C.amber,lineHeight:1.5,marginBottom:14}}>
-                  Expert-led service — in development. Join the waitlist and we'll reach out when it launches.
-                </div>
-              )}
               <button onClick={()=> t.cta==="Start free" ? onEnterApp() : document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
                 style={{width:"100%",padding:"11px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",
-                  background:t.featured&&!t.upcoming?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
-                  color:t.featured&&!t.upcoming?deep:ink,border:t.featured&&!t.upcoming?"none":`1px solid ${line}`}}>
+                  background:t.featured?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
+                  color:t.featured?deep:ink,border:t.featured?"none":`1px solid ${line}`}}>
                 {t.cta}
               </button>
             </div>
@@ -3690,173 +3631,6 @@ function ChecklistScreen({ onComplete, onBack }) {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-//  ADMIN BRANDING OVERSIGHT
-//  Two jobs the analyst panel doesn't do:
-//   1. Set the PLATFORM DEFAULT brand (what unassigned clients see).
-//   2. Show every MSP brand on the platform + white-label coverage —
-//      the same data Mastermind reads via brandingSummary().
-// ─────────────────────────────────────────────────────────────
-function AdminBrandingPanel() {
-  const [overview, setOverview] = useState(null);
-  const [platform, setPlatform] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);
-  const [err, setErr] = useState(null);
-
-  async function load() {
-    setErr(null);
-    try {
-      const [oRes, pRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/admin/branding`),
-        authFetch(`${API_BASE}/api/branding/mine`),
-      ]);
-      if (oRes.ok) setOverview(await oRes.json());
-      if (pRes.ok) setPlatform(normalizeBranding(await pRes.json()));
-    } catch (e) { setErr(e.message); }
-  }
-  useEffect(() => { load(); }, []);
-
-  async function savePlatform() {
-    setBusy(true); setErr(null); setMsg(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/admin/branding/platform`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productName: platform.productName, companyName: platform.companyName,
-          tagline: platform.tagline, accentColor: platform.accentColor,
-          primaryColor: platform.accentColor, logoUrl: platform.logoUrl,
-          footerNote: platform.footerNote,
-        }),
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "Save failed.");
-      setMsg("Platform default branding saved. Unassigned clients will see this.");
-      load();
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  }
-
-  if (!overview || !platform) {
-    return <div style={{color:C.textSec,fontSize:13,padding:20}}>Loading branding…</div>;
-  }
-
-  const set = (k,v) => { setPlatform(p=>({...p,[k]:v})); setMsg(null); setErr(null); };
-  const coverage = overview.clientsWhiteLabelled + overview.clientsOnDefaultBrand;
-  const pct = coverage ? Math.round((overview.clientsWhiteLabelled / coverage) * 100) : 0;
-
-  return (
-    <div>
-      {/* Coverage summary */}
-      <SectionLabel text="White-Label Coverage"/>
-      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,marginTop:10}}>
-        {[
-          { label:"MSP brands", value: overview.brandCount, color: C.accent },
-          { label:"Clients white-labelled", value: overview.clientsWhiteLabelled, color: C.green },
-          { label:"Clients on default", value: overview.clientsOnDefaultBrand, color: C.textSec },
-          { label:"Coverage", value: `${pct}%`, color: pct >= 50 ? C.green : C.amber },
-        ].map(s => (
-          <div key={s.label} style={{flex:"1 1 150px",background:C.card,border:`1px solid ${C.border}`,
-            borderRadius:10,padding:"12px 14px"}}>
-            <div style={{color:C.textSec,fontSize:11,fontWeight:600,marginBottom:4}}>{s.label}</div>
-            <div style={{color:s.color,fontSize:22,fontWeight:800}}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Brands on platform */}
-      <SectionLabel text="Brands on Platform"/>
-      <div style={{marginTop:10,marginBottom:22,background:C.card,border:`1px solid ${C.border}`,
-        borderRadius:10,overflow:"hidden"}}>
-        {overview.brands.length === 0 ? (
-          <div style={{padding:"16px",color:C.textSec,fontSize:12.5}}>
-            No custom brands yet. Analysts can set one from the Branding tab in their console.
-          </div>
-        ) : overview.brands.map((b,i) => (
-          <div key={b.ownerUserId} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
-            borderTop: i ? `1px solid ${C.border}` : "none"}}>
-            <span style={{width:22,height:22,borderRadius:5,background:b.primaryColor,
-              border:`1px solid ${C.border}`,flexShrink:0}}/>
-            <div style={{minWidth:0,flex:1}}>
-              <div style={{color:C.text,fontSize:13,fontWeight:600}}>{b.productName}</div>
-              <div style={{color:C.textSec,fontSize:11}}>{b.owner}</div>
-            </div>
-            <span style={{color:C.textSec,fontSize:11}}>{b.hasLogo ? "logo ✓" : "wordmark"}</span>
-            <span style={{padding:"2px 9px",borderRadius:20,fontSize:10.5,fontWeight:700,
-              background:`${C.accent}18`,border:`1px solid ${C.accent}44`,color:C.accent}}>
-              {b.clientsBranded} client{b.clientsBranded===1?"":"s"}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* Platform default */}
-      <SectionLabel text="Platform Default Brand"/>
-      <div style={{color:C.textSec,fontSize:12,marginTop:8,marginBottom:12}}>
-        What clients see when they aren't assigned to an analyst with their own brand.
-      </div>
-      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-        <div style={{flex:"1 1 340px",minWidth:0}}>
-          <BrandField label="Product name">
-            <input style={brandInputStyle()} value={platform.productName || ""} maxLength={40}
-              onChange={e=>set("productName", e.target.value)} placeholder="ShieldAI"/>
-          </BrandField>
-          <BrandField label="Company name">
-            <input style={brandInputStyle()} value={platform.companyName || ""} maxLength={80}
-              onChange={e=>set("companyName", e.target.value)} placeholder="ShieldAI"/>
-          </BrandField>
-          <BrandField label="Tagline">
-            <input style={brandInputStyle()} value={platform.tagline || ""} maxLength={90}
-              onChange={e=>set("tagline", e.target.value)} placeholder="Virtual CISO Platform"/>
-          </BrandField>
-          <BrandField label="Brand colour" hint="Auto-lightened if too dark for the dark theme.">
-            <div style={{display:"flex",gap:10,alignItems:"center"}}>
-              <input type="color" value={platform.accentColor || "#00C8FF"}
-                onChange={e=>set("accentColor", e.target.value.toUpperCase())}
-                style={{width:44,height:36,border:`1px solid ${C.border}`,borderRadius:7,
-                  background:C.bg,cursor:"pointer",padding:2}}/>
-              <input style={{...brandInputStyle(),flex:1}} value={platform.accentColor || ""} maxLength={7}
-                onChange={e=>set("accentColor", e.target.value.toUpperCase())} placeholder="#00C8FF"/>
-            </div>
-          </BrandField>
-          <BrandField label="Report footer note">
-            <input style={brandInputStyle()} value={platform.footerNote || ""} maxLength={200}
-              onChange={e=>set("footerNote", e.target.value)} placeholder="CONFIDENTIAL · Prepared by ShieldAI"/>
-          </BrandField>
-        </div>
-        <div style={{flex:"0 1 240px"}}>
-          <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Swatch</div>
-          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:14}}>
-            <div style={{color:C.text,fontSize:15,fontWeight:800,marginBottom:2}}>
-              {platform.productName || "ShieldAI"}
-            </div>
-            <div style={{color:C.textSec,fontSize:11,marginBottom:12}}>
-              {platform.tagline || "Virtual CISO Platform"}
-            </div>
-            <div style={{height:8,borderRadius:4,background:platform.accentColor || C.accent,marginBottom:10}}/>
-            <div style={{fontSize:10.5,color:C.textMut}}>
-              Applies to {overview.clientsOnDefaultBrand} client{overview.clientsOnDefaultBrand===1?"":"s"}.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {err && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
-        background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>{err}</div>}
-      {msg && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
-        background:`${C.green}12`,border:`1px solid ${C.green}40`,color:C.green}}>{msg}</div>}
-
-      <button onClick={savePlatform} disabled={busy}
-        style={{marginTop:18,padding:"9px 18px",borderRadius:8,cursor:busy?"default":"pointer",
-          fontSize:13,fontWeight:700,background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-          border:"none",color:C.bg,opacity:busy?0.6:1}}>
-        {busy ? "Saving…" : "Save platform default"}
-      </button>
     </div>
   );
 }
@@ -4410,17 +4184,6 @@ function AdminPanel({ onClose }) {
                 )}
               </Card>
 
-              {!u.isAdmin && !u.isAnalyst && (
-                <AdminTierSwitch
-                  userId={u.id}
-                  currentTier={accountCtl?.tier || u.tier || "free"}
-                  busy={ctlBusy}
-                  onSwitch={(tier)=>changeTier(u.id, tier)}
-                />
-              )}
-
-              {!u.isAdmin && !u.isAnalyst && <AdminCveExposure userId={u.id}/>}
-
               {/* ── Account Controls (Stage 3) ───────────────── */}
               <Card style={{marginBottom:20,border:`1px solid ${C.accent}33`}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
@@ -4716,8 +4479,6 @@ function AdminPanel({ onClose }) {
             { id:"assignments", label:"Assignments" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
-            { id:"branding", label:"Branding" },
-            { id:"ai", label:"AI Integrations" },
           ].map(t => {
             const on = listTab === t.id;
             return (
@@ -4978,9 +4739,6 @@ function AdminPanel({ onClose }) {
             )}
           </div>
         )}
-
-        {listTab === "branding" && <AdminBrandingPanel />}
-        {listTab === "ai" && <AiIntegrations />}
 
         {listTab === "assignments" && (
           <div>
@@ -6407,601 +6165,6 @@ function mastermindReply(quickId, client) {
 }
 
 
-// Field wrapper for the branding form. Defined at module scope so it is not
-// recreated on every render (which would remount inputs and drop focus).
-function BrandField({ label, hint, children }) {
-  return (
-    <div style={{marginBottom:14}}>
-      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:5}}>{label}</div>
-      {children}
-      {hint && <div style={{color:C.textMut,fontSize:11,marginTop:4}}>{hint}</div>}
-    </div>
-  );
-}
-
-function brandInputStyle() {
-  return {
-    width:"100%", padding:"9px 11px", background:C.bg, color:C.text,
-    border:`1px solid ${C.border}`, borderRadius:7, fontSize:13, outline:"none",
-    fontFamily:"inherit", boxSizing:"border-box",
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-//  BRANDING SETTINGS (white-label)
-//  Lets an analyst/MSP (or admin) set the brand their assigned clients see.
-//  Live-previews against the real palette so the operator sees exactly what
-//  their clients will get before saving.
-// ─────────────────────────────────────────────────────────────
-function BrandingSettings({ onSaved }) {
-  const [form, setForm] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);
-  const [err, setErr] = useState(null);
-  const fileRef = useRef(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await authFetch(`${API_BASE}/api/branding/mine`);
-        if (res.ok) setForm(normalizeBranding(await res.json()));
-        else setForm({ ...DEFAULT_BRANDING });
-      } catch { setForm({ ...DEFAULT_BRANDING }); }
-    })();
-  }, []);
-
-  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setMsg(null); setErr(null); };
-
-  // Live preview: apply to the real palette as the operator types.
-  useEffect(() => {
-    if (!form) return;
-    applyBrandToPalette(C, { ...form, isDefault: false });
-    brandStore.set({ ...form, isDefault: false });
-  }, [form?.primaryColor, form?.accentColor, form?.productName, form?.logoUrl]);
-
-  async function onLogoPick(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 400 * 1024) { setErr("Logo must be under 400KB."); return; }
-    if (!/^image\/(png|jpeg|jpg|svg\+xml|webp)$/.test(file.type)) { setErr("Logo must be PNG, JPEG, SVG, or WebP."); return; }
-    const reader = new FileReader();
-    reader.onload = () => set("logoUrl", reader.result);
-    reader.onerror = () => setErr("Could not read that file.");
-    reader.readAsDataURL(file);
-  }
-
-  async function save() {
-    setBusy(true); setErr(null); setMsg(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/branding/mine`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productName: form.productName, companyName: form.companyName,
-          tagline: form.tagline, logoUrl: form.logoUrl,
-          primaryColor: form.primaryColor, accentColor: form.accentColor,
-          supportEmail: form.supportEmail, supportUrl: form.supportUrl,
-          footerNote: form.footerNote,
-        }),
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "Save failed.");
-      const b = normalizeBranding(d);
-      setForm(b);
-      applyBrandToPalette(C, b);
-      brandStore.set(b);
-      setMsg("Branding saved. Your clients will see this brand.");
-      onSaved && onSaved(b);
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  }
-
-  async function reset() {
-    if (!window.confirm("Reset to the default ShieldAI brand? Your clients will see ShieldAI branding.")) return;
-    setBusy(true); setErr(null); setMsg(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/branding/mine`, { method: "DELETE" });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "Reset failed.");
-      const b = normalizeBranding(d.branding);
-      setForm({ ...DEFAULT_BRANDING });
-      resetPalette(C);
-      brandStore.set(b);
-      setMsg("Reset to default branding.");
-      onSaved && onSaved(b);
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  }
-
-  if (!form) return <div style={{color:C.textSec,fontSize:13,padding:20}}>Loading branding…</div>;
-
-  const Field = BrandField;
-  const input = brandInputStyle();
-
-  return (
-    <div style={{maxWidth:900,margin:"0 auto",padding:"20px 4px"}}>
-      <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
-        <span style={{color:C.text,fontSize:16,fontWeight:700}}>White-Label Branding</span>
-        {!form.isDefault && (
-          <span style={{marginLeft:10,padding:"2px 8px",borderRadius:20,fontSize:10.5,fontWeight:700,
-            background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent}}>ACTIVE</span>
-        )}
-      </div>
-      <div style={{color:C.textSec,fontSize:12.5,marginBottom:18,lineHeight:1.5}}>
-        Set the brand your assigned clients see when they log in. Changes preview live below.
-      </div>
-
-      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-        {/* form */}
-        <div style={{flex:"1 1 380px",minWidth:0}}>
-          <Field label="Product name" hint="Shown in the header. Two words render two-tone (e.g. “Acme Guard”).">
-            <input style={input} value={form.productName || ""} maxLength={40}
-              onChange={e=>set("productName", e.target.value)} placeholder="ShieldAI"/>
-          </Field>
-          <Field label="Company name">
-            <input style={input} value={form.companyName || ""} maxLength={80}
-              onChange={e=>set("companyName", e.target.value)} placeholder="Your MSP"/>
-          </Field>
-          <Field label="Tagline">
-            <input style={input} value={form.tagline || ""} maxLength={90}
-              onChange={e=>set("tagline", e.target.value)} placeholder="Virtual CISO Platform"/>
-          </Field>
-          <Field label="Brand colour" hint="Drives accents platform-wide. Auto-lightened if too dark to read.">
-            <div style={{display:"flex",gap:10,alignItems:"center"}}>
-              <input type="color" value={form.accentColor || form.primaryColor || "#00C8FF"}
-                onChange={e=>{set("accentColor", e.target.value.toUpperCase()); set("primaryColor", e.target.value.toUpperCase());}}
-                style={{width:44,height:36,border:`1px solid ${C.border}`,borderRadius:7,background:C.bg,cursor:"pointer",padding:2}}/>
-              <input style={{...input,flex:1}} value={form.accentColor || ""} maxLength={7}
-                onChange={e=>set("accentColor", e.target.value.toUpperCase())} placeholder="#00C8FF"/>
-            </div>
-          </Field>
-          <Field label="Logo" hint="PNG, JPEG, SVG or WebP · under 400KB. Optional — falls back to a wordmark.">
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-              <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"
-                onChange={onLogoPick} style={{display:"none"}}/>
-              <button onClick={()=>fileRef.current?.click()}
-                style={{padding:"8px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
-                  background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
-                Choose file…
-              </button>
-              {form.logoUrl && (
-                <button onClick={()=>set("logoUrl", null)}
-                  style={{padding:"8px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
-                    background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>
-                  Remove logo
-                </button>
-              )}
-            </div>
-          </Field>
-          <Field label="Support email">
-            <input style={input} value={form.supportEmail || ""} maxLength={120}
-              onChange={e=>set("supportEmail", e.target.value)} placeholder="support@yourmsp.com"/>
-          </Field>
-          <Field label="Support URL" hint="Must start with https://">
-            <input style={input} value={form.supportUrl || ""} maxLength={200}
-              onChange={e=>set("supportUrl", e.target.value)} placeholder="https://yourmsp.com/support"/>
-          </Field>
-          <Field label="Report footer note" hint="Appears on client-facing exports.">
-            <input style={input} value={form.footerNote || ""} maxLength={200}
-              onChange={e=>set("footerNote", e.target.value)} placeholder="Prepared by Your MSP"/>
-          </Field>
-        </div>
-
-        {/* preview */}
-        <div style={{flex:"1 1 300px",minWidth:0}}>
-          <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Live Preview</div>
-          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
-            <div style={{padding:"12px 14px",background:C.surface,borderBottom:`1px solid ${C.border}`,
-              display:"flex",alignItems:"center",gap:10}}>
-              <ShieldLockup logoSize={24} textSize={16} ink={C.text}/>
-            </div>
-            <div style={{padding:"16px 14px"}}>
-              <div style={{color:C.textSec,fontSize:11,marginBottom:3}}>{form.tagline || "Virtual CISO Platform"}</div>
-              <div style={{color:C.text,fontSize:22,fontWeight:800,marginBottom:12}}>78<span style={{color:C.textSec,fontSize:13,fontWeight:600}}>/100</span></div>
-              <div style={{height:6,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:14}}>
-                <div style={{width:"78%",height:"100%",background:C.accent}}/>
-              </div>
-              <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:14}}>
-                <span style={{padding:"3px 9px",borderRadius:20,fontSize:10.5,fontWeight:600,
-                  background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent}}>NIST CSF</span>
-                <span style={{padding:"3px 9px",borderRadius:20,fontSize:10.5,fontWeight:600,
-                  background:C.card,border:`1px solid ${C.border}`,color:C.textSec}}>HIPAA</span>
-              </div>
-              <button style={{padding:"8px 14px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"default",
-                background:C.accent,border:"none",color:"#04121F"}}>Primary action</button>
-              <div style={{marginTop:12,display:"flex",gap:10,fontSize:11}}>
-                <span style={{color:C.green}}>● Healthy</span>
-                <span style={{color:C.amber}}>● Warning</span>
-                <span style={{color:C.red}}>● At risk</span>
-              </div>
-              <div style={{color:C.textMut,fontSize:10,marginTop:10}}>
-                Status colours stay fixed — they carry meaning, not brand.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {err && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
-        background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>{err}</div>}
-      {msg && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
-        background:`${C.green}12`,border:`1px solid ${C.green}40`,color:C.green}}>{msg}</div>}
-
-      <div style={{display:"flex",gap:9,marginTop:18}}>
-        <button onClick={save} disabled={busy}
-          style={{padding:"9px 18px",borderRadius:7,cursor:busy?"default":"pointer",fontSize:12.5,fontWeight:700,
-            background:C.accent,border:"none",color:"#04121F",opacity:busy?0.6:1}}>
-          {busy ? "Saving…" : "Save branding"}
-        </button>
-        <button onClick={reset} disabled={busy}
-          style={{padding:"9px 18px",borderRadius:7,cursor:busy?"default":"pointer",fontSize:12.5,
-            background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
-          Reset to default
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-//  GAP ANALYSIS — "fix this, gain +N"
-//  Every unresolved control ranked by how much the posture score would
-//  improve. The gains are computed by riskEngine.js (deterministic), not
-//  estimated — so the projection always matches the actual result.
-// ─────────────────────────────────────────────────────────────
-function GapAnalysis({ clientId, clientName, onTaskCreated }) {
-  const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(null);
-  const [err, setErr] = useState(null);
-
-  const qs = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
-
-  async function load() {
-    setErr(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/tasks/gaps${qs}`);
-      if (!res.ok) throw new Error((await res.json()).error || "Could not load gaps.");
-      setData(await res.json());
-    } catch (e) { setErr(e.message); }
-  }
-  useEffect(() => { load(); }, [clientId]);
-
-  async function createTask(gap) {
-    setBusy(gap.controlId); setErr(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ownerUserId: clientId, controlId: gap.controlId,
-          targetLabel: gap.targetAnswer,
-          priority: gap.projectedGain >= 15 ? "critical" : gap.projectedGain >= 8 ? "high" : "medium",
-        }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || "Could not create task.");
-      await load();
-      onTaskCreated && onTaskCreated();
-    } catch (e) { setErr(e.message); }
-    setBusy(null);
-  }
-
-  if (err && !data) return <div style={{color:SOC.red,fontSize:12.5,padding:16}}>{err}</div>;
-  if (!data) return <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>Analyzing gaps…</div>;
-  if (!data.posture) {
-    return <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>
-      {clientName || "This client"} has no assessment yet — run one to see gaps.
-    </div>;
-  }
-
-  const levelColor = (l) => l==="Strong"?SOC.green : l==="Moderate"?SOC.cyan : l==="Developing"?SOC.amber : SOC.red;
-
-  return (
-    <div>
-      {/* current posture */}
-      <div style={{display:"flex",alignItems:"center",gap:16,padding:"14px 16px",marginBottom:14,
-        background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10}}>
-        <div>
-          <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1}}>CURRENT POSTURE</div>
-          <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-            <span style={{color:levelColor(data.posture.level),fontSize:30,fontWeight:800}}>{data.posture.score}</span>
-            <span style={{color:SOC.textMut,fontSize:13}}>/100</span>
-            <span style={{color:levelColor(data.posture.level),fontSize:12,fontWeight:700}}>{data.posture.level}</span>
-          </div>
-        </div>
-        <div style={{borderLeft:`1px solid ${SOC.border}`,paddingLeft:16}}>
-          <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1,marginBottom:3}}>WEAKEST AREAS</div>
-          <div style={{display:"flex",gap:6}}>
-            {(data.posture.weakestAreas||[]).map(w => (
-              <span key={w} style={{padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:600,
-                background:`${SOC.red}18`,border:`1px solid ${SOC.red}44`,color:SOC.red}}>{w}</span>
-            ))}
-          </div>
-        </div>
-        {data.gaps.length > 0 && (
-          <div style={{marginLeft:"auto",textAlign:"right"}}>
-            <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1}}>IF ALL FIXED</div>
-            <div style={{color:SOC.green,fontSize:20,fontWeight:800}}>
-              +{data.gaps.reduce((s,g)=>Math.max(s,g.projectedScore),data.posture.score) - data.posture.score} max single fix
-            </div>
-          </div>
-        )}
-      </div>
-
-      {err && <div style={{marginBottom:10,padding:"8px 11px",borderRadius:7,fontSize:12,
-        background:`${SOC.red}12`,border:`1px solid ${SOC.red}40`,color:SOC.red}}>{err}</div>}
-
-      {data.gaps.length === 0 ? (
-        <div style={{padding:"20px",textAlign:"center",color:SOC.green,fontSize:13,fontWeight:600,
-          background:SOC.panel,border:`1px solid ${SOC.green}33`,borderRadius:10}}>
-          ✓ No open gaps — every control is at its best answer.
-        </div>
-      ) : (
-        <>
-          <div style={{color:SOC.textSec,fontSize:11,marginBottom:8}}>
-            Ranked by posture improvement. Gains computed by the scoring engine — not estimates.
-          </div>
-          <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,overflow:"hidden"}}>
-            {data.gaps.map((g,i) => (
-              <div key={g.controlId} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
-                borderTop: i ? `1px solid ${SOC.border}` : "none"}}>
-                {/* gain badge — the money shot */}
-                <div style={{minWidth:52,textAlign:"center",padding:"5px 6px",borderRadius:7,
-                  background: g.projectedGain>=15?`${SOC.green}1F`:g.projectedGain>=8?`${SOC.cyan}1A`:`${SOC.textMut}18`,
-                  border:`1px solid ${g.projectedGain>=15?SOC.green+"55":g.projectedGain>=8?SOC.cyan+"44":SOC.border}`}}>
-                  <div style={{color:g.projectedGain>=15?SOC.green:g.projectedGain>=8?SOC.cyan:SOC.textSec,
-                    fontSize:15,fontWeight:800,lineHeight:1}}>+{g.projectedGain}</div>
-                  <div style={{color:SOC.textMut,fontSize:8.5,fontWeight:700,letterSpacing:0.5}}>PTS</div>
-                </div>
-                <div style={{minWidth:0,flex:1}}>
-                  <div style={{color:SOC.text,fontSize:12.5,fontWeight:600,marginBottom:2}}>{g.question}</div>
-                  <div style={{color:SOC.textSec,fontSize:11}}>
-                    <span style={{color:SOC.textMut}}>now:</span> {g.currentAnswer || "unanswered"}
-                    <span style={{color:SOC.textMut}}> → </span>
-                    <span style={{color:SOC.green}}>{g.targetAnswer}</span>
-                  </div>
-                </div>
-                <span style={{padding:"2px 8px",borderRadius:4,fontSize:9.5,fontWeight:700,
-                  background:SOC.panelHi,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>{g.nistFunction}</span>
-                <span style={{color:SOC.textMut,fontSize:11,minWidth:64,textAlign:"right"}}>
-                  → {g.projectedScore}
-                </span>
-                {g.hasOpenTask ? (
-                  <span style={{padding:"5px 11px",borderRadius:6,fontSize:11,fontWeight:700,
-                    background:`${SOC.blue}18`,border:`1px solid ${SOC.blue}44`,color:SOC.blue}}>
-                    Task open
-                  </span>
-                ) : (
-                  <button onClick={()=>createTask(g)} disabled={busy===g.controlId}
-                    style={{padding:"5px 12px",borderRadius:6,cursor:busy?"default":"pointer",fontSize:11,fontWeight:700,
-                      background:SOC.cyan,border:"none",color:SOC.bg,opacity:busy===g.controlId?0.5:1}}>
-                    {busy===g.controlId ? "…" : "+ Task"}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-//  TASK BOARD — per-client or cross-portfolio
-// ─────────────────────────────────────────────────────────────
-const TASK_COLS = [
-  { id:"open",        label:"Open",        color:"textSec" },
-  { id:"in_progress", label:"In Progress", color:"cyan" },
-  { id:"blocked",     label:"Blocked",     color:"red" },
-  { id:"done",        label:"Done",        color:"green" },
-];
-const PRIO_COLOR = { critical:"red", high:"amber", medium:"cyan", low:"textMut" };
-
-function TaskCard({ t, onAdvance, onComplete, busy }) {
-  const prio = SOC[PRIO_COLOR[t.priority] || "textMut"];
-  return (
-    <div style={{background:SOC.panelHi,border:`1px solid ${t.isOverdue?SOC.red+"66":SOC.border}`,
-      borderRadius:8,padding:"9px 10px",marginBottom:7}}>
-      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
-        <span style={{width:6,height:6,borderRadius:"50%",background:prio,flexShrink:0}}/>
-        <span style={{color:prio,fontSize:9,fontWeight:800,letterSpacing:0.5,textTransform:"uppercase"}}>{t.priority}</span>
-        {t.projectedGain != null && t.status !== "done" && (
-          <span style={{marginLeft:"auto",color:SOC.green,fontSize:10.5,fontWeight:800}}>+{t.projectedGain}</span>
-        )}
-        {t.actualGain != null && t.status === "done" && (
-          <span style={{marginLeft:"auto",color:SOC.green,fontSize:10.5,fontWeight:800}}>✓ +{t.actualGain}</span>
-        )}
-      </div>
-      <div style={{color:SOC.text,fontSize:11.5,fontWeight:600,lineHeight:1.35,marginBottom:5}}>{t.title}</div>
-      {t.clientName && (
-        <div style={{color:SOC.textSec,fontSize:10,marginBottom:4}}>{t.clientName}</div>
-      )}
-      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-        {t.control && (
-          <span style={{padding:"1px 6px",borderRadius:3,fontSize:8.5,fontWeight:700,
-            background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textMut}}>
-            {t.control.nistFunction}
-          </span>
-        )}
-        {t.dueDate && (
-          <span style={{fontSize:9.5,color:t.isOverdue?SOC.red:SOC.textMut,fontWeight:t.isOverdue?700:400}}>
-            {t.isOverdue ? "⚠ " : ""}{new Date(t.dueDate).toLocaleDateString()}
-          </span>
-        )}
-        {t.assigneeName && <span style={{fontSize:9.5,color:SOC.textMut}}>· {t.assigneeName}</span>}
-      </div>
-      {t.status !== "done" && t.status !== "cancelled" && (
-        <div style={{display:"flex",gap:5,marginTop:7}}>
-          {t.status === "open" && (
-            <button onClick={()=>onAdvance(t,"in_progress")} disabled={busy}
-              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
-                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Start</button>
-          )}
-          {t.status === "in_progress" && (
-            <button onClick={()=>onAdvance(t,"blocked")} disabled={busy}
-              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
-                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Block</button>
-          )}
-          {t.status === "blocked" && (
-            <button onClick={()=>onAdvance(t,"in_progress")} disabled={busy}
-              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
-                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Unblock</button>
-          )}
-          <button onClick={()=>onComplete(t)} disabled={busy}
-            style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
-              background:`${SOC.green}1A`,border:`1px solid ${SOC.green}55`,color:SOC.green}}>
-            Complete
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TaskBoard({ clientId, clientName }) {
-  const [board, setBoard] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  const [flash, setFlash] = useState(null);
-  const [tab, setTab] = useState(clientId ? "gaps" : "board");
-
-  async function load() {
-    setErr(null);
-    try {
-      if (clientId) {
-        const res = await authFetch(`${API_BASE}/api/tasks?clientId=${encodeURIComponent(clientId)}`);
-        if (!res.ok) throw new Error((await res.json()).error || "Could not load tasks.");
-        const list = await res.json();
-        const columns = {};
-        for (const c of TASK_COLS) columns[c.id] = [];
-        columns.cancelled = [];
-        for (const t of list) {
-          (columns[t.status] ||= []).push({
-            ...t,
-            isOverdue: !!(t.dueDate && new Date(t.dueDate) < new Date() && !["done","cancelled"].includes(t.status)),
-          });
-        }
-        setBoard({ columns, summary: null });
-      } else {
-        const res = await authFetch(`${API_BASE}/api/tasks/board`);
-        if (!res.ok) throw new Error((await res.json()).error || "Could not load board.");
-        setBoard(await res.json());
-      }
-    } catch (e) { setErr(e.message); }
-  }
-  useEffect(() => { load(); }, [clientId]);
-
-  async function advance(t, status) {
-    setBusy(true); setErr(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/tasks/${t.id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || "Update failed.");
-      await load();
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  }
-
-  async function complete(t) {
-    setBusy(true); setErr(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/tasks/${t.id}/complete`, { method: "POST" });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || "Complete failed.");
-      // The payoff moment: show the score actually moving.
-      setFlash(`${t.title.slice(0,40)}… — posture ${d.posture.before} → ${d.posture.after} (+${d.posture.delta})`
-        + (d.posture.levelBefore !== d.posture.levelAfter ? ` · ${d.posture.levelBefore} → ${d.posture.levelAfter}` : ""));
-      setTimeout(()=>setFlash(null), 6000);
-      await load();
-    } catch (e) { setErr(e.message); }
-    setBusy(false);
-  }
-
-  const s = board?.summary;
-
-  return (
-    <div>
-      {/* tabs */}
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
-        {(clientId ? [{id:"gaps",label:"Gap Analysis"},{id:"board",label:"Tasks"}] : [{id:"board",label:"All Tasks"}]).map(t => (
-          <button key={t.id} onClick={()=>setTab(t.id)}
-            style={{padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,
-              background: tab===t.id ? SOC.cyan : `${SOC.cyan}18`,
-              color: tab===t.id ? SOC.bg : SOC.cyan,
-              border:`1px solid ${SOC.cyan}55`}}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {flash && (
-        <div style={{marginBottom:12,padding:"10px 13px",borderRadius:8,fontSize:12.5,fontWeight:600,
-          background:`${SOC.green}1A`,border:`1px solid ${SOC.green}55`,color:SOC.green}}>
-          ✓ {flash}
-        </div>
-      )}
-      {err && (
-        <div style={{marginBottom:12,padding:"9px 12px",borderRadius:7,fontSize:12,
-          background:`${SOC.red}12`,border:`1px solid ${SOC.red}40`,color:SOC.red}}>{err}</div>
-      )}
-
-      {tab === "gaps" && clientId && (
-        <GapAnalysis clientId={clientId} clientName={clientName} onTaskCreated={load}/>
-      )}
-
-      {tab === "board" && (
-        <>
-          {s && (
-            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
-              {[
-                { label:"Open", v:s.open, c:SOC.cyan },
-                { label:"Overdue", v:s.overdue, c: s.overdue ? SOC.red : SOC.textMut },
-                { label:"Blocked", v:s.blocked, c: s.blocked ? SOC.amber : SOC.textMut },
-                { label:"Unassigned", v:s.unassigned, c: s.unassigned ? SOC.amber : SOC.textMut },
-                { label:"Done", v:s.done, c:SOC.green },
-              ].map(x => (
-                <div key={x.label} style={{flex:"1 1 110px",background:SOC.panel,
-                  border:`1px solid ${SOC.border}`,borderRadius:9,padding:"9px 12px"}}>
-                  <div style={{color:SOC.textSec,fontSize:10,fontWeight:700,letterSpacing:0.5}}>{x.label.toUpperCase()}</div>
-                  <div style={{color:x.c,fontSize:20,fontWeight:800}}>{x.v}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {!board ? (
-            <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>Loading tasks…</div>
-          ) : (
-            <div style={{display:"flex",gap:10,alignItems:"flex-start",overflowX:"auto",paddingBottom:6}}>
-              {TASK_COLS.map(col => {
-                const items = board.columns[col.id] || [];
-                return (
-                  <div key={col.id} style={{flex:"1 1 210px",minWidth:200,background:SOC.bg,
-                    border:`1px solid ${SOC.border}`,borderRadius:10,padding:"10px 9px"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:9}}>
-                      <span style={{color:SOC[col.color],fontSize:10.5,fontWeight:800,letterSpacing:0.8}}>
-                        {col.label.toUpperCase()}
-                      </span>
-                      <span style={{marginLeft:"auto",color:SOC.textMut,fontSize:10.5,fontWeight:700}}>{items.length}</span>
-                    </div>
-                    {items.length === 0 ? (
-                      <div style={{color:SOC.textMut,fontSize:10.5,padding:"8px 2px"}}>—</div>
-                    ) : items.map(t => (
-                      <TaskCard key={t.id} t={t} busy={busy} onAdvance={advance} onComplete={complete}/>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -7017,7 +6180,6 @@ function AnalystConsole({ user, onExit }) {
   const [fleet, setFleet] = useState(null);          // live endpoints from backend
   const [myClients, setMyClients] = useState(null);
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
-  const [tasksFor, setTasksFor] = useState(null);     // { id, name } — per-client gaps/tasks
   const [actionsLoading, setActionsLoading] = useState(false);
 
   async function loadMyClients() {
@@ -7146,18 +6308,6 @@ function AnalystConsole({ user, onExit }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🖥️ Live Fleet
         </button>
-        <button onClick={()=>setView(view==="tasks"?"portfolio":"tasks")}
-          style={{padding:"6px 14px",background:view==="tasks"?SOC.cyan:`${SOC.cyan}18`,
-            color:view==="tasks"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
-            fontSize:12,fontWeight:700,cursor:"pointer"}}>
-          ✓ Tasks
-        </button>
-        <button onClick={()=>setView(view==="branding"?"portfolio":"branding")}
-          style={{padding:"6px 14px",background:view==="branding"?SOC.cyan:`${SOC.cyan}18`,
-            color:view==="branding"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
-            fontSize:12,fontWeight:700,cursor:"pointer"}}>
-          🎨 Branding
-        </button>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
             color:mmOpen?SOC.bg:SOC.purple,border:`1px solid ${SOC.purple}66`,borderRadius:6,
@@ -7261,30 +6411,6 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
-  if (view === "tasks") {
-    return (
-      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
-        <Header title="Tasks — All Clients"/>
-        <Mastermind/>
-        <div style={{maxWidth:1200,margin:"0 auto",padding:"20px"}}>
-          <TaskBoard/>
-        </div>
-      </div>
-    );
-  }
-
-  if (view === "branding") {
-    return (
-      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
-        <Header title="Branding"/>
-        <Mastermind/>
-        <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
-          <BrandingSettings/>
-        </div>
-      </div>
-    );
-  }
-
   if (view === "myclients") {
     const list = myClients || [];
     return (
@@ -7292,18 +6418,7 @@ function AnalystConsole({ user, onExit }) {
         <Header title="My Clients"/>
         <Mastermind/>
         <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
-          {tasksFor ? (
-            <div>
-              <button onClick={()=>setTasksFor(null)}
-                style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
-                  borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← Back to clients</button>
-              <div style={{fontSize:11,color:SOC.textMut,letterSpacing:1,textTransform:"uppercase",
-                fontWeight:700,marginBottom:14}}>
-                Gaps &amp; Tasks · {tasksFor.name}
-              </div>
-              <TaskBoard clientId={tasksFor.id} clientName={tasksFor.name}/>
-            </div>
-          ) : actionsFor ? (
+          {actionsFor ? (
             <div>
               <button onClick={()=>setActionsFor(null)}
                 style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
@@ -7366,11 +6481,6 @@ function AnalystConsole({ user, onExit }) {
                           {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
                         </div>
                       </div>
-                      <button onClick={()=>setTasksFor({ id:c.id, name:c.name })}
-                        style={{padding:"7px 14px",background:SOC.cyan,border:"none",
-                          borderRadius:7,color:SOC.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                        Gaps &amp; Tasks →
-                      </button>
                       <button onClick={()=>loadClientActions(c.id)}
                         style={{padding:"7px 14px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
                           borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
@@ -8881,706 +7991,6 @@ function UpgradeModal({ info, onClose }) {
 
 
 // ─────────────────────────────────────────────────────────────
-//  PLAN PANEL — shows the client's tier, usage vs limits, upgrade
-// ─────────────────────────────────────────────────────────────
-function PlanPanel({ user, usage, loading, onClose, onTierChanged }) {
-  const [billingBusy, setBillingBusy] = useState(false);
-  const [billingError, setBillingError] = useState("");
-
-  async function devSwitchTier(tierId) {
-    setBillingError("");
-    setBillingBusy(true);
-    try {
-      const res = await authFetch(`${API_BASE}/api/dev/my-tier`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: tierId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        if (onTierChanged) await onTierChanged(); // refresh user + usage
-      } else {
-        setBillingError(data.error || "Couldn't switch tier.");
-      }
-    } catch {
-      setBillingError("Network error switching tier.");
-    } finally {
-      setBillingBusy(false);
-    }
-  }
-
-  async function startCheckout(tierId) {
-    setBillingError("");
-    setBillingBusy(true);
-    try {
-      const res = await authFetch(`${API_BASE}/api/billing/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: tierId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.url) {
-        window.location.href = data.url;   // hand off to Stripe Checkout
-        return;
-      }
-      if (res.status === 503) {
-        setBillingError("Online payments aren't set up on this server yet. If you're testing, enable SHIELDAI_DEV_MODE to switch tiers instantly, or an admin can change your tier from the admin console.");
-      } else {
-        setBillingError(data.error || "Couldn't start checkout. Please try again or contact your admin.");
-      }
-    } catch {
-      setBillingError("Network error starting checkout. Please try again.");
-    } finally {
-      setBillingBusy(false);
-    }
-  }
-
-  async function openPortal() {
-    setBillingError("");
-    setBillingBusy(true);
-    try {
-      const res = await authFetch(`${API_BASE}/api/billing/portal`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.url) { window.location.href = data.url; return; }
-      setBillingError(data.error || "Couldn't open the billing portal.");
-    } catch {
-      setBillingError("Network error opening billing portal. Please try again.");
-    } finally {
-      setBillingBusy(false);
-    }
-  }
-
-  const tierMeta = {
-    free:       { label:"Free",       color:C.textMut, blurb:"Run a baseline security assessment." },
-    starter:    { label:"Starter",    color:C.green,   blurb:"Programs, policies, training, and endpoint monitoring." },
-    pro:        { label:"Pro",         color:C.accent,  blurb:"More policies, downloads, and analyst support." },
-    enterprise: { label:"Enterprise", color:C.purple,  blurb:"Unlimited usage, full analyst support, and Mastermind." },
-  };
-  const m = tierMeta[user.tier] || tierMeta.free;
-
-  const resourceLabels = {
-    policies: "Policies",
-    programs: "Programs",
-    trainingPrograms: "Training programs",
-    endpoints: "Monitored endpoints",
-  };
-  const order = ["policies", "programs", "trainingPrograms", "endpoints"];
-
-  function Meter({ label, data }) {
-    const unlimited = data.unlimited;
-    const pct = unlimited ? 100
-      : data.limit > 0 ? Math.min(100, Math.round((data.current / data.limit) * 100)) : 0;
-    const barColor = unlimited ? C.green : data.atLimit ? C.red : pct >= 80 ? C.amber : m.color;
-    return (
-      <div style={{marginBottom:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5}}>
-          <span style={{color:C.textSec,fontSize:13}}>{label}</span>
-          <span style={{color:C.text,fontSize:13,fontWeight:600}}>
-            {unlimited ? `${data.current} · Unlimited` : `${data.current} of ${data.limit}`}
-          </span>
-        </div>
-        <div style={{height:7,borderRadius:6,background:C.surface,overflow:"hidden"}}>
-          <div style={{height:"100%",width:`${pct}%`,background:barColor,
-            borderRadius:6,transition:"width .3s"}}/>
-        </div>
-        {!unlimited && data.atLimit && (
-          <div style={{color:C.red,fontSize:11,marginTop:4}}>Limit reached — upgrade for more.</div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
-      display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${m.color}55`,
-        borderRadius:14,maxWidth:460,width:"100%",padding:"26px 28px",maxHeight:"85vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
-          <div>
-            <div style={{color:C.textMut,fontSize:11,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>
-              Your plan
-            </div>
-            <div style={{display:"inline-flex",alignItems:"center",gap:8}}>
-              <span style={{padding:"3px 12px",borderRadius:20,background:`${m.color}1A`,
-                border:`1px solid ${m.color}66`,color:m.color,fontSize:13,fontWeight:700,
-                textTransform:"uppercase",letterSpacing:0.3}}>{m.label}</span>
-            </div>
-          </div>
-          <button onClick={onClose}
-            style={{background:"none",border:"none",color:C.textMut,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
-        </div>
-        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"4px 0 20px"}}>{m.blurb}</p>
-
-        <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:12}}>Usage this plan</div>
-
-        {loading && !usage && (
-          <div style={{color:C.textMut,fontSize:13,padding:"10px 0"}}>Loading usage…</div>
-        )}
-
-        {usage && usage.staff && (
-          <div style={{color:C.textSec,fontSize:13,lineHeight:1.6,
-            background:C.surface,borderRadius:8,padding:"12px 14px"}}>
-            Staff accounts aren't subject to plan limits.
-          </div>
-        )}
-
-        {usage && !usage.staff && usage.usage && order.map(r => (
-          usage.usage[r]
-            ? <Meter key={r} label={resourceLabels[r] || r} data={usage.usage[r]}/>
-            : null
-        ))}
-
-        <div style={{borderTop:`1px solid ${C.border}`,marginTop:18,paddingTop:16}}>
-          {(() => {
-            const upgrades = (usage?.tiers || []).filter(t => t.isUpgrade);
-            const hasSub = !!(usage && !usage.staff); // any client can manage if they have one
-            if (usage?.staff) return null;
-
-            return (
-              <>
-                {upgrades.length > 0 && (
-                  <>
-                    <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
-                      Upgrade your plan
-                    </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
-                      {upgrades.map(t => {
-                        const price = t.priceCents != null
-                          ? `$${(t.priceCents/100).toLocaleString()}/mo` : "Custom";
-                        const cmeta = {
-                          starter:C.green, pro:C.accent, enterprise:C.purple,
-                        }[t.id] || C.accent;
-                        return (
-                          <div key={t.id} style={{display:"flex",alignItems:"center",
-                            justifyContent:"space-between",gap:10,
-                            background:C.surface,border:`1px solid ${C.border}`,
-                            borderRadius:10,padding:"10px 12px"}}>
-                            <div style={{minWidth:0}}>
-                              <div style={{color:cmeta,fontSize:13,fontWeight:700}}>
-                                {t.name} <span style={{color:C.textSec,fontWeight:500}}>· {price}</span>
-                              </div>
-                              <div style={{color:C.textMut,fontSize:11,lineHeight:1.4,
-                                overflow:"hidden",textOverflow:"ellipsis"}}>
-                                {t.description}
-                              </div>
-                            </div>
-                            {t.contactSales ? (
-                              <a href="mailto:sales@shieldai.com?subject=Enterprise%20plan%20inquiry"
-                                style={{flexShrink:0,padding:"8px 14px",borderRadius:8,
-                                  background:`${cmeta}22`,border:`1px solid ${cmeta}66`,
-                                  color:cmeta,fontSize:12,fontWeight:700,cursor:"pointer",
-                                  textDecoration:"none",whiteSpace:"nowrap"}}>
-                                Contact sales
-                              </a>
-                            ) : (
-                              <button onClick={() => startCheckout(t.id)} disabled={billingBusy}
-                                style={{flexShrink:0,padding:"8px 14px",borderRadius:8,
-                                  background:billingBusy?C.surface:`linear-gradient(135deg,${cmeta},${C.accentDm})`,
-                                  border:"none",color:billingBusy?C.textMut:C.bg,
-                                  fontSize:12,fontWeight:700,
-                                  cursor:billingBusy?"default":"pointer",whiteSpace:"nowrap"}}>
-                                {billingBusy ? "…" : "Upgrade"}
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-
-                {billingError && (
-                  <div style={{color:C.amber,fontSize:12,lineHeight:1.5,
-                    background:`${C.amber}12`,border:`1px solid ${C.amber}44`,
-                    borderRadius:8,padding:"8px 10px",marginBottom:10}}>
-                    {billingError}
-                  </div>
-                )}
-
-                {user.tier !== "free" && (
-                  <button onClick={openPortal} disabled={billingBusy}
-                    style={{width:"100%",padding:"9px",borderRadius:8,background:"none",
-                      border:`1px solid ${C.border}`,color:C.textSec,fontSize:12,
-                      cursor:billingBusy?"default":"pointer",marginBottom:10}}>
-                    Manage subscription
-                  </button>
-                )}
-
-                <div style={{color:C.textMut,fontSize:11,lineHeight:1.5}}>
-                  Payments are processed securely by Stripe. Enterprise plans are arranged with our team.
-                </div>
-              </>
-            );
-          })()}
-        </div>
-
-        {usage?.devMode && (
-          <div style={{marginTop:16,padding:"12px 14px",borderRadius:10,
-            background:`${C.amber}10`,border:`1px dashed ${C.amber}66`}}>
-            <div style={{color:C.amber,fontSize:12,fontWeight:700,marginBottom:8,
-              display:"flex",alignItems:"center",gap:6}}>
-              🛠 Dev mode — switch tier instantly (no payment)
-            </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-              {(usage.tiers || []).map(t => {
-                const active = t.id === user.tier;
-                return (
-                  <button key={t.id} onClick={() => !active && devSwitchTier(t.id)}
-                    disabled={billingBusy || active}
-                    style={{padding:"6px 12px",borderRadius:7,fontSize:12,fontWeight:600,
-                      background: active ? `${C.amber}22` : C.surface,
-                      border:`1px solid ${active ? C.amber+"88" : C.border}`,
-                      color: active ? C.amber : C.textSec,
-                      cursor: active || billingBusy ? "default" : "pointer"}}>
-                    {t.name}{active ? " ✓" : ""}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{color:C.textMut,fontSize:10.5,marginTop:8,lineHeight:1.5}}>
-              Testing only. This control is hidden unless the server runs with SHIELDAI_DEV_MODE=true.
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-
-// ─────────────────────────────────────────────────────────────
-//  ADMIN/ANALYST CVE EXPOSURE — a client's live vulnerability exposure
-// ─────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────
-//  AI INTEGRATIONS — provider status (reads /api/ai/providers)
-//  Shows which models are live vs. planned. Honest by construction:
-//  status comes from the backend registry, not hardcoded claims.
-// ─────────────────────────────────────────────────────────────
-function AiIntegrations() {
-  const [providers, setProviders] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await authFetch(`${API_BASE}/api/ai/providers`);
-        if (res.ok) setProviders((await res.json()).providers || []);
-      } catch { /* ignore */ }
-      finally { setLoading(false); }
-    })();
-  }, []);
-
-  const badge = (status) => {
-    const map = {
-      active:              { label:"Active",            color:C.green },
-      coming_soon:         { label:"Coming soon",       color:C.textMut },
-      needs_configuration: { label:"Needs API key",     color:C.amber },
-    };
-    return map[status] || { label:status, color:C.textMut };
-  };
-
-  return (
-    <div>
-      <SectionLabel text="AI Integrations"/>
-      <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
-        All program generation currently runs on Claude. Additional providers are scaffolded
-        but not yet serviced — their routes exist and return a clear “not available” response
-        until activated. Threat data (CVEs, breaches) comes from live databases, not a model.
-      </p>
-      {loading ? (
-        <div style={{color:C.textMut,fontSize:13}}>Loading provider status…</div>
-      ) : !providers ? (
-        <div style={{color:C.textMut,fontSize:13}}>Couldn’t load provider status.</div>
-      ) : (
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
-          {providers.map(p => {
-            const b = badge(p.status);
-            return (
-              <Card key={p.id} style={{padding:"14px 16px"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
-                  <span style={{color:C.text,fontSize:14,fontWeight:700}}>{p.name}</span>
-                  <span style={{padding:"2px 9px",borderRadius:20,fontSize:10.5,fontWeight:700,
-                    background:`${b.color}18`,border:`1px solid ${b.color}55`,color:b.color}}>
-                    {b.label}
-                  </span>
-                </div>
-                <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{p.role}</div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ─────────────────────────────────────────────────────────────
-//  ADMIN TIER SWITCH — change any client's tier directly (no Stripe)
-//  Uses the internal /api/admin/accounts/:id/tier endpoint via onSwitch.
-// ─────────────────────────────────────────────────────────────
-function AdminTierSwitch({ userId, currentTier, busy, onSwitch }) {
-  const TIERS_UI = [
-    { id: "free",       name: "Free",          price: "$0" },
-    { id: "starter",    name: "Self-Serve",    price: "$129" },
-    { id: "pro",        name: "Guided",        price: "$599" },
-    { id: "enterprise", name: "Managed vCISO", price: "$1,950" },
-  ];
-  const [pending, setPending] = useState(null);
-  const cur = currentTier || "free";
-
-  return (
-    <Card style={{marginBottom:20,border:`1px solid ${C.accent}33`}}>
-      <div style={{color:C.accent,fontSize:11,fontWeight:700,letterSpacing:1.2,
-        textTransform:"uppercase",marginBottom:4}}>Subscription Tier</div>
-      <div style={{color:C.textMut,fontSize:11.5,marginBottom:12}}>
-        Change this client's plan instantly — applied server-side, no payment or Stripe required.
-      </div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-        {TIERS_UI.map(t => {
-          const isCurrent = t.id === cur;
-          const isPending = t.id === pending;
-          return (
-            <button key={t.id}
-              onClick={() => !isCurrent && setPending(t.id)}
-              disabled={busy || isCurrent}
-              style={{padding:"8px 13px",borderRadius:8,fontSize:12,fontWeight:600,textAlign:"left",
-                cursor: isCurrent || busy ? "default" : "pointer",
-                background: isPending ? `${C.accent}18` : (isCurrent ? `${C.green}18` : "transparent"),
-                border:`1px solid ${isPending ? C.accent : (isCurrent ? C.green : C.border)}`,
-                color: isPending ? C.accent : (isCurrent ? C.green : C.textSec)}}>
-              {t.name} <span style={{opacity:0.65,fontWeight:400}}>{t.price}</span>
-              {isCurrent ? " · current" : ""}
-            </button>
-          );
-        })}
-      </div>
-      {pending && pending !== cur && (
-        <div style={{marginTop:12,display:"flex",gap:8,alignItems:"center"}}>
-          <button onClick={() => { onSwitch(pending); setPending(null); }} disabled={busy}
-            style={{padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,border:"none",
-              cursor: busy ? "default" : "pointer", color:C.bg,
-              background:`linear-gradient(135deg,${C.accent},${C.accentDm})`}}>
-            {busy ? "Applying…" : `Apply: ${cur} → ${pending}`}
-          </button>
-          <button onClick={() => setPending(null)} disabled={busy}
-            style={{padding:"8px 12px",borderRadius:8,fontSize:12,background:"none",
-              border:`1px solid ${C.border}`,color:C.textMut,cursor:"pointer"}}>
-            Cancel
-          </button>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-
-function AdminCveExposure({ userId }) {
-  const [data, setData] = useState(null);
-  const [darkweb, setDarkweb] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [res, dwRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/client/cve-exposure?userId=${encodeURIComponent(userId)}`),
-        authFetch(`${API_BASE}/api/client/darkweb-exposure?userId=${encodeURIComponent(userId)}`),
-      ]);
-      if (res.ok) setData(await res.json());
-      if (dwRes.ok) setDarkweb((await dwRes.json()).exposure || null);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, [userId]);
-
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        authFetch(`${API_BASE}/api/client/cve-exposure/refresh`, { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) }),
-        authFetch(`${API_BASE}/api/client/darkweb-exposure/refresh`, { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) }),
-      ]);
-      await load();
-    } catch { /* ignore */ }
-    finally { setRefreshing(false); }
-  }
-
-  const sevColor = (s) => ({ CRITICAL:C.red, HIGH:"#FF7A45", MEDIUM:C.amber, LOW:C.green }[String(s||"").toUpperCase()] || C.textMut);
-  const exposure = data?.exposure;
-  const counts = exposure?.counts || {};
-  const top = exposure?.top || [];
-
-  return (
-    <Card style={{marginBottom:20,border:`1px solid ${C.amber}33`}}>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-        <span style={{color:C.amber,fontSize:12,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase"}}>
-          CVE Exposure (live NVD)
-        </span>
-        <button onClick={refresh} disabled={refreshing}
-          style={{marginLeft:"auto",padding:"4px 10px",borderRadius:6,background:C.surface,
-            border:`1px solid ${C.border}`,color:C.textSec,fontSize:11,cursor:refreshing?"default":"pointer"}}>
-          {refreshing ? "Refreshing…" : "↻ Refresh"}
-        </button>
-      </div>
-
-      {loading ? <div style={{color:C.textMut,fontSize:13}}>Loading exposure…</div>
-       : !data ? <div style={{color:C.textMut,fontSize:13}}>Couldn't load exposure.</div>
-       : data.note ? <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.5}}>{data.note}</div>
-       : (
-        <>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-            {["CRITICAL","HIGH","MEDIUM","LOW"].map(sev => (
-              <div key={sev} style={{flex:"1 1 0",minWidth:80,background:C.surface,borderRadius:8,
-                padding:"10px 12px",borderTop:`2px solid ${sevColor(sev)}`}}>
-                <div style={{color:sevColor(sev),fontSize:20,fontWeight:700}}>{counts[sev] || 0}</div>
-                <div style={{color:C.textMut,fontSize:10,textTransform:"uppercase",letterSpacing:0.4}}>{sev}</div>
-              </div>
-            ))}
-          </div>
-          {exposure?.degraded && (
-            <div style={{color:C.amber,fontSize:11.5,marginBottom:10}}>
-              Live NVD lookup was partial — results may be incomplete.
-            </div>
-          )}
-          {top.length > 0 ? top.map((c,i) => (
-            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",
-              borderBottom:i<top.length-1?`1px solid ${C.border}`:"none"}}>
-              <span style={{flexShrink:0,padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700,
-                background:`${sevColor(c.severity)}22`,color:sevColor(c.severity),marginTop:1}}>
-                {c.score != null ? c.score : "—"}
-              </span>
-              <div style={{minWidth:0}}>
-                <a href={c.url} target="_blank" rel="noreferrer"
-                  style={{color:C.accent,fontSize:12.5,fontWeight:600,textDecoration:"none"}}>{c.id}</a>
-                <span style={{color:C.textMut,fontSize:11}}> · {c.software}</span>
-                <div style={{color:C.textSec,fontSize:11.5,lineHeight:1.4,marginTop:2}}>{c.description}</div>
-              </div>
-            </div>
-          )) : (
-            <div style={{color:C.green,fontSize:12.5}}>No known CVEs matched the current software inventory.</div>
-          )}
-          {(data.software||[]).length > 0 && (
-            <div style={{color:C.textMut,fontSize:10.5,marginTop:10}}>
-              Matched against: {data.software.join(" · ")}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Dark-web / breach exposure */}
-      <div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12}}>
-        <div style={{color:C.amber,fontSize:11,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>
-          Dark-web / breach (HIBP)
-        </div>
-        {!darkweb ? <div style={{color:C.textMut,fontSize:12}}>Loading…</div> : (() => {
-          const lvl = darkweb.statusLevel || "Unknown";
-          const active = darkweb.monitored && (darkweb.breachedAccounts != null);
-          const tone = lvl === "High alert" ? C.red : lvl === "Elevated" ? "#FF7A45"
-            : lvl === "Low risk" ? C.amber : lvl === "No intel" ? C.green : C.textMut;
-          return (
-            <div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                <span style={{color:tone,fontSize:13,fontWeight:700}}>{lvl}</span>
-                <span style={{color:C.textMut,fontSize:10.5}}>{darkweb.domain || "no domain"}</span>
-              </div>
-              {active ? (
-                <div style={{color:C.textSec,fontSize:11.5,marginTop:5,lineHeight:1.4}}>
-                  {darkweb.breachedAccounts} breached account{darkweb.breachedAccounts===1?"":"s"} · {darkweb.distinctBreaches} breach{darkweb.distinctBreaches===1?"":"es"}
-                  {(darkweb.breaches||[]).length>0 && <span style={{color:C.textMut}}> — {darkweb.breaches.slice(0,8).join(", ")}{darkweb.breaches.length>8?"…":""}</span>}
-                </div>
-              ) : (
-                <div style={{color:C.textMut,fontSize:11.5,marginTop:5,lineHeight:1.4}}>{darkweb.reason || "Not monitored."}</div>
-              )}
-            </div>
-          );
-        })()}
-      </div>
-    </Card>
-  );
-}
-
-
-// ─────────────────────────────────────────────────────────────
-//  THREAT INTELLIGENCE — reference databases + live CVE exposure
-// ─────────────────────────────────────────────────────────────
-function ThreatIntelPanel({ onClose }) {
-  const [refs, setRefs] = useState([]);
-  const [exposure, setExposure] = useState(null);
-  const [software, setSoftware] = useState([]);
-  const [note, setNote] = useState("");
-  const [darkweb, setDarkweb] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [refsRes, expRes, dwRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/cve/refs`),
-        authFetch(`${API_BASE}/api/client/cve-exposure`),
-        authFetch(`${API_BASE}/api/client/darkweb-exposure`),
-      ]);
-      if (refsRes.ok) setRefs((await refsRes.json()).references || []);
-      if (expRes.ok) {
-        const d = await expRes.json();
-        setExposure(d.exposure || null);
-        setSoftware(d.software || []);
-        setNote(d.note || "");
-      }
-      if (dwRes.ok) setDarkweb((await dwRes.json()).exposure || null);
-    } catch { /* leave defaults */ }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
-
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        authFetch(`${API_BASE}/api/client/cve-exposure/refresh`, { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }),
-        authFetch(`${API_BASE}/api/client/darkweb-exposure/refresh`, { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }),
-      ]);
-      await load();
-    } catch { /* ignore */ }
-    finally { setRefreshing(false); }
-  }
-
-  const sevColor = (s) => ({ CRITICAL:C.red, HIGH:"#FF7A45", MEDIUM:C.amber, LOW:C.green }[String(s||"").toUpperCase()] || C.textMut);
-  const counts = exposure?.counts || {};
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
-      display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
-        borderRadius:14,maxWidth:680,width:"100%",padding:"24px 26px",maxHeight:"88vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
-          <div style={{color:C.text,fontSize:18,fontWeight:700}}>🛡️ Threat Intelligence</div>
-          <button onClick={onClose} style={{background:"none",border:"none",color:C.textMut,fontSize:20,cursor:"pointer",lineHeight:1}}>×</button>
-        </div>
-        <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"2px 0 18px"}}>
-          Your live vulnerability exposure, matched against the NIST National Vulnerability Database, plus the authoritative sources ShieldAI draws on.
-        </p>
-
-        {/* CVE exposure */}
-        <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:10,display:"flex",
-          justifyContent:"space-between",alignItems:"center"}}>
-          <span>Your CVE exposure</span>
-          <button onClick={refresh} disabled={refreshing}
-            style={{padding:"4px 10px",borderRadius:6,background:C.surface,border:`1px solid ${C.border}`,
-              color:C.textSec,fontSize:11,cursor:refreshing?"default":"pointer"}}>
-            {refreshing ? "Refreshing…" : "↻ Refresh"}
-          </button>
-        </div>
-
-        {loading && <div style={{color:C.textMut,fontSize:13,padding:"8px 0"}}>Loading…</div>}
-
-        {!loading && note && (
-          <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.5,background:C.surface,
-            borderRadius:8,padding:"12px 14px",marginBottom:14}}>{note}</div>
-        )}
-
-        {!loading && exposure && (
-          <>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-              {["CRITICAL","HIGH","MEDIUM","LOW"].map(sev => (
-                <div key={sev} style={{flex:"1 1 0",minWidth:90,background:C.surface,borderRadius:8,
-                  padding:"10px 12px",borderTop:`2px solid ${sevColor(sev)}`}}>
-                  <div style={{color:sevColor(sev),fontSize:22,fontWeight:700}}>{counts[sev] || 0}</div>
-                  <div style={{color:C.textMut,fontSize:10.5,textTransform:"uppercase",letterSpacing:0.4}}>{sev}</div>
-                </div>
-              ))}
-            </div>
-            {exposure.degraded && (
-              <div style={{color:C.amber,fontSize:11.5,marginBottom:10}}>
-                Some lookups couldn't reach the vulnerability database just now — results may be partial.
-              </div>
-            )}
-            {(exposure.top || []).length > 0 ? (
-              <div style={{marginBottom:8}}>
-                {exposure.top.map((c, i) => (
-                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 0",
-                    borderBottom:i < exposure.top.length-1 ? `1px solid ${C.border}` : "none"}}>
-                    <span style={{flexShrink:0,padding:"2px 7px",borderRadius:5,fontSize:10,fontWeight:700,
-                      background:`${sevColor(c.severity)}22`,color:sevColor(c.severity),marginTop:1}}>
-                      {c.score != null ? c.score : "—"}
-                    </span>
-                    <div style={{minWidth:0}}>
-                      <a href={c.url} target="_blank" rel="noreferrer"
-                        style={{color:C.accent,fontSize:12.5,fontWeight:600,textDecoration:"none"}}>{c.id}</a>
-                      <span style={{color:C.textMut,fontSize:11}}> · {c.software}</span>
-                      <div style={{color:C.textSec,fontSize:11.5,lineHeight:1.4,marginTop:2}}>{c.description}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : software.length > 0 ? (
-              <div style={{color:C.green,fontSize:12.5,padding:"4px 0 10px"}}>
-                No known CVEs matched your current software inventory.
-              </div>
-            ) : null}
-            {software.length > 0 && (
-              <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>
-                Matched against: {software.join(" · ")}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Dark-web / breach exposure */}
-        <div style={{color:C.text,fontSize:14,fontWeight:600,margin:"18px 0 10px"}}>Dark-web / breach exposure</div>
-        {!darkweb ? (
-          <div style={{color:C.textMut,fontSize:12.5}}>Loading…</div>
-        ) : (() => {
-          const lvl = darkweb.statusLevel || "Unknown";
-          const active = darkweb.monitored && (darkweb.breachedAccounts != null);
-          const tone = lvl === "High alert" ? C.red : lvl === "Elevated" ? "#FF7A45"
-            : lvl === "Low risk" ? C.amber : lvl === "No intel" ? C.green : C.textMut;
-          return (
-            <div style={{background:C.surface,borderRadius:8,padding:"12px 14px",borderTop:`2px solid ${tone}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                <span style={{color:tone,fontSize:13,fontWeight:700}}>{lvl}</span>
-                <span style={{color:C.textMut,fontSize:10.5}}>Have I Been Pwned{darkweb.domain?` · ${darkweb.domain}`:""}</span>
-              </div>
-              {active ? (
-                <div style={{color:C.textSec,fontSize:12,marginTop:6,lineHeight:1.4}}>
-                  {darkweb.breachedAccounts} breached account{darkweb.breachedAccounts===1?"":"s"} across {darkweb.distinctBreaches} breach{darkweb.distinctBreaches===1?"":"es"}.
-                  {(darkweb.breaches||[]).length>0 && (
-                    <div style={{color:C.textMut,marginTop:3}}>Breaches: {darkweb.breaches.slice(0,10).join(", ")}{darkweb.breaches.length>10?"…":""}</div>
-                  )}
-                </div>
-              ) : (
-                <div style={{color:C.textMut,fontSize:12,marginTop:6,lineHeight:1.4}}>{darkweb.reason || "Not monitored."}</div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* Reference databases */}
-        <div style={{color:C.text,fontSize:14,fontWeight:600,margin:"18px 0 10px"}}>Authoritative sources</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          {refs.map(r => (
-            <a key={r.id} href={r.url} target="_blank" rel="noreferrer"
-              style={{textDecoration:"none",background:C.surface,border:`1px solid ${C.border}`,
-                borderRadius:8,padding:"10px 12px"}}>
-              <div style={{color:C.accent,fontSize:12.5,fontWeight:700}}>{r.name}</div>
-              <div style={{color:C.textMut,fontSize:10.5,margin:"1px 0 4px"}}>{r.org}</div>
-              <div style={{color:C.textSec,fontSize:11,lineHeight:1.35}}>{r.purpose}</div>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-// ─────────────────────────────────────────────────────────────
 //  CLIENT MASTERMIND (Enterprise) — scoped to the client's own data
 // ─────────────────────────────────────────────────────────────
 function ClientMastermind({ onClose }) {
@@ -9662,12 +8072,8 @@ export default function ShieldAI() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
-  const [showThreatIntel, setShowThreatIntel] = useState(false);
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
-  const [showPlanPanel, setShowPlanPanel] = useState(false);
-  const [usage, setUsage] = useState(null);
-  const [usageLoading, setUsageLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
 
@@ -9682,98 +8088,12 @@ export default function ShieldAI() {
     return () => setUpgradeHandler(null);
   }, []);
 
-  // Notice shown after returning from Stripe Checkout/Portal.
-  const [billingNotice, setBillingNotice] = useState(null);
-
-  // On mount: restore an existing session from the stored token, then handle
-  // any ?billing= return param from Stripe. After Checkout, the webhook updates
-  // the tier server-side; we refresh /api/auth/me to pick it up.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // 1) Restore session if we have a token but no user yet.
-      if (getAuthToken() && !user) {
-        try {
-          const res = await authFetch(`${API_BASE}/api/auth/me`);
-          if (res.ok && !cancelled) {
-            const me = await res.json();
-            handleAuthenticated(me);
-          } else if (res.status === 401) {
-            setAuthToken(null);  // stale/expired token
-          }
-        } catch { /* offline — leave logged out */ }
-      }
-
-      // 2) Handle Stripe return param.
-      const params = new URLSearchParams(window.location.search);
-      const billing = params.get("billing");
-      if (billing) {
-        if (billing === "success") {
-          // Refresh the user so the new tier/capabilities show immediately.
-          try {
-            const res = await authFetch(`${API_BASE}/api/auth/me`);
-            if (res.ok && !cancelled) setUser(await res.json());
-          } catch { /* ignore */ }
-          if (!cancelled) setBillingNotice({ kind:"success", msg:"Your plan has been updated. Thank you!" });
-        } else if (billing === "cancelled") {
-          if (!cancelled) setBillingNotice({ kind:"info", msg:"Checkout was cancelled — no changes were made." });
-        }
-        // Clean the URL so a refresh doesn't re-trigger the notice.
-        params.delete("billing");
-        const clean = window.location.pathname + (params.toString() ? `?${params}` : "");
-        window.history.replaceState({}, "", clean);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Load usage vs plan limits when the plan panel opens.
-  useEffect(() => {
-    if (!showPlanPanel) return;
-    let cancelled = false;
-    setUsageLoading(true);
-    (async () => {
-      try {
-        const res = await authFetch(`${API_BASE}/api/usage`);
-        if (res.ok) {
-          const data = await res.json();
-          if (!cancelled) setUsage(data);
-        }
-      } catch { /* leave usage as-is on error */ }
-      finally { if (!cancelled) setUsageLoading(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [showPlanPanel]);
-
   // Capability helper for gating UI (mirrors backend; backend remains the real gate).
   const can = (cap) => {
     if (!user) return false;
     if (user.isAdmin || user.isAnalyst) return true;       // staff exempt
     return !!(user.capabilities && user.capabilities[cap]);
   };
-
-  // ── White-label branding ──
-  // Loads the brand this user should see (their MSP's, the platform default,
-  // or ShieldAI's), mutates the shared palette so every C.* reference renders
-  // in the MSP's accent, then publishes to brandStore — which notifies every
-  // useBranding() subscriber to repaint. Any failure falls back to the default
-  // brand; branding must never break the app.
-  useEffect(() => {
-    let cancelled = false;
-    if (!user) {
-      resetPalette(C);
-      brandStore.set(DEFAULT_BRANDING);
-      return;
-    }
-    (async () => {
-      const b = await fetchBranding(authFetch, API_BASE);
-      if (cancelled) return;
-      applyBrandToPalette(C, b);
-      brandStore.set(b);
-    })();
-    return () => { cancelled = true; };
-  }, [user?.id]);
 
   function handleAuthenticated(userObj) {
     setUser(userObj);
@@ -9788,11 +8108,17 @@ export default function ShieldAI() {
     }
   }
 
+  // Enter the read-only sandbox. Reuses the normal authenticated flow — the
+  // demo token simply binds every request to the demo store on the backend.
+  async function handleStartDemo(persona) {
+    const demoUser = await startDemoSession(persona);
+    handleAuthenticated(demoUser);
+  }
+
   function signOut() {
     setAuthToken(null);
     setUser(null);
-    resetPalette(C);
-    brandStore.set(DEFAULT_BRANDING);
+    setPublicView("marketing");
     setAssessment(null);
     setResults(null);
     setShowAnalyst(false);
@@ -9844,7 +8170,8 @@ export default function ShieldAI() {
     }
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
-      onLogin={() => setPublicView("auth")}/>;
+      onLogin={() => setPublicView("auth")}
+      onStartDemo={handleStartDemo}/>;
   }
 
   // Forced first-login password change — blocks everything until done.
@@ -9867,49 +8194,26 @@ export default function ShieldAI() {
     return <MastermindConsole onClose={() => setShowMastermind(false)}/>;
   }
 
+  // Sandbox marker rides above every authenticated view, including the analyst
+  // console and Mastermind — there is no screen where a visitor can forget
+  // they're in the demo.
+  const demoBanner = user.isDemo ? <DemoBanner onExit={signOut}/> : null;
+
   // Client-facing Mastermind (Enterprise clients only; staff use admin console)
   if (showClientMastermind && !user.isAdmin && !user.isAnalyst) {
-    return <ClientMastermind onClose={() => setShowClientMastermind(false)}/>;
+    return <>{demoBanner}<ClientMastermind onClose={() => setShowClientMastermind(false)}/></>;
   }
 
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
-    return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
+    return <>{demoBanner}<AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/></>;
   }
 
   // Top bar showing the logged-in company + sign out
   const TopBar = () => (
     <>
+    {demoBanner}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
-    {billingNotice && (
-      <div onClick={() => setBillingNotice(null)}
-        style={{position:"fixed",top:14,left:"50%",transform:"translateX(-50%)",zIndex:90,
-          maxWidth:420,padding:"12px 18px",borderRadius:10,cursor:"pointer",
-          background: billingNotice.kind==="success" ? `${C.green}1A` : C.card,
-          border:`1px solid ${billingNotice.kind==="success" ? C.green+"66" : C.border}`,
-          color: billingNotice.kind==="success" ? C.green : C.textSec,
-          fontSize:13,fontWeight:600,boxShadow:"0 8px 28px rgba(0,0,0,0.4)"}}>
-        {billingNotice.kind==="success" ? "✓ " : ""}{billingNotice.msg}
-        <span style={{color:C.textMut,fontWeight:400,marginLeft:10,fontSize:11}}>dismiss</span>
-      </div>
-    )}
-    {showPlanPanel && !user.isAdmin && !user.isAnalyst && (
-      <PlanPanel user={user} usage={usage} loading={usageLoading}
-        onClose={() => setShowPlanPanel(false)}
-        onTierChanged={async () => {
-          try {
-            const [meRes, usageRes] = await Promise.all([
-              authFetch(`${API_BASE}/api/auth/me`),
-              authFetch(`${API_BASE}/api/usage`),
-            ]);
-            if (meRes.ok) setUser(await meRes.json());
-            if (usageRes.ok) setUsage(await usageRes.json());
-          } catch { /* ignore refresh errors */ }
-        }}/>
-    )}
-    {showThreatIntel && (
-      <ThreatIntelPanel onClose={() => setShowThreatIntel(false)}/>
-    )}
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
@@ -9919,37 +8223,11 @@ export default function ShieldAI() {
         <span style={{fontSize:12,color:C.textSec}}>
           {user.companyName || user.email}
         </span>
-        {!user.isAdmin && !user.isAnalyst && (() => {
-          const tierMeta = {
-            free:       { label:"Free",       color:C.textMut },
-            starter:    { label:"Starter",    color:C.green   },
-            pro:        { label:"Pro",        color:C.accent  },
-            enterprise: { label:"Enterprise", color:C.purple  },
-          };
-          const m = tierMeta[user.tier] || tierMeta.free;
-          return (
-            <button onClick={() => setShowPlanPanel(true)}
-              title={`Your plan: ${m.label} — click to view usage & upgrade`}
-              style={{display:"inline-flex",alignItems:"center",gap:5,
-                padding:"3px 10px",borderRadius:20,
-                background:`${m.color}1A`,border:`1px solid ${m.color}66`,
-                color:m.color,fontSize:11,fontWeight:700,letterSpacing:0.3,
-                textTransform:"uppercase",cursor:"pointer"}}>
-              {m.label}
-            </button>
-          );
-        })()}
         <button onClick={() => setShowEndpoints(true)}
           style={{padding:"5px 12px",background:`${C.accent}18`,
             border:`1px solid ${C.accent}55`,borderRadius:6,
             color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
-        </button>
-        <button onClick={() => setShowThreatIntel(true)}
-          style={{padding:"5px 12px",background:`${C.amber}18`,
-            border:`1px solid ${C.amber}55`,borderRadius:6,
-            color:C.amber,fontSize:11,cursor:"pointer",fontWeight:600}}>
-          🛡️ Threat Intel
         </button>
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermind")

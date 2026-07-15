@@ -2,35 +2,29 @@
 // ShieldAI backend: auth + AI proxy + database persistence + program pipeline.
 
 import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
-import { existsSync } from "fs";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
-import db from "./db.js";
-import { PIPELINE, NO_FABRICATION } from "./generators.js";
+import db, { storeBinder } from "./db.js";
+import {
+  isDemoRequest,
+  registerDemoRoutes,
+  demoReadOnly,
+  assertStoreSeparation,
+  DEMO_PATH_PREFIX,
+} from "./demoGateway.js";
+import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
-import { registerBrandingRoutes } from "./brandingRoutes.js";
-import { registerTaskRoutes } from "./taskRoutes.js";
-import { registerEvidenceRoutes } from "./evidenceRoutes.js";
-import { registerComplianceRoutes } from "./complianceRoutes.js";
-import { registerCveRoutes } from "./cveRoutes.js";
-import { registerAiProviderRoutes } from "./aiProviders.js";
-import { clientSoftwareDescriptors, exposureForSoftware, searchByKeyword } from "./cveService.js";
-import { clientDomain, domainExposure } from "./darkwebService.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
-import { buildCustomFrameworkBlock, registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
-import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import {
   registerUser,
   loginUser,
@@ -47,23 +41,7 @@ dotenv.config();
 
 const app = express();
 const gate = makeTierGate(db);
-const PORT = process.env.PORT || 3001;
-
-// Dev mode: when SHIELDAI_DEV_MODE=true, enables the self-service tier switcher
-// used for testing (bypasses Stripe). MUST be off in production.
-const DEV_MODE = String(process.env.SHIELDAI_DEV_MODE).toLowerCase() === "true";
-if (DEV_MODE) console.warn("⚠️  ShieldAI DEV_MODE is ON — self-service tier switching is enabled. Do NOT use in production.");
-
-// Sample/demo accounts: their generated content is illustrative and gets badged
-// as "sample data" in the UI. Defaults to the seeded demo login; extend via
-// SAMPLE_EMAILS (comma-separated) if you add more showcase accounts.
-const SAMPLE_EMAILS = new Set(
-  ["demo@shieldai.com", ...String(process.env.SAMPLE_EMAILS || "").split(",")]
-    .map(e => e.trim().toLowerCase()).filter(Boolean)
-);
-function isDemoAccount(user) {
-  return !!user && SAMPLE_EMAILS.has(String(user.email || "").toLowerCase());
-}
+const PORT = 3001;
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -71,6 +49,25 @@ app.use(cors());
 app.use((req, res, next) => {
   if (req.originalUrl === "/api/billing/webhook") return next();
   return express.json({ limit: "5mb" })(req, res, next);
+});
+
+// ── DEMO / PRODUCTION BOUNDARY ───────────────────────────────
+// Bind every request to exactly one data store before any route runs.
+// Demo requests → demo-db.json. Everything else → db.json. Nothing downstream
+// can reach across: db.data always resolves to the bound store.
+app.use(storeBinder(isDemoRequest));
+
+// The demo sandbox never writes. Blocks mutations on both the /api/demo
+// routes and any real route reached with a demo token.
+app.use((req, res, next) => (req.isDemo ? demoReadOnly(req, res, next) : next()));
+
+// Demo billing and enrollment are meaningless and must never touch Stripe or
+// mint real agent tokens — refuse outright rather than half-work.
+app.use((req, res, next) => {
+  if (req.isDemo && (req.path.startsWith("/api/billing") || req.path.startsWith("/api/admin"))) {
+    return res.status(403).json({ error: "Not available in the demo sandbox.", code: "DEMO_RESTRICTED" });
+  }
+  next();
 });
 
 const progressStore = {};
@@ -109,68 +106,6 @@ async function callClaudeText({ system, messages, max_tokens }) {
   const res = await callClaude({ system, messages, max_tokens, stream: false });
   const data = await res.json();
   return data?.content?.map(c => c.text || "").join("") || "";
-}
-
-// Tool-use loop for Mastermind. `tools` is the Anthropic tool schema array;
-// `runTool(name, input)` executes a tool and returns a JSON-serializable result.
-// IMPORTANT: this helper is generic, but Mastermind supplies ONLY read-only
-// tools — the tool handlers never write to the database. The loop caps
-// iterations so a misbehaving model can't spin forever.
-async function callClaudeWithTools({ system, messages, tools, runTool, max_tokens = 1500, maxRounds = 6 }) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
-
-  const convo = [...messages];
-  for (let round = 0; round < maxRounds; round++) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens,
-        system,
-        messages: convo,
-        tools,
-      }),
-    });
-    if (!res.ok) {
-      const errBody = await res.text();
-      throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
-    }
-    const data = await res.json();
-    const content = data?.content || [];
-
-    // If the model wants to use tools, execute them and loop; otherwise return text.
-    if (data.stop_reason === "tool_use") {
-      convo.push({ role: "assistant", content });
-      const toolResults = [];
-      for (const block of content) {
-        if (block.type !== "tool_use") continue;
-        let result;
-        try {
-          result = await runTool(block.name, block.input || {});
-        } catch (e) {
-          result = { error: String(e.message || e) };
-        }
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify(result ?? null),
-        });
-      }
-      convo.push({ role: "user", content: toolResults });
-      continue;
-    }
-
-    // No more tool calls — return the assembled text.
-    return content.map(c => c.text || "").join("");
-  }
-  // Safety valve: hit the round cap.
-  return "I gathered data across several steps but couldn't finish composing an answer. Please narrow the question.";
 }
 
 function extractJson(text) {
@@ -292,99 +227,6 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
   const user = getCurrentUser(req.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
   res.json(user);
-});
-
-// Usage vs plan limits for the logged-in user. Drives the dashboard's
-// "X of Y used" meters. Staff (admin/analyst) aren't tier-limited, so they
-// get a flag indicating that. `limit: null` means unlimited.
-app.get("/api/usage", requireAuth, (req, res) => {
-  const user = getCurrentUser(req.userId);
-  if (!user) return res.status(404).json({ error: "User not found" });
-
-  const staff = !!(req.isAdmin || req.isAnalyst);
-  const tierId = TIERS[user.tier] ? user.tier : DEFAULT_TIER;
-  const tier = TIERS[tierId];
-  const limits = tier.limits || {};
-
-  // Resources we meter, each paired with its counter and limit.
-  const resources = ["policies", "programs", "trainingPrograms", "endpoints"];
-  const usage = {};
-  for (const r of resources) {
-    const counter = counters[r];
-    const current = counter ? counter(db, req.userId) : 0;
-    const limit = limits[r] != null ? limits[r] : null; // null => unlimited
-    usage[r] = {
-      current,
-      limit,
-      unlimited: limit == null,
-      remaining: limit == null ? null : Math.max(0, limit - current),
-      atLimit: limit != null && current >= limit,
-    };
-  }
-
-  res.json({
-    tier: tierId,
-    tierName: tier.name,
-    staff,           // staff bypass tier limits
-    devMode: DEV_MODE,
-    usage,
-    // The full tier ladder for the upgrade UI (ordered by rank). Self-serve
-    // tiers carry a price; enterprise is contact-sales (priceCents null).
-    tiers: Object.values(TIERS)
-      .sort((a, b) => a.rank - b.rank)
-      .map(t => ({
-        id: t.id,
-        name: t.name,
-        rank: t.rank,
-        priceCents: t.priceCents,
-        description: t.description,
-        selfServe: ["starter", "pro"].includes(t.id) && !!t.stripePriceId,
-        contactSales: t.id === "enterprise",
-        current: t.id === tierId,
-        isUpgrade: t.rank > tier.rank,
-      })),
-  });
-});
-
-// DEV ONLY — change the caller's OWN tier instantly, bypassing Stripe.
-// Hard-gated behind SHIELDAI_DEV_MODE so it can never run in production.
-// Mirrors the admin tier-change side effects (subscription sync) so the rest
-// of the app behaves as if a real plan change happened.
-app.post("/api/dev/my-tier", requireAuth, async (req, res) => {
-  if (!DEV_MODE) {
-    return res.status(403).json({ error: "Dev tier switching is disabled." });
-  }
-  const { tier } = req.body || {};
-  if (!TIERS[tier]) {
-    return res.status(400).json({ error: `tier must be one of: ${Object.keys(TIERS).join(", ")}.` });
-  }
-  const user = getCurrentUser(req.userId);
-  if (!user) return res.status(404).json({ error: "User not found." });
-
-  // Find the raw user record to mutate (getCurrentUser returns a public view).
-  const raw = (db.data.users || []).find(u => u.id === req.userId);
-  if (!raw) return res.status(404).json({ error: "User not found." });
-
-  const nowIso = new Date().toISOString();
-  raw.tier = tier;
-
-  // Keep the internal subscription record in sync, marked as a manual/dev change.
-  db.data.subscriptions = db.data.subscriptions || [];
-  let sub = db.data.subscriptions.find(s => s.userId === raw.id);
-  if (!sub) {
-    sub = { id: randomUUID(), userId: raw.id, tier,
-            status: tier === "free" ? "free" : "manual",
-            stripeCustomerId: null, stripeSubscriptionId: null,
-            currentPeriodEnd: null, updatedAt: nowIso };
-    db.data.subscriptions.push(sub);
-  } else {
-    sub.tier = tier;
-    sub.status = tier === "free" ? "free" : (sub.stripeSubscriptionId ? sub.status : "manual");
-    sub.updatedAt = nowIso;
-  }
-  await db.write();
-
-  res.json({ ok: true, user: getCurrentUser(req.userId) });
 });
 
 // Change own password (normal self-service, or forced first-login change).
@@ -599,12 +441,8 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             buildCISPromptBlock(ig);
         }
 
-        // Inject any client-selected CUSTOM frameworks + their real controls,
-        // so the gap analysis assesses against them like a built-in framework.
-        const customBlock = buildCustomFrameworkBlock(db, selected);
-
         const userContent =
-          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}${customBlock}\n\n` +
+          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}\n\n` +
           `Generate the "compliance" section. Return ONLY valid JSON matching the schema in your instructions. Limit gaps to 3 per framework.`;
 
         let parsed = null;
@@ -625,94 +463,13 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           parsed = extractJson(retryText);
         }
         program.sections[step.key] = parsed;
-      } else if (step.key === "threatIntel") {
-        // REAL threat intel: pull the client's software (agent inventory +
-        // assessment tech stack), query the live NVD for actual CVEs, and inject
-        // them. The AI writes industry-threat context around REAL CVEs — it does
-        // not invent CVE IDs. Also derive software directly from this assessment
-        // even before any agent is enrolled.
-        const assessmentStack = (() => {
-          const s = assessmentData.techStack || assessmentData.technologies || [];
-          return (Array.isArray(s) ? s : []).map(x =>
-            typeof x === "string" ? x : (x && x.name ? (x.version ? `${x.name} ${x.version}` : x.name) : "")
-          ).filter(Boolean);
-        })();
-        // Merge any agent/assessment-derived descriptors known for this user.
-        const known = program.userId ? clientSoftwareDescriptors(db, program.userId) : [];
-        const software = [...new Set([...known, ...assessmentStack])];
-
-        let realCVEs = [];
-        let cveDegraded = false;
-        if (software.length > 0) {
-          const exposure = await exposureForSoftware(software, { perItem: 2 });
-          cveDegraded = exposure.degraded;
-          realCVEs = (exposure.top || []).slice(0, 5).map(c => ({
-            id: c.id,
-            description: c.description,
-            severity: (c.severity || "UNKNOWN").replace(/^\w/, m => m.toUpperCase()),
-            affected: c.software,
-            score: c.score,
-            url: c.url,
-          }));
-        }
-
-        // Ask the AI ONLY for the industry-threat narrative + dark-web posture.
-        // The recentCVEs are supplied from NVD and must not be altered.
-        const tiSystem = `You are a threat intelligence analyst. Return ONLY valid JSON, no markdown fences:
-{"threatLandscape":{"industryThreats":[{"name":"","description":"1 sentence","prevalence":"High|Medium|Low","mitigations":["mitigation 1","mitigation 2"]}]}}
-Limit industryThreats to exactly 3, tailored to this business's industry and tech stack. Do NOT include CVEs or dark-web/breach status — those are supplied separately from authoritative live sources.`;
-
-        let parsed = null;
-        try {
-          const text = await callClaudeText({
-            system: tiSystem,
-            messages: [{ role: "user", content: `Business context:\n${ctx}\n\nGenerate the industry threat landscape JSON.` }],
-            max_tokens: step.maxTokens,
-          });
-          parsed = extractJson(text);
-        } catch (firstErr) {
-          console.warn(`Step "threatIntel" narrative failed (${firstErr.message}); using minimal fallback.`);
-          parsed = { threatLandscape: { industryThreats: [] } };
-        }
-
-        parsed.threatLandscape = parsed.threatLandscape || {};
-        // Inject the REAL CVEs from NVD (authoritative; AI cannot alter them).
-        parsed.threatLandscape.recentCVEs = realCVEs;
-        parsed.threatLandscape.cveSource = software.length === 0
-          ? "No software inventory available yet — CVE matching needs the monitoring agent's inventory or a tech-stack entry. A website URL alone can't be matched to CVEs."
-          : (cveDegraded
-              ? "Live NVD lookup was partial; results may be incomplete."
-              : "Matched against the NIST National Vulnerability Database (live).");
-        parsed.threatLandscape.cveSoftware = software;
-
-        // REAL dark-web / breach exposure from Have I Been Pwned (never AI-invented).
-        // Overrides whatever the model might have implied. Honest about inactive/
-        // unverified states rather than faking an all-clear.
-        const domain = program.userId ? clientDomain(db, program.userId) : null;
-        const dw = await domainExposure(domain);
-        parsed.threatLandscape.darkWebMentions = dw.statusLevel;     // legacy field, now real
-        parsed.threatLandscape.darkWeb = {
-          source: "Have I Been Pwned",
-          domain: dw.domain || null,
-          monitored: !!dw.monitored,
-          statusLevel: dw.statusLevel,
-          breachedAccounts: dw.breachedAccounts ?? null,
-          distinctBreaches: dw.distinctBreaches ?? null,
-          breaches: dw.breaches || [],
-          reason: dw.reason || null,
-          needsVerification: !!dw.needsVerification,
-          degraded: !!dw.degraded,
-        };
-        program.sections[step.key] = parsed;
       } else {
-        // Authored steps (priorities, policies, workflows, tools, training,
-        // execReport): legitimately AI-written, but grounded in the client's
-        // real inputs and constrained against inventing verifiable facts.
-        const authoredSystem = step.system + NO_FABRICATION;
+        // All other steps: try once, and on parse failure retry with a
+        // stricter "valid JSON only" nudge before giving up.
         let parsed = null;
         try {
           const text = await callClaudeText({
-            system: authoredSystem,
+            system: step.system,
             messages: [{
               role: "user",
               content: `Business context:\n${ctx}\n\nGenerate the "${step.key}" section. Return ONLY valid JSON matching the schema in your instructions.`,
@@ -723,7 +480,7 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
         } catch (firstErr) {
           console.warn(`Step "${step.key}" first attempt failed (${firstErr.message}); retrying…`);
           const retryText = await callClaudeText({
-            system: authoredSystem,
+            system: step.system,
             messages: [{
               role: "user",
               content: `Business context:\n${ctx}\n\nGenerate the "${step.key}" section. Return ONLY strictly valid, minified JSON — no trailing commas, no comments, no text before or after the JSON object. Match the schema exactly.`,
@@ -757,20 +514,7 @@ Limit industryThreats to exactly 3, tailored to this business's industry and tec
     await db.write();
   }
 
-  // Provenance metadata: record which sections are REAL (deterministic/live
-  // sources) vs AI-DRAFTED (authored guidance for human review), and whether
-  // this program belongs to the demo/sample account. The UI uses this to badge
-  // content honestly so nothing AI-written is mistaken for verified fact.
-  const demoUser = (db.data.users || []).find(u => u.id === program.userId && isDemoAccount(u));
-  program.meta = {
-    real: ["riskOverview", "compliance", "threatIntel.cves", "threatIntel.darkWeb"],
-    aiDrafted: ["priorities", "policiesCore", "policiesOps", "workflows", "tools", "training", "execReport", "threatIntel.industryThreats"],
-    isSample: !!demoUser,
-    generatedAt: new Date().toISOString(),
-  };
-
   program.status = "complete";
-  program.sections.meta = program.meta; // surfaced to the UI (results === sections)
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }
@@ -1283,84 +1027,26 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
+registerDemoRoutes(app, db);
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
-registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson });
-registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
-registerAiProviderRoutes(app, { requireAuth });
+await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
-registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
-registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
-registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
-registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
-//  SERVE THE BUILT FRONTEND (production)
-//  In dev, Vite serves the React app on its own port. In production
-//  (Railway), we build the frontend to ./dist and serve it from the same
-//  Express process so frontend and API share one origin. The SPA fallback
-//  returns index.html for any non-API, non-file GET so client-side routing
-//  works — but must NEVER swallow /api/* requests.
-// ─────────────────────────────────────────────────────────────
-// Lightweight health check for the platform (fast 200, no auth, no DB work).
-app.get("/health", (req, res) => res.status(200).json({ ok: true }));
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DIST_DIR = path.join(__dirname, "dist");
-if (existsSync(DIST_DIR)) {
-  app.use(express.static(DIST_DIR));
-  // SPA fallback: serve index.html for browser navigations only.
-  app.use((req, res, next) => {
-    if (req.method !== "GET") return next();
-    if (req.path.startsWith("/api/")) return next();
-    if (req.path.includes(".")) return next(); // let static assets 404 normally
-    res.sendFile(path.join(DIST_DIR, "index.html"));
-  });
-  console.log("   Serving built frontend from ./dist");
-} else {
-  console.log("   No ./dist found — API-only mode (run `npm run build` for production).");
+// Fail loudly at boot if demo data ever leaked into production.
+const separation = assertStoreSeparation();
+if (!separation.ok) {
+  console.error("\n✖ STORE SEPARATION VIOLATION\n  " + separation.message + "\n");
+  process.exit(1);
 }
+console.log("✔ Demo/production stores are separate (db.json | demo-db.json)");
 
-// ─────────────────────────────────────────────────────────────
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ ShieldAI backend running on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
-
-  // Register billing AFTER the port is open, so a slow/failed Stripe import can
-  // never prevent the server from starting (which would fail Railway's health
-  // check). Billing routes attach a moment later; they 503 until then.
-  (async () => {
-    try {
-      await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-      console.log("   Billing routes registered.");
-    } catch (e) {
-      console.warn("   Billing registration failed, continuing without it —", e.message);
-    }
-  })();
-
-  // Optional first-boot demo seed (set SEED_ON_BOOT=true on Railway for demos).
-  // Runs in the BACKGROUND after the server is already listening, because it
-  // makes many AI calls and can take minutes — we never want it to block boot
-  // or a health check. It's idempotent: it only seeds if the demo user is
-  // absent, so redeploys won't duplicate or clobber data.
-  if (String(process.env.SEED_ON_BOOT).toLowerCase() === "true") {
-    (async () => {
-      try {
-        const { demoExists, seedDemo } = await import("./seedDemo.js");
-        if (await demoExists()) {
-          console.log("   SEED_ON_BOOT: demo data already present — skipping.");
-          return;
-        }
-        console.log("   SEED_ON_BOOT: no demo data found — seeding in background…");
-        const r = await seedDemo({ force: false });
-        console.log(`   SEED_ON_BOOT: ${r.seeded ? `seeded ${r.companies} companies.` : "skipped."}`);
-      } catch (e) {
-        console.error("   SEED_ON_BOOT failed (server still running):", e.message);
-      }
-    })();
-  }
 });
 
 // Surface the real reason if the server can't stay up (e.g. port in use).

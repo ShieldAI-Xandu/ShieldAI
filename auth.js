@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import db from "./db.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
+import { verifyDemoToken } from "./demoGateway.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "shieldai-test-secret-change-in-production";
 const TOKEN_EXPIRY = "7d";
@@ -137,6 +138,7 @@ function publicUser(user) {
     companyName: user.companyName,
     isAdmin: !!user.isAdmin,
     isAnalyst: !!user.isAnalyst,
+    isDemo: !!user.isDemo,
     mustChangePassword: !!user.mustChangePassword,
     tier: tierId,
     tierName: tier.name,
@@ -152,12 +154,31 @@ export function requireAuth(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Authentication required." });
 
+  // Demo sessions are signed with a different secret and carry store:"demo".
+  // They are already bound to the demo store by storeBinder, so letting them
+  // through here lets the sandbox reuse the real read routes without any
+  // ability to see production data. They are never admin and never write.
+  const demo = verifyDemoToken(token);
+  if (demo) {
+    req.userId = demo.userId;
+    req.userEmail = demo.email;
+    req.isAdmin = false;
+    req.isAnalyst = !!demo.isAnalyst;
+    req.isDemo = true;
+    return next();
+  }
+
   try {
     const payload = jwt.verify(token, JWT_SECRET);
+    // A production token must never claim the demo store.
+    if (payload.store) {
+      return res.status(401).json({ error: "Invalid session." });
+    }
     req.userId = payload.userId;
     req.userEmail = payload.email;
     req.isAdmin = !!payload.isAdmin;
     req.isAnalyst = !!payload.isAnalyst;
+    req.isDemo = false;
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
@@ -167,7 +188,7 @@ export function requireAuth(req, res, next) {
 // ── Middleware: require admin ─────────────────────────────────
 export function requireAdmin(req, res, next) {
   requireAuth(req, res, () => {
-    if (!req.isAdmin) {
+    if (req.isDemo || !req.isAdmin) {
       return res.status(403).json({ error: "Admin access required." });
     }
     next();

@@ -31,6 +31,8 @@ ShieldAI key.txt
 Gemini Curl.txt
 *.key.txt
 gitignore
+demo-db.json
+db.backup-*.json
 
 # ── ShieldAI agent runtime artifacts ──────────────────────────
 # Keep the agent SOURCE scripts in version control, but never commit
