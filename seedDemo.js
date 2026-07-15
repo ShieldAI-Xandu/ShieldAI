@@ -16,6 +16,8 @@
 
 import "dotenv/config";
 import { randomUUID } from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import db, { runInStore, DEMO_STORE, getStore, PROD_STORE } from "./db.js";
 import { DEMO_PERSONAS } from "./demoGateway.js";
@@ -332,9 +334,10 @@ async function main() {
   await prod.read();
   const strays = (prod.data.users || []).filter(u => (u.email || "").endsWith("@shieldai.demo"));
   if (strays.length) {
-    console.error(`✖ Demo accounts found in db.json: ${strays.map(u => u.email).join(", ")}`);
-    console.error("  Remove them before seeding — demo data belongs only in demo-db.json.");
-    process.exit(1);
+    throw new Error(
+      `Demo accounts found in db.json: ${strays.map(u => u.email).join(", ")}. ` +
+      `Remove them before seeding — demo data belongs only in demo-db.json.`
+    );
   }
 
   await db.read();
@@ -402,11 +405,31 @@ async function main() {
   console.log(`   Client persona:  ${DEMO_EMAIL}`);
   console.log(`   Analyst persona: ${DEMO_ANALYST_EMAIL}`);
   console.log(`   Visitors enter via the public "Try the demo" button — no credentials.`);
-  process.exit(0);
+  return { companies: COMPANIES.length, clientEmail: DEMO_EMAIL, analystEmail: DEMO_ANALYST_EMAIL };
 }
 
-// Everything in this script runs bound to the DEMO store. Production is never
-// opened for writing.
-runInStore(DEMO_STORE, () => {
-  main().catch(err => { console.error("Seed failed:", err); process.exit(1); });
-});
+// ── Public API ────────────────────────────────────────────────
+// Everything runs bound to the DEMO store. Production is never opened for
+// writing. Exported so server.js can seed in the background on boot without
+// spawning a second process (and without blocking app.listen()).
+export function seedDemoStore() {
+  return runInStore(DEMO_STORE, () => main());
+}
+
+// Has the sandbox already been built? Lets callers skip a costly re-seed.
+export async function isDemoSeeded() {
+  return runInStore(DEMO_STORE, async () => {
+    await db.read();
+    const emails = new Set((db.data.users || []).map(u => u.email));
+    return emails.has(DEMO_EMAIL) && emails.has(DEMO_ANALYST_EMAIL);
+  });
+}
+
+// ── CLI entry point ───────────────────────────────────────────
+// Only runs when invoked directly (`node seedDemo.js`), not when imported.
+const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (invokedDirectly) {
+  seedDemoStore()
+    .then(() => process.exit(0))
+    .catch(err => { console.error("Seed failed:", err.message || err); process.exit(1); });
+}

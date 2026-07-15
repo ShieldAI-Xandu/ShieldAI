@@ -20,6 +20,7 @@
 
 import { Low } from "lowdb";
 import { JSONFile } from "lowdb/node";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { AsyncLocalStorage } from "async_hooks";
@@ -56,12 +57,45 @@ const COLLECTIONS = Object.keys(freshDefaults());
 
 async function openStore(filename) {
   const file = path.join(DB_DIR, filename);
+
+  // Create DB_DIR if it doesn't exist. Without this, lowdb fails with a bare
+  // ENOENT on its temp file (e.g. "/data/.db.json.tmp") that names neither the
+  // real directory nor the cause — which is a genuinely awful thing to debug
+  // at 2am when a volume isn't mounted where you expected.
+  try {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+  } catch (err) {
+    throw new Error(
+      `Cannot create the database directory "${DB_DIR}" (${err.code}). ` +
+      `If this is a deployment, check that DB_DIR points at a mounted volume.`
+    );
+  }
+
   const store = new Low(new JSONFile(file), freshDefaults());
-  await store.read();
+  try {
+    await store.read();
+  } catch (err) {
+    throw new Error(
+      `Cannot read the database file "${file}" (${err.code}). ` +
+      (err.code === "EISDIR"
+        ? "A directory exists at that path where a JSON file should be."
+        : "Check file permissions and that DB_DIR is correct.")
+    );
+  }
+
   store.data ||= freshDefaults();
   // Ensure every collection exists even if the file predates a schema change
   for (const key of COLLECTIONS) store.data[key] ||= [];
-  await store.write();
+
+  try {
+    await store.write();
+  } catch (err) {
+    throw new Error(
+      `Cannot write to the database file "${file}" (${err.code}). ` +
+      `DB_DIR="${DB_DIR}" must exist and be writable — on a PaaS this usually ` +
+      `means the volume isn't mounted at that path.`
+    );
+  }
   return store;
 }
 

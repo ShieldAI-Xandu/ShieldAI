@@ -1082,7 +1082,44 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`✅ ShieldAI backend listening on ${HOST}:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
+
+  // ── Optional background demo seeding ───────────────────────
+  // Set SEED_DEMO_ON_BOOT=true to build the demo sandbox. It runs AFTER the
+  // server is already listening, so /health answers immediately and the
+  // platform healthcheck can never time out waiting on the AI pipeline
+  // (which takes several minutes across all the demo companies).
+  //
+  // Safe to leave on: it no-ops once the sandbox exists. Seeding only ever
+  // touches demo-db.json.
+  if (String(process.env.SEED_DEMO_ON_BOOT).toLowerCase() === "true") {
+    void seedDemoInBackground();
+  }
 });
+
+async function seedDemoInBackground() {
+  try {
+    const { isDemoSeeded, seedDemoStore } = await import("./seedDemo.js");
+
+    if (await isDemoSeeded()) {
+      console.log("↩ Demo sandbox already seeded — skipping (set SEED_DEMO_FORCE=true to rebuild).");
+      if (String(process.env.SEED_DEMO_FORCE).toLowerCase() !== "true") return;
+      console.log("⟳ SEED_DEMO_FORCE=true — rebuilding the demo sandbox…");
+    }
+
+    console.log("⏳ Seeding demo sandbox in the background (this takes a few minutes)…");
+    console.log("   The app is already serving traffic; demo buttons appear when it finishes.");
+    const t0 = Date.now();
+    const result = await seedDemoStore();
+    const mins = ((Date.now() - t0) / 60000).toFixed(1);
+    console.log(`✅ Demo sandbox ready in ${mins} min — ${result.companies} companies.`);
+    console.log("   You can now remove SEED_DEMO_ON_BOOT from the environment.");
+  } catch (err) {
+    // A seeding failure must never take down the app. Production is unaffected;
+    // the demo buttons simply stay hidden until it's re-run.
+    console.error("⚠️  Demo seeding failed — the app is unaffected and running normally.");
+    console.error("   Reason:", err?.message || err);
+  }
+}
 
 // Surface the real reason if the server can't stay up (e.g. port in use).
 server.on("error", (err) => {
