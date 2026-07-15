@@ -6643,6 +6643,365 @@ function BrandingSettings({ onSaved }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  GAP ANALYSIS — "fix this, gain +N"
+//  Every unresolved control ranked by how much the posture score would
+//  improve. The gains are computed by riskEngine.js (deterministic), not
+//  estimated — so the projection always matches the actual result.
+// ─────────────────────────────────────────────────────────────
+function GapAnalysis({ clientId, clientName, onTaskCreated }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const qs = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
+
+  async function load() {
+    setErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/gaps${qs}`);
+      if (!res.ok) throw new Error((await res.json()).error || "Could not load gaps.");
+      setData(await res.json());
+    } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, [clientId]);
+
+  async function createTask(gap) {
+    setBusy(gap.controlId); setErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerUserId: clientId, controlId: gap.controlId,
+          targetLabel: gap.targetAnswer,
+          priority: gap.projectedGain >= 15 ? "critical" : gap.projectedGain >= 8 ? "high" : "medium",
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Could not create task.");
+      await load();
+      onTaskCreated && onTaskCreated();
+    } catch (e) { setErr(e.message); }
+    setBusy(null);
+  }
+
+  if (err && !data) return <div style={{color:SOC.red,fontSize:12.5,padding:16}}>{err}</div>;
+  if (!data) return <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>Analyzing gaps…</div>;
+  if (!data.posture) {
+    return <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>
+      {clientName || "This client"} has no assessment yet — run one to see gaps.
+    </div>;
+  }
+
+  const levelColor = (l) => l==="Strong"?SOC.green : l==="Moderate"?SOC.cyan : l==="Developing"?SOC.amber : SOC.red;
+
+  return (
+    <div>
+      {/* current posture */}
+      <div style={{display:"flex",alignItems:"center",gap:16,padding:"14px 16px",marginBottom:14,
+        background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10}}>
+        <div>
+          <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1}}>CURRENT POSTURE</div>
+          <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+            <span style={{color:levelColor(data.posture.level),fontSize:30,fontWeight:800}}>{data.posture.score}</span>
+            <span style={{color:SOC.textMut,fontSize:13}}>/100</span>
+            <span style={{color:levelColor(data.posture.level),fontSize:12,fontWeight:700}}>{data.posture.level}</span>
+          </div>
+        </div>
+        <div style={{borderLeft:`1px solid ${SOC.border}`,paddingLeft:16}}>
+          <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1,marginBottom:3}}>WEAKEST AREAS</div>
+          <div style={{display:"flex",gap:6}}>
+            {(data.posture.weakestAreas||[]).map(w => (
+              <span key={w} style={{padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:600,
+                background:`${SOC.red}18`,border:`1px solid ${SOC.red}44`,color:SOC.red}}>{w}</span>
+            ))}
+          </div>
+        </div>
+        {data.gaps.length > 0 && (
+          <div style={{marginLeft:"auto",textAlign:"right"}}>
+            <div style={{color:SOC.textSec,fontSize:10.5,fontWeight:700,letterSpacing:1}}>IF ALL FIXED</div>
+            <div style={{color:SOC.green,fontSize:20,fontWeight:800}}>
+              +{data.gaps.reduce((s,g)=>Math.max(s,g.projectedScore),data.posture.score) - data.posture.score} max single fix
+            </div>
+          </div>
+        )}
+      </div>
+
+      {err && <div style={{marginBottom:10,padding:"8px 11px",borderRadius:7,fontSize:12,
+        background:`${SOC.red}12`,border:`1px solid ${SOC.red}40`,color:SOC.red}}>{err}</div>}
+
+      {data.gaps.length === 0 ? (
+        <div style={{padding:"20px",textAlign:"center",color:SOC.green,fontSize:13,fontWeight:600,
+          background:SOC.panel,border:`1px solid ${SOC.green}33`,borderRadius:10}}>
+          ✓ No open gaps — every control is at its best answer.
+        </div>
+      ) : (
+        <>
+          <div style={{color:SOC.textSec,fontSize:11,marginBottom:8}}>
+            Ranked by posture improvement. Gains computed by the scoring engine — not estimates.
+          </div>
+          <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,overflow:"hidden"}}>
+            {data.gaps.map((g,i) => (
+              <div key={g.controlId} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+                borderTop: i ? `1px solid ${SOC.border}` : "none"}}>
+                {/* gain badge — the money shot */}
+                <div style={{minWidth:52,textAlign:"center",padding:"5px 6px",borderRadius:7,
+                  background: g.projectedGain>=15?`${SOC.green}1F`:g.projectedGain>=8?`${SOC.cyan}1A`:`${SOC.textMut}18`,
+                  border:`1px solid ${g.projectedGain>=15?SOC.green+"55":g.projectedGain>=8?SOC.cyan+"44":SOC.border}`}}>
+                  <div style={{color:g.projectedGain>=15?SOC.green:g.projectedGain>=8?SOC.cyan:SOC.textSec,
+                    fontSize:15,fontWeight:800,lineHeight:1}}>+{g.projectedGain}</div>
+                  <div style={{color:SOC.textMut,fontSize:8.5,fontWeight:700,letterSpacing:0.5}}>PTS</div>
+                </div>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{color:SOC.text,fontSize:12.5,fontWeight:600,marginBottom:2}}>{g.question}</div>
+                  <div style={{color:SOC.textSec,fontSize:11}}>
+                    <span style={{color:SOC.textMut}}>now:</span> {g.currentAnswer || "unanswered"}
+                    <span style={{color:SOC.textMut}}> → </span>
+                    <span style={{color:SOC.green}}>{g.targetAnswer}</span>
+                  </div>
+                </div>
+                <span style={{padding:"2px 8px",borderRadius:4,fontSize:9.5,fontWeight:700,
+                  background:SOC.panelHi,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>{g.nistFunction}</span>
+                <span style={{color:SOC.textMut,fontSize:11,minWidth:64,textAlign:"right"}}>
+                  → {g.projectedScore}
+                </span>
+                {g.hasOpenTask ? (
+                  <span style={{padding:"5px 11px",borderRadius:6,fontSize:11,fontWeight:700,
+                    background:`${SOC.blue}18`,border:`1px solid ${SOC.blue}44`,color:SOC.blue}}>
+                    Task open
+                  </span>
+                ) : (
+                  <button onClick={()=>createTask(g)} disabled={busy===g.controlId}
+                    style={{padding:"5px 12px",borderRadius:6,cursor:busy?"default":"pointer",fontSize:11,fontWeight:700,
+                      background:SOC.cyan,border:"none",color:SOC.bg,opacity:busy===g.controlId?0.5:1}}>
+                    {busy===g.controlId ? "…" : "+ Task"}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TASK BOARD — per-client or cross-portfolio
+// ─────────────────────────────────────────────────────────────
+const TASK_COLS = [
+  { id:"open",        label:"Open",        color:"textSec" },
+  { id:"in_progress", label:"In Progress", color:"cyan" },
+  { id:"blocked",     label:"Blocked",     color:"red" },
+  { id:"done",        label:"Done",        color:"green" },
+];
+const PRIO_COLOR = { critical:"red", high:"amber", medium:"cyan", low:"textMut" };
+
+function TaskCard({ t, onAdvance, onComplete, busy }) {
+  const prio = SOC[PRIO_COLOR[t.priority] || "textMut"];
+  return (
+    <div style={{background:SOC.panelHi,border:`1px solid ${t.isOverdue?SOC.red+"66":SOC.border}`,
+      borderRadius:8,padding:"9px 10px",marginBottom:7}}>
+      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+        <span style={{width:6,height:6,borderRadius:"50%",background:prio,flexShrink:0}}/>
+        <span style={{color:prio,fontSize:9,fontWeight:800,letterSpacing:0.5,textTransform:"uppercase"}}>{t.priority}</span>
+        {t.projectedGain != null && t.status !== "done" && (
+          <span style={{marginLeft:"auto",color:SOC.green,fontSize:10.5,fontWeight:800}}>+{t.projectedGain}</span>
+        )}
+        {t.actualGain != null && t.status === "done" && (
+          <span style={{marginLeft:"auto",color:SOC.green,fontSize:10.5,fontWeight:800}}>✓ +{t.actualGain}</span>
+        )}
+      </div>
+      <div style={{color:SOC.text,fontSize:11.5,fontWeight:600,lineHeight:1.35,marginBottom:5}}>{t.title}</div>
+      {t.clientName && (
+        <div style={{color:SOC.textSec,fontSize:10,marginBottom:4}}>{t.clientName}</div>
+      )}
+      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+        {t.control && (
+          <span style={{padding:"1px 6px",borderRadius:3,fontSize:8.5,fontWeight:700,
+            background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textMut}}>
+            {t.control.nistFunction}
+          </span>
+        )}
+        {t.dueDate && (
+          <span style={{fontSize:9.5,color:t.isOverdue?SOC.red:SOC.textMut,fontWeight:t.isOverdue?700:400}}>
+            {t.isOverdue ? "⚠ " : ""}{new Date(t.dueDate).toLocaleDateString()}
+          </span>
+        )}
+        {t.assigneeName && <span style={{fontSize:9.5,color:SOC.textMut}}>· {t.assigneeName}</span>}
+      </div>
+      {t.status !== "done" && t.status !== "cancelled" && (
+        <div style={{display:"flex",gap:5,marginTop:7}}>
+          {t.status === "open" && (
+            <button onClick={()=>onAdvance(t,"in_progress")} disabled={busy}
+              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
+                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Start</button>
+          )}
+          {t.status === "in_progress" && (
+            <button onClick={()=>onAdvance(t,"blocked")} disabled={busy}
+              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
+                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Block</button>
+          )}
+          {t.status === "blocked" && (
+            <button onClick={()=>onAdvance(t,"in_progress")} disabled={busy}
+              style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
+                background:SOC.panel,border:`1px solid ${SOC.border}`,color:SOC.textSec}}>Unblock</button>
+          )}
+          <button onClick={()=>onComplete(t)} disabled={busy}
+            style={{flex:1,padding:"4px 0",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:700,
+              background:`${SOC.green}1A`,border:`1px solid ${SOC.green}55`,color:SOC.green}}>
+            Complete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskBoard({ clientId, clientName }) {
+  const [board, setBoard] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [flash, setFlash] = useState(null);
+  const [tab, setTab] = useState(clientId ? "gaps" : "board");
+
+  async function load() {
+    setErr(null);
+    try {
+      if (clientId) {
+        const res = await authFetch(`${API_BASE}/api/tasks?clientId=${encodeURIComponent(clientId)}`);
+        if (!res.ok) throw new Error((await res.json()).error || "Could not load tasks.");
+        const list = await res.json();
+        const columns = {};
+        for (const c of TASK_COLS) columns[c.id] = [];
+        columns.cancelled = [];
+        for (const t of list) {
+          (columns[t.status] ||= []).push({
+            ...t,
+            isOverdue: !!(t.dueDate && new Date(t.dueDate) < new Date() && !["done","cancelled"].includes(t.status)),
+          });
+        }
+        setBoard({ columns, summary: null });
+      } else {
+        const res = await authFetch(`${API_BASE}/api/tasks/board`);
+        if (!res.ok) throw new Error((await res.json()).error || "Could not load board.");
+        setBoard(await res.json());
+      }
+    } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, [clientId]);
+
+  async function advance(t, status) {
+    setBusy(true); setErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${t.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Update failed.");
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function complete(t) {
+    setBusy(true); setErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${t.id}/complete`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Complete failed.");
+      // The payoff moment: show the score actually moving.
+      setFlash(`${t.title.slice(0,40)}… — posture ${d.posture.before} → ${d.posture.after} (+${d.posture.delta})`
+        + (d.posture.levelBefore !== d.posture.levelAfter ? ` · ${d.posture.levelBefore} → ${d.posture.levelAfter}` : ""));
+      setTimeout(()=>setFlash(null), 6000);
+      await load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  const s = board?.summary;
+
+  return (
+    <div>
+      {/* tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        {(clientId ? [{id:"gaps",label:"Gap Analysis"},{id:"board",label:"Tasks"}] : [{id:"board",label:"All Tasks"}]).map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,
+              background: tab===t.id ? SOC.cyan : `${SOC.cyan}18`,
+              color: tab===t.id ? SOC.bg : SOC.cyan,
+              border:`1px solid ${SOC.cyan}55`}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {flash && (
+        <div style={{marginBottom:12,padding:"10px 13px",borderRadius:8,fontSize:12.5,fontWeight:600,
+          background:`${SOC.green}1A`,border:`1px solid ${SOC.green}55`,color:SOC.green}}>
+          ✓ {flash}
+        </div>
+      )}
+      {err && (
+        <div style={{marginBottom:12,padding:"9px 12px",borderRadius:7,fontSize:12,
+          background:`${SOC.red}12`,border:`1px solid ${SOC.red}40`,color:SOC.red}}>{err}</div>
+      )}
+
+      {tab === "gaps" && clientId && (
+        <GapAnalysis clientId={clientId} clientName={clientName} onTaskCreated={load}/>
+      )}
+
+      {tab === "board" && (
+        <>
+          {s && (
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+              {[
+                { label:"Open", v:s.open, c:SOC.cyan },
+                { label:"Overdue", v:s.overdue, c: s.overdue ? SOC.red : SOC.textMut },
+                { label:"Blocked", v:s.blocked, c: s.blocked ? SOC.amber : SOC.textMut },
+                { label:"Unassigned", v:s.unassigned, c: s.unassigned ? SOC.amber : SOC.textMut },
+                { label:"Done", v:s.done, c:SOC.green },
+              ].map(x => (
+                <div key={x.label} style={{flex:"1 1 110px",background:SOC.panel,
+                  border:`1px solid ${SOC.border}`,borderRadius:9,padding:"9px 12px"}}>
+                  <div style={{color:SOC.textSec,fontSize:10,fontWeight:700,letterSpacing:0.5}}>{x.label.toUpperCase()}</div>
+                  <div style={{color:x.c,fontSize:20,fontWeight:800}}>{x.v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!board ? (
+            <div style={{color:SOC.textSec,fontSize:12.5,padding:16}}>Loading tasks…</div>
+          ) : (
+            <div style={{display:"flex",gap:10,alignItems:"flex-start",overflowX:"auto",paddingBottom:6}}>
+              {TASK_COLS.map(col => {
+                const items = board.columns[col.id] || [];
+                return (
+                  <div key={col.id} style={{flex:"1 1 210px",minWidth:200,background:SOC.bg,
+                    border:`1px solid ${SOC.border}`,borderRadius:10,padding:"10px 9px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:9}}>
+                      <span style={{color:SOC[col.color],fontSize:10.5,fontWeight:800,letterSpacing:0.8}}>
+                        {col.label.toUpperCase()}
+                      </span>
+                      <span style={{marginLeft:"auto",color:SOC.textMut,fontSize:10.5,fontWeight:700}}>{items.length}</span>
+                    </div>
+                    {items.length === 0 ? (
+                      <div style={{color:SOC.textMut,fontSize:10.5,padding:"8px 2px"}}>—</div>
+                    ) : items.map(t => (
+                      <TaskCard key={t.id} t={t} busy={busy} onAdvance={advance} onComplete={complete}/>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -6658,6 +7017,7 @@ function AnalystConsole({ user, onExit }) {
   const [fleet, setFleet] = useState(null);          // live endpoints from backend
   const [myClients, setMyClients] = useState(null);
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
+  const [tasksFor, setTasksFor] = useState(null);     // { id, name } — per-client gaps/tasks
   const [actionsLoading, setActionsLoading] = useState(false);
 
   async function loadMyClients() {
@@ -6786,6 +7146,12 @@ function AnalystConsole({ user, onExit }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🖥️ Live Fleet
         </button>
+        <button onClick={()=>setView(view==="tasks"?"portfolio":"tasks")}
+          style={{padding:"6px 14px",background:view==="tasks"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="tasks"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          ✓ Tasks
+        </button>
         <button onClick={()=>setView(view==="branding"?"portfolio":"branding")}
           style={{padding:"6px 14px",background:view==="branding"?SOC.cyan:`${SOC.cyan}18`,
             color:view==="branding"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
@@ -6895,6 +7261,18 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
+  if (view === "tasks") {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="Tasks — All Clients"/>
+        <Mastermind/>
+        <div style={{maxWidth:1200,margin:"0 auto",padding:"20px"}}>
+          <TaskBoard/>
+        </div>
+      </div>
+    );
+  }
+
   if (view === "branding") {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
@@ -6914,7 +7292,18 @@ function AnalystConsole({ user, onExit }) {
         <Header title="My Clients"/>
         <Mastermind/>
         <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
-          {actionsFor ? (
+          {tasksFor ? (
+            <div>
+              <button onClick={()=>setTasksFor(null)}
+                style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+                  borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← Back to clients</button>
+              <div style={{fontSize:11,color:SOC.textMut,letterSpacing:1,textTransform:"uppercase",
+                fontWeight:700,marginBottom:14}}>
+                Gaps &amp; Tasks · {tasksFor.name}
+              </div>
+              <TaskBoard clientId={tasksFor.id} clientName={tasksFor.name}/>
+            </div>
+          ) : actionsFor ? (
             <div>
               <button onClick={()=>setActionsFor(null)}
                 style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
@@ -6977,6 +7366,11 @@ function AnalystConsole({ user, onExit }) {
                           {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
                         </div>
                       </div>
+                      <button onClick={()=>setTasksFor({ id:c.id, name:c.name })}
+                        style={{padding:"7px 14px",background:SOC.cyan,border:"none",
+                          borderRadius:7,color:SOC.bg,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                        Gaps &amp; Tasks →
+                      </button>
                       <button onClick={()=>loadClientActions(c.id)}
                         style={{padding:"7px 14px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
                           borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
