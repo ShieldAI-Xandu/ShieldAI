@@ -1,4 +1,7 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import {
+  DEFAULT_BRANDING, applyBrandToPalette, resetPalette, fetchBranding, normalizeBranding,
+} from "./branding.js";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -20,6 +23,35 @@ const C = {
   textSec:  "#7B92B2",
   textMut:  "#2E4A6A",
 };
+
+// ─────────────────────────────────────────────────────────────
+//  BRANDING (white-label)
+//  `C` above is mutated in place by applyBrandToPalette() when a brand loads,
+//  so every existing C.* reference picks up the MSP's accent automatically.
+//
+//  The root component renders from ~10 separate `return` statements (one per
+//  phase), so a Context.Provider would have to wrap each one. Instead the
+//  brand *identity* (name, logo, tagline) lives in a tiny module-level store
+//  that components subscribe to via useBranding(). Same ergonomics, no
+//  structural surgery.
+// ─────────────────────────────────────────────────────────────
+const brandStore = {
+  value: DEFAULT_BRANDING,
+  listeners: new Set(),
+  get() { return this.value; },
+  set(b) {
+    this.value = b || DEFAULT_BRANDING;
+    this.listeners.forEach(fn => fn(this.value));
+  },
+  subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); },
+};
+
+/** Read the active white-label brand. Re-renders on brand change. */
+export function useBranding() {
+  const [b, setB] = useState(brandStore.get());
+  useEffect(() => brandStore.subscribe(setB), []);
+  return b;
+}
 
 // ─────────────────────────────────────────────────────────────
 //  AI ROUTER  – routes tasks to the right model
@@ -2948,21 +2980,44 @@ function ShieldLogo({ size = 28, glow = false }) {
   );
 }
 
-// Wordmark: "Shield" in the current ink color + "AI" in brand cyan
+// Wordmark: renders the active brand's product name. Under the default brand
+// this is "Shield" + "AI" (accent-coloured "AI"); under a white-label brand it
+// renders the MSP's product name, with the last word accented if there is one.
 function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
+  const brand = useBranding();
+  const name = (brand?.productName || "ShieldAI").trim();
+
+  // Default brand keeps the original Shield/AI split.
+  if (!brand || brand.isDefault || name === "ShieldAI") {
+    return (
+      <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
+        <span style={{ color: ink }}>Shield</span>
+        <span style={{ color: C.accent }}>AI</span>
+      </span>
+    );
+  }
+
+  // White-label: accent the final word so the lockup keeps its two-tone look.
+  const parts = name.split(/\s+/);
+  const head = parts.length > 1 ? parts.slice(0, -1).join(" ") + " " : "";
+  const tail = parts.length > 1 ? parts[parts.length - 1] : name;
   return (
     <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
-      <span style={{ color: ink }}>Shield</span>
-      <span style={{ color: "#00C8FF" }}>AI</span>
+      {head && <span style={{ color: ink }}>{head}</span>}
+      <span style={{ color: parts.length > 1 ? C.accent : ink }}>{tail}</span>
     </span>
   );
 }
 
-// Logo + wordmark lockup
+// Logo + wordmark lockup. Uses the MSP's uploaded logo when one is set.
 function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
+  const brand = useBranding();
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap }}>
-      <ShieldLogo size={logoSize} glow={glow}/>
+      {brand?.logoUrl
+        ? <img src={brand.logoUrl} alt={brand.companyName || "Logo"}
+            style={{ height:logoSize, width:"auto", maxWidth:logoSize*3, objectFit:"contain", display:"block" }}/>
+        : <ShieldLogo size={logoSize} glow={glow}/>}
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
   );
@@ -3635,6 +3690,173 @@ function ChecklistScreen({ onComplete, onBack }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ADMIN BRANDING OVERSIGHT
+//  Two jobs the analyst panel doesn't do:
+//   1. Set the PLATFORM DEFAULT brand (what unassigned clients see).
+//   2. Show every MSP brand on the platform + white-label coverage —
+//      the same data Mastermind reads via brandingSummary().
+// ─────────────────────────────────────────────────────────────
+function AdminBrandingPanel() {
+  const [overview, setOverview] = useState(null);
+  const [platform, setPlatform] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [err, setErr] = useState(null);
+
+  async function load() {
+    setErr(null);
+    try {
+      const [oRes, pRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/admin/branding`),
+        authFetch(`${API_BASE}/api/branding/mine`),
+      ]);
+      if (oRes.ok) setOverview(await oRes.json());
+      if (pRes.ok) setPlatform(normalizeBranding(await pRes.json()));
+    } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function savePlatform() {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/branding/platform`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: platform.productName, companyName: platform.companyName,
+          tagline: platform.tagline, accentColor: platform.accentColor,
+          primaryColor: platform.accentColor, logoUrl: platform.logoUrl,
+          footerNote: platform.footerNote,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Save failed.");
+      setMsg("Platform default branding saved. Unassigned clients will see this.");
+      load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  if (!overview || !platform) {
+    return <div style={{color:C.textSec,fontSize:13,padding:20}}>Loading branding…</div>;
+  }
+
+  const set = (k,v) => { setPlatform(p=>({...p,[k]:v})); setMsg(null); setErr(null); };
+  const coverage = overview.clientsWhiteLabelled + overview.clientsOnDefaultBrand;
+  const pct = coverage ? Math.round((overview.clientsWhiteLabelled / coverage) * 100) : 0;
+
+  return (
+    <div>
+      {/* Coverage summary */}
+      <SectionLabel text="White-Label Coverage"/>
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,marginTop:10}}>
+        {[
+          { label:"MSP brands", value: overview.brandCount, color: C.accent },
+          { label:"Clients white-labelled", value: overview.clientsWhiteLabelled, color: C.green },
+          { label:"Clients on default", value: overview.clientsOnDefaultBrand, color: C.textSec },
+          { label:"Coverage", value: `${pct}%`, color: pct >= 50 ? C.green : C.amber },
+        ].map(s => (
+          <div key={s.label} style={{flex:"1 1 150px",background:C.card,border:`1px solid ${C.border}`,
+            borderRadius:10,padding:"12px 14px"}}>
+            <div style={{color:C.textSec,fontSize:11,fontWeight:600,marginBottom:4}}>{s.label}</div>
+            <div style={{color:s.color,fontSize:22,fontWeight:800}}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Brands on platform */}
+      <SectionLabel text="Brands on Platform"/>
+      <div style={{marginTop:10,marginBottom:22,background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:10,overflow:"hidden"}}>
+        {overview.brands.length === 0 ? (
+          <div style={{padding:"16px",color:C.textSec,fontSize:12.5}}>
+            No custom brands yet. Analysts can set one from the Branding tab in their console.
+          </div>
+        ) : overview.brands.map((b,i) => (
+          <div key={b.ownerUserId} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+            borderTop: i ? `1px solid ${C.border}` : "none"}}>
+            <span style={{width:22,height:22,borderRadius:5,background:b.primaryColor,
+              border:`1px solid ${C.border}`,flexShrink:0}}/>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{color:C.text,fontSize:13,fontWeight:600}}>{b.productName}</div>
+              <div style={{color:C.textSec,fontSize:11}}>{b.owner}</div>
+            </div>
+            <span style={{color:C.textSec,fontSize:11}}>{b.hasLogo ? "logo ✓" : "wordmark"}</span>
+            <span style={{padding:"2px 9px",borderRadius:20,fontSize:10.5,fontWeight:700,
+              background:`${C.accent}18`,border:`1px solid ${C.accent}44`,color:C.accent}}>
+              {b.clientsBranded} client{b.clientsBranded===1?"":"s"}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Platform default */}
+      <SectionLabel text="Platform Default Brand"/>
+      <div style={{color:C.textSec,fontSize:12,marginTop:8,marginBottom:12}}>
+        What clients see when they aren't assigned to an analyst with their own brand.
+      </div>
+      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+        <div style={{flex:"1 1 340px",minWidth:0}}>
+          <BrandField label="Product name">
+            <input style={brandInputStyle()} value={platform.productName || ""} maxLength={40}
+              onChange={e=>set("productName", e.target.value)} placeholder="ShieldAI"/>
+          </BrandField>
+          <BrandField label="Company name">
+            <input style={brandInputStyle()} value={platform.companyName || ""} maxLength={80}
+              onChange={e=>set("companyName", e.target.value)} placeholder="ShieldAI"/>
+          </BrandField>
+          <BrandField label="Tagline">
+            <input style={brandInputStyle()} value={platform.tagline || ""} maxLength={90}
+              onChange={e=>set("tagline", e.target.value)} placeholder="Virtual CISO Platform"/>
+          </BrandField>
+          <BrandField label="Brand colour" hint="Auto-lightened if too dark for the dark theme.">
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <input type="color" value={platform.accentColor || "#00C8FF"}
+                onChange={e=>set("accentColor", e.target.value.toUpperCase())}
+                style={{width:44,height:36,border:`1px solid ${C.border}`,borderRadius:7,
+                  background:C.bg,cursor:"pointer",padding:2}}/>
+              <input style={{...brandInputStyle(),flex:1}} value={platform.accentColor || ""} maxLength={7}
+                onChange={e=>set("accentColor", e.target.value.toUpperCase())} placeholder="#00C8FF"/>
+            </div>
+          </BrandField>
+          <BrandField label="Report footer note">
+            <input style={brandInputStyle()} value={platform.footerNote || ""} maxLength={200}
+              onChange={e=>set("footerNote", e.target.value)} placeholder="CONFIDENTIAL · Prepared by ShieldAI"/>
+          </BrandField>
+        </div>
+        <div style={{flex:"0 1 240px"}}>
+          <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Swatch</div>
+          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:14}}>
+            <div style={{color:C.text,fontSize:15,fontWeight:800,marginBottom:2}}>
+              {platform.productName || "ShieldAI"}
+            </div>
+            <div style={{color:C.textSec,fontSize:11,marginBottom:12}}>
+              {platform.tagline || "Virtual CISO Platform"}
+            </div>
+            <div style={{height:8,borderRadius:4,background:platform.accentColor || C.accent,marginBottom:10}}/>
+            <div style={{fontSize:10.5,color:C.textMut}}>
+              Applies to {overview.clientsOnDefaultBrand} client{overview.clientsOnDefaultBrand===1?"":"s"}.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {err && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
+        background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>{err}</div>}
+      {msg && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
+        background:`${C.green}12`,border:`1px solid ${C.green}40`,color:C.green}}>{msg}</div>}
+
+      <button onClick={savePlatform} disabled={busy}
+        style={{marginTop:18,padding:"9px 18px",borderRadius:8,cursor:busy?"default":"pointer",
+          fontSize:13,fontWeight:700,background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+          border:"none",color:C.bg,opacity:busy?0.6:1}}>
+        {busy ? "Saving…" : "Save platform default"}
+      </button>
     </div>
   );
 }
@@ -4494,6 +4716,7 @@ function AdminPanel({ onClose }) {
             { id:"assignments", label:"Assignments" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
+            { id:"branding", label:"Branding" },
             { id:"ai", label:"AI Integrations" },
           ].map(t => {
             const on = listTab === t.id;
@@ -4756,6 +4979,7 @@ function AdminPanel({ onClose }) {
           </div>
         )}
 
+        {listTab === "branding" && <AdminBrandingPanel />}
         {listTab === "ai" && <AiIntegrations />}
 
         {listTab === "assignments" && (
@@ -6183,6 +6407,242 @@ function mastermindReply(quickId, client) {
 }
 
 
+// Field wrapper for the branding form. Defined at module scope so it is not
+// recreated on every render (which would remount inputs and drop focus).
+function BrandField({ label, hint, children }) {
+  return (
+    <div style={{marginBottom:14}}>
+      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:5}}>{label}</div>
+      {children}
+      {hint && <div style={{color:C.textMut,fontSize:11,marginTop:4}}>{hint}</div>}
+    </div>
+  );
+}
+
+function brandInputStyle() {
+  return {
+    width:"100%", padding:"9px 11px", background:C.bg, color:C.text,
+    border:`1px solid ${C.border}`, borderRadius:7, fontSize:13, outline:"none",
+    fontFamily:"inherit", boxSizing:"border-box",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  BRANDING SETTINGS (white-label)
+//  Lets an analyst/MSP (or admin) set the brand their assigned clients see.
+//  Live-previews against the real palette so the operator sees exactly what
+//  their clients will get before saving.
+// ─────────────────────────────────────────────────────────────
+function BrandingSettings({ onSaved }) {
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [err, setErr] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/api/branding/mine`);
+        if (res.ok) setForm(normalizeBranding(await res.json()));
+        else setForm({ ...DEFAULT_BRANDING });
+      } catch { setForm({ ...DEFAULT_BRANDING }); }
+    })();
+  }, []);
+
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setMsg(null); setErr(null); };
+
+  // Live preview: apply to the real palette as the operator types.
+  useEffect(() => {
+    if (!form) return;
+    applyBrandToPalette(C, { ...form, isDefault: false });
+    brandStore.set({ ...form, isDefault: false });
+  }, [form?.primaryColor, form?.accentColor, form?.productName, form?.logoUrl]);
+
+  async function onLogoPick(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 400 * 1024) { setErr("Logo must be under 400KB."); return; }
+    if (!/^image\/(png|jpeg|jpg|svg\+xml|webp)$/.test(file.type)) { setErr("Logo must be PNG, JPEG, SVG, or WebP."); return; }
+    const reader = new FileReader();
+    reader.onload = () => set("logoUrl", reader.result);
+    reader.onerror = () => setErr("Could not read that file.");
+    reader.readAsDataURL(file);
+  }
+
+  async function save() {
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: form.productName, companyName: form.companyName,
+          tagline: form.tagline, logoUrl: form.logoUrl,
+          primaryColor: form.primaryColor, accentColor: form.accentColor,
+          supportEmail: form.supportEmail, supportUrl: form.supportUrl,
+          footerNote: form.footerNote,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Save failed.");
+      const b = normalizeBranding(d);
+      setForm(b);
+      applyBrandToPalette(C, b);
+      brandStore.set(b);
+      setMsg("Branding saved. Your clients will see this brand.");
+      onSaved && onSaved(b);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  async function reset() {
+    if (!window.confirm("Reset to the default ShieldAI brand? Your clients will see ShieldAI branding.")) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Reset failed.");
+      const b = normalizeBranding(d.branding);
+      setForm({ ...DEFAULT_BRANDING });
+      resetPalette(C);
+      brandStore.set(b);
+      setMsg("Reset to default branding.");
+      onSaved && onSaved(b);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  if (!form) return <div style={{color:C.textSec,fontSize:13,padding:20}}>Loading branding…</div>;
+
+  const Field = BrandField;
+  const input = brandInputStyle();
+
+  return (
+    <div style={{maxWidth:900,margin:"0 auto",padding:"20px 4px"}}>
+      <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
+        <span style={{color:C.text,fontSize:16,fontWeight:700}}>White-Label Branding</span>
+        {!form.isDefault && (
+          <span style={{marginLeft:10,padding:"2px 8px",borderRadius:20,fontSize:10.5,fontWeight:700,
+            background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent}}>ACTIVE</span>
+        )}
+      </div>
+      <div style={{color:C.textSec,fontSize:12.5,marginBottom:18,lineHeight:1.5}}>
+        Set the brand your assigned clients see when they log in. Changes preview live below.
+      </div>
+
+      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+        {/* form */}
+        <div style={{flex:"1 1 380px",minWidth:0}}>
+          <Field label="Product name" hint="Shown in the header. Two words render two-tone (e.g. “Acme Guard”).">
+            <input style={input} value={form.productName || ""} maxLength={40}
+              onChange={e=>set("productName", e.target.value)} placeholder="ShieldAI"/>
+          </Field>
+          <Field label="Company name">
+            <input style={input} value={form.companyName || ""} maxLength={80}
+              onChange={e=>set("companyName", e.target.value)} placeholder="Your MSP"/>
+          </Field>
+          <Field label="Tagline">
+            <input style={input} value={form.tagline || ""} maxLength={90}
+              onChange={e=>set("tagline", e.target.value)} placeholder="Virtual CISO Platform"/>
+          </Field>
+          <Field label="Brand colour" hint="Drives accents platform-wide. Auto-lightened if too dark to read.">
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <input type="color" value={form.accentColor || form.primaryColor || "#00C8FF"}
+                onChange={e=>{set("accentColor", e.target.value.toUpperCase()); set("primaryColor", e.target.value.toUpperCase());}}
+                style={{width:44,height:36,border:`1px solid ${C.border}`,borderRadius:7,background:C.bg,cursor:"pointer",padding:2}}/>
+              <input style={{...input,flex:1}} value={form.accentColor || ""} maxLength={7}
+                onChange={e=>set("accentColor", e.target.value.toUpperCase())} placeholder="#00C8FF"/>
+            </div>
+          </Field>
+          <Field label="Logo" hint="PNG, JPEG, SVG or WebP · under 400KB. Optional — falls back to a wordmark.">
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                onChange={onLogoPick} style={{display:"none"}}/>
+              <button onClick={()=>fileRef.current?.click()}
+                style={{padding:"8px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                  background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+                Choose file…
+              </button>
+              {form.logoUrl && (
+                <button onClick={()=>set("logoUrl", null)}
+                  style={{padding:"8px 13px",borderRadius:7,cursor:"pointer",fontSize:12,
+                    background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>
+                  Remove logo
+                </button>
+              )}
+            </div>
+          </Field>
+          <Field label="Support email">
+            <input style={input} value={form.supportEmail || ""} maxLength={120}
+              onChange={e=>set("supportEmail", e.target.value)} placeholder="support@yourmsp.com"/>
+          </Field>
+          <Field label="Support URL" hint="Must start with https://">
+            <input style={input} value={form.supportUrl || ""} maxLength={200}
+              onChange={e=>set("supportUrl", e.target.value)} placeholder="https://yourmsp.com/support"/>
+          </Field>
+          <Field label="Report footer note" hint="Appears on client-facing exports.">
+            <input style={input} value={form.footerNote || ""} maxLength={200}
+              onChange={e=>set("footerNote", e.target.value)} placeholder="Prepared by Your MSP"/>
+          </Field>
+        </div>
+
+        {/* preview */}
+        <div style={{flex:"1 1 300px",minWidth:0}}>
+          <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Live Preview</div>
+          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+            <div style={{padding:"12px 14px",background:C.surface,borderBottom:`1px solid ${C.border}`,
+              display:"flex",alignItems:"center",gap:10}}>
+              <ShieldLockup logoSize={24} textSize={16} ink={C.text}/>
+            </div>
+            <div style={{padding:"16px 14px"}}>
+              <div style={{color:C.textSec,fontSize:11,marginBottom:3}}>{form.tagline || "Virtual CISO Platform"}</div>
+              <div style={{color:C.text,fontSize:22,fontWeight:800,marginBottom:12}}>78<span style={{color:C.textSec,fontSize:13,fontWeight:600}}>/100</span></div>
+              <div style={{height:6,background:C.border,borderRadius:4,overflow:"hidden",marginBottom:14}}>
+                <div style={{width:"78%",height:"100%",background:C.accent}}/>
+              </div>
+              <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:14}}>
+                <span style={{padding:"3px 9px",borderRadius:20,fontSize:10.5,fontWeight:600,
+                  background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent}}>NIST CSF</span>
+                <span style={{padding:"3px 9px",borderRadius:20,fontSize:10.5,fontWeight:600,
+                  background:C.card,border:`1px solid ${C.border}`,color:C.textSec}}>HIPAA</span>
+              </div>
+              <button style={{padding:"8px 14px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"default",
+                background:C.accent,border:"none",color:"#04121F"}}>Primary action</button>
+              <div style={{marginTop:12,display:"flex",gap:10,fontSize:11}}>
+                <span style={{color:C.green}}>● Healthy</span>
+                <span style={{color:C.amber}}>● Warning</span>
+                <span style={{color:C.red}}>● At risk</span>
+              </div>
+              <div style={{color:C.textMut,fontSize:10,marginTop:10}}>
+                Status colours stay fixed — they carry meaning, not brand.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {err && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
+        background:`${C.red}12`,border:`1px solid ${C.red}40`,color:C.red}}>{err}</div>}
+      {msg && <div style={{marginTop:14,padding:"9px 12px",borderRadius:7,fontSize:12.5,
+        background:`${C.green}12`,border:`1px solid ${C.green}40`,color:C.green}}>{msg}</div>}
+
+      <div style={{display:"flex",gap:9,marginTop:18}}>
+        <button onClick={save} disabled={busy}
+          style={{padding:"9px 18px",borderRadius:7,cursor:busy?"default":"pointer",fontSize:12.5,fontWeight:700,
+            background:C.accent,border:"none",color:"#04121F",opacity:busy?0.6:1}}>
+          {busy ? "Saving…" : "Save branding"}
+        </button>
+        <button onClick={reset} disabled={busy}
+          style={{padding:"9px 18px",borderRadius:7,cursor:busy?"default":"pointer",fontSize:12.5,
+            background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+          Reset to default
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -6326,6 +6786,12 @@ function AnalystConsole({ user, onExit }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🖥️ Live Fleet
         </button>
+        <button onClick={()=>setView(view==="branding"?"portfolio":"branding")}
+          style={{padding:"6px 14px",background:view==="branding"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="branding"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          🎨 Branding
+        </button>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
             color:mmOpen?SOC.bg:SOC.purple,border:`1px solid ${SOC.purple}66`,borderRadius:6,
@@ -6429,6 +6895,18 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
+  if (view === "branding") {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="Branding"/>
+        <Mastermind/>
+        <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
+          <BrandingSettings/>
+        </div>
+      </div>
+    );
+  }
+
   if (view === "myclients") {
     const list = myClients || [];
     return (
@@ -8881,6 +9359,28 @@ export default function ShieldAI() {
     return !!(user.capabilities && user.capabilities[cap]);
   };
 
+  // ── White-label branding ──
+  // Loads the brand this user should see (their MSP's, the platform default,
+  // or ShieldAI's), mutates the shared palette so every C.* reference renders
+  // in the MSP's accent, then publishes to brandStore — which notifies every
+  // useBranding() subscriber to repaint. Any failure falls back to the default
+  // brand; branding must never break the app.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) {
+      resetPalette(C);
+      brandStore.set(DEFAULT_BRANDING);
+      return;
+    }
+    (async () => {
+      const b = await fetchBranding(authFetch, API_BASE);
+      if (cancelled) return;
+      applyBrandToPalette(C, b);
+      brandStore.set(b);
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
   function handleAuthenticated(userObj) {
     setUser(userObj);
     setPhase("home");
@@ -8897,6 +9397,8 @@ export default function ShieldAI() {
   function signOut() {
     setAuthToken(null);
     setUser(null);
+    resetPalette(C);
+    brandStore.set(DEFAULT_BRANDING);
     setAssessment(null);
     setResults(null);
     setShowAnalyst(false);
