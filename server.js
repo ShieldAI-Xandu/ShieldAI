@@ -5,6 +5,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import db, { storeBinder } from "./db.js";
 import {
   isDemoRequest,
@@ -39,9 +42,24 @@ import {
 
 dotenv.config();
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const app = express();
 const gate = makeTierGate(db);
+// Railway (and most PaaS) inject the port to listen on. Falling back to 3001
+// keeps local dev unchanged.
 const PORT = process.env.PORT || 3001;
+// Must bind all interfaces in a container — binding localhost makes the app
+// unreachable from outside, which looks exactly like a silent healthcheck fail.
+const HOST = process.env.HOST || "0.0.0.0";
+
+// ── Healthcheck ──────────────────────────────────────────────
+// Registered first: no auth, no DB, no store binding. Railway's healthcheckPath
+// points here, so it must answer 200 even if nothing else is ready, and it must
+// never be swallowed by the SPA fallback below.
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", uptime: process.uptime() });
+});
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -1035,6 +1053,23 @@ registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, e
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
+//  STATIC FRONTEND
+// ─────────────────────────────────────────────────────────────
+// Serve the built Vite app. This MUST come after every API route so it can
+// never shadow one, and the SPA fallback excludes /api and /health so those
+// keep returning real responses instead of index.html.
+const DIST_DIR = path.join(__dirname, "dist");
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  app.get(/^\/(?!api\/|health$).*/, (req, res) => {
+    res.sendFile(path.join(DIST_DIR, "index.html"));
+  });
+  console.log("ShieldAI static frontend served from ./dist");
+} else {
+  console.warn("⚠️  ./dist not found — frontend not served. Run `npm run build`.");
+}
+
+// ─────────────────────────────────────────────────────────────
 // Fail loudly at boot if demo data ever leaked into production.
 const separation = assertStoreSeparation();
 if (!separation.ok) {
@@ -1043,8 +1078,8 @@ if (!separation.ok) {
 }
 console.log("✔ Demo/production stores are separate (db.json | demo-db.json)");
 
-const server = app.listen(PORT, () => {
-  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`✅ ShieldAI backend listening on ${HOST}:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
 });
