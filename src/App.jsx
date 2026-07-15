@@ -2919,6 +2919,20 @@ function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10,
   );
 }
 
+// A quietly animated "live" dot. Used to signal the product is actually running
+// rather than a mockup — the single most important thing the marketing page has
+// to convey to an investor.
+function LivePulse({ color = C.green, size = 7 }) {
+  return (
+    <span style={{position:"relative",display:"inline-flex",width:size,height:size,flexShrink:0}}>
+      <style>{`@keyframes shieldai-ping{75%,100%{transform:scale(2.4);opacity:0}}`}</style>
+      <span style={{position:"absolute",inset:0,borderRadius:"50%",background:color,opacity:0.65,
+        animation:"shieldai-ping 2s cubic-bezier(0,0,0.2,1) infinite"}}/>
+      <span style={{position:"relative",width:size,height:size,borderRadius:"50%",background:color}}/>
+    </span>
+  );
+}
+
 // Persistent, unmissable marker that the user is in the sandbox. Without this,
 // a visitor could mistake seeded sample companies for real client data.
 function DemoBanner({ onExit }) {
@@ -2993,10 +3007,14 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
   );
 
   const steps = [
-    { n:"01", t:"Assess", d:"Answer a short, structured assessment about your business and current security posture." },
-    { n:"02", t:"Score", d:"Our deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork." },
-    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training." },
-    { n:"04", t:"Manage", d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
+    { n:"01", t:"Assess",  d:"Answer a short, structured assessment about your business and current security posture.",
+      out:"Takes about 15 minutes" },
+    { n:"02", t:"Score",   d:"A deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork.",
+      out:"Every point traceable to a control" },
+    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training.",
+      out:"Documents you can hand to an auditor" },
+    { n:"04", t:"Manage",  d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire.",
+      out:"Ongoing, not a one-time report" },
   ];
 
   const tiers = [
@@ -3032,9 +3050,11 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
         <div style={{display:"flex",justifyContent:"center",marginBottom:28}}>
           <ShieldLogo size={64} glow/>
         </div>
-        <div style={{display:"inline-block",padding:"6px 14px",borderRadius:20,
-          background:`${cyan}15`,border:`1px solid ${cyan}33`,color:cyan,fontSize:12,fontWeight:600,marginBottom:24}}>
-          Security leadership your business can actually afford
+        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
+          fontSize:12,fontWeight:600,marginBottom:24,letterSpacing:0.2}}>
+          <LivePulse/>
+          Built and running in production today
         </div>
         <h1 style={{fontSize:52,fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
           maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
@@ -3066,9 +3086,15 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
           ))}
         </div>
         {demoState.seeded && (
-          <p style={{fontSize:12.5,color:dim,marginTop:14}}>
-            No signup, no credentials. A read-only sandbox with sample companies — completely separate from live client data.
-          </p>
+          <div style={{display:"inline-flex",alignItems:"center",gap:10,marginTop:18,padding:"9px 16px",
+            borderRadius:10,background:`${C.purple}0E`,border:`1px solid ${C.purple}30`,
+            maxWidth:600,textAlign:"left"}}>
+            <LivePulse color={C.purple} size={6}/>
+            <span style={{fontSize:12.5,color:dim,lineHeight:1.5}}>
+              <strong style={{color:C.text,fontWeight:600}}>No signup, no credentials.</strong>{" "}
+              A read-only sandbox with sample companies — fully isolated from live client data.
+            </span>
+          </div>
         )}
         {demoErr && (
           <p style={{fontSize:13,color:"#F87171",marginTop:10}}>{demoErr}</p>
@@ -3121,19 +3147,76 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
         <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 40px",maxWidth:620}}>
           From assessment to managed program in four steps.
         </h2>
-        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
           {steps.map((s,i)=>(
-            <div key={i} style={{flex:"1 1 220px",position:"relative"}}>
-              <div style={{fontSize:13,fontWeight:800,color:cyan,marginBottom:10,letterSpacing:1}}>{s.n}</div>
-              <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>{s.t}</div>
-              <div style={{fontSize:14,color:dim,lineHeight:1.6}}>{s.d}</div>
+            <div key={i} style={{flex:"1 1 220px",position:"relative",display:"flex",flexDirection:"column",
+              padding:"22px 20px 20px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+              {/* Step rail — a thin accent that fades along the sequence */}
+              <div style={{position:"absolute",top:0,left:20,right:20,height:2,borderRadius:2,
+                background:`linear-gradient(90deg,${cyan}${i===0?"CC":"66"},${cyan}${i===steps.length-1?"22":"55"})`}}/>
+              <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:12}}>
+                <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",
+                  justifyContent:"center",background:`${cyan}18`,border:`1px solid ${cyan}33`,
+                  fontSize:11,fontWeight:800,color:cyan,letterSpacing:0.5}}>{s.n}</div>
+                <div style={{fontSize:17,fontWeight:700}}>{s.t}</div>
+              </div>
+              <div style={{fontSize:13.5,color:dim,lineHeight:1.6,flex:1}}>{s.d}</div>
+              <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${line}`,
+                fontSize:11.5,fontWeight:600,color:C.green,letterSpacing:0.2}}>
+                {s.out}
+              </div>
             </div>
           ))}
         </div>
       </Section>
 
+      {/* AI ENGINE STRIP */}
+      {/* Deliberately does not name model vendors. Naming them invites the
+          "you're just a wrapper" objection, and would tie the pitch to
+          providers we may swap. The differentiator is the boundary, not the
+          brand of the model. */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"52px 0"}}>
+        <Section>
+          <div style={{display:"flex",gap:40,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{flex:"1 1 380px",minWidth:280}}>
+              <Eyebrow>The engine</Eyebrow>
+              <h2 style={{fontSize:26,fontWeight:800,letterSpacing:-0.5,margin:"0 0 12px",maxWidth:460}}>
+                A multi-model engine. Every output human-reviewed.
+              </h2>
+              <p style={{fontSize:14.5,color:dim,lineHeight:1.65,maxWidth:480,margin:0}}>
+                ShieldAI routes each task to the model best suited to it, with automatic
+                failover so the platform keeps working when a provider doesn't. The AI
+                drafts, maps, and monitors — but it never acts on your systems, and a
+                security engineer reviews what reaches you.
+              </p>
+            </div>
+            <div style={{flex:"0 1 380px",minWidth:280,display:"flex",flexDirection:"column",gap:10}}>
+              {[
+                { t:"AI advises, humans act",
+                  d:"The AI is advisory only. It has no ability to change your systems." },
+                { t:"Read-only monitoring",
+                  d:"Our endpoint agent reports posture. It accepts no inbound commands." },
+                { t:"Provider-independent",
+                  d:"Multiple engines behind one layer — no single vendor is a dependency." },
+              ].map((x,i)=>(
+                <div key={i} style={{display:"flex",gap:11,alignItems:"flex-start",padding:"12px 14px",
+                  background:C.card,border:`1px solid ${line}`,borderRadius:10}}>
+                  <div style={{width:16,height:16,borderRadius:5,flexShrink:0,marginTop:1,
+                    background:`${C.green}1A`,border:`1px solid ${C.green}44`,display:"flex",
+                    alignItems:"center",justifyContent:"center",fontSize:9,color:C.green,fontWeight:800}}>✓</div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,marginBottom:3}}>{x.t}</div>
+                    <div style={{fontSize:12,color:dim,lineHeight:1.5}}>{x.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      </div>
+
       {/* WHY NOW */}
-      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+      <div style={{background:deep,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
         <Section>
           <Eyebrow>Why now</Eyebrow>
           <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px",maxWidth:680}}>
