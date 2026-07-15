@@ -20,6 +20,9 @@ import { cachedExposure } from "./cveService.js";
 import { cachedDarkweb } from "./darkwebService.js";
 import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
 import { taskSummary, simulateControlChange, currentPosture } from "./taskRoutes.js";
+import { evidenceSummary } from "./evidenceRoutes.js";
+import { complianceSummary } from "./complianceRoutes.js";
+import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrameworkIds } from "./complianceFrameworks.js";
 import { SECURITY_CHECKLIST } from "./securityChecklist.js";
 
 const nowIso = () => new Date().toISOString();
@@ -129,6 +132,8 @@ function portfolioSnapshot(db, depth = "summary") {
     admins, analysts, clients,
     branding: brandingSummary(db),
     tasks: taskSummary(db, depth),
+    evidence: evidenceSummary(db, depth),
+    compliance: complianceSummary(db, depth),
     recentEvents: events.slice(-20).map(e => ({ client: nameOf(e.ownerUserId), severity: e.severity, type: e.type, message: e.message, at: e.ts || e.at })),
   };
 }
@@ -224,6 +229,21 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       }, required: ["clientIdOrEmail", "controlId", "targetLabel"] },
     },
     {
+      name: "check_compliance",
+      description: "Check a client's compliance against a framework (nist-csf, hipaa, soc2, iso-27001, pci-dss, cmmc), control by control. Returns which requirements are compliant, partial, gaps, or unknown, derived from their actual assessment answers — never guessed. Omit frameworkId for a summary across all frameworks. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client to check." },
+        frameworkId: { type: "string", description: "Optional: nist-csf, hipaa, soc2, iso-27001, pci-dss, or cmmc." },
+      }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "check_evidence",
+      description: "Check audit readiness: how much completed work has supporting evidence attached, and which completed tasks are missing proof. Auditors and insurers examine exactly this. Optionally scope to one client. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "Optional client filter." },
+      }, required: [] },
+    },
+    {
       name: "get_branding",
       description: "Read white-label branding across the platform: which analysts/MSPs have their own brand, how many clients each brand covers, and how many clients are still on the default ShieldAI brand. Optionally pass a client id/email to see exactly which brand that client sees. Read-only.",
       input_schema: { type: "object", properties: {
@@ -305,6 +325,48 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         const sim = simulateControlChange(db, u.id, input.controlId, input.targetLabel);
         if (!sim) return { error: "Invalid control/answer, or client has no assessment." };
         return { client: u.companyName || u.email, ...sim };
+      }
+      case "check_compliance": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const list = (db.data.assessments || []).filter(a => a.userId === u.id);
+        if (!list.length) return { error: "Client has no assessment — compliance cannot be determined." };
+        const a = list.reduce((b,x)=> !b || new Date(x.updatedAt||x.createdAt) > new Date(b.updatedAt||b.createdAt) ? x : b, null);
+        const checklist = a.data?.checklist || a.data?.securityChecklist || {};
+        if (!input.frameworkId) {
+          return { client: u.companyName || u.email, frameworks: evaluateAllFrameworks(checklist),
+                   note: "Derived from assessment answers, not estimated." };
+        }
+        const rep = evaluateFramework(input.frameworkId, checklist);
+        if (!rep) return { error: `Unknown framework. Available: ${listFrameworkIds().join(", ")}` };
+        return {
+          client: u.companyName || u.email,
+          framework: rep.framework.name,
+          summary: rep.summary,
+          requirements: rep.requirements.map(r => ({
+            id: r.id, name: r.name, section: r.section, status: r.status,
+            failingControls: r.failingControls,
+          })),
+        };
+      }
+      case "check_evidence": {
+        if (input.clientIdOrEmail) {
+          const u = resolveClient(input.clientIdOrEmail);
+          if (!u) return { error: "Client not found." };
+          const items = (db.data.evidence || []).filter(e => e.ownerUserId === u.id);
+          const done = (db.data.tasks || []).filter(t => t.ownerUserId === u.id && t.status === "done");
+          const missing = done.filter(t => !items.some(e => e.kind === "task" && e.refId === t.id));
+          return {
+            client: u.companyName || u.email,
+            totalEvidence: items.length,
+            completedTasks: done.length,
+            withEvidence: done.length - missing.length,
+            missingEvidence: missing.length,
+            coveragePct: done.length ? Math.round(((done.length - missing.length) / done.length) * 100) : 100,
+            tasksMissingProof: missing.slice(0, 15).map(t => ({ title: t.title, completedAt: t.completedAt })),
+          };
+        }
+        return evidenceSummary(db, "summary");
       }
       case "get_branding": {
         if (input.clientIdOrEmail) {

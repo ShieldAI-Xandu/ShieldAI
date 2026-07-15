@@ -16,6 +16,8 @@ import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerTaskRoutes } from "./taskRoutes.js";
+import { registerEvidenceRoutes } from "./evidenceRoutes.js";
+import { registerComplianceRoutes } from "./complianceRoutes.js";
 import { registerCveRoutes } from "./cveRoutes.js";
 import { registerAiProviderRoutes } from "./aiProviders.js";
 import { clientSoftwareDescriptors, exposureForSoftware, searchByKeyword } from "./cveService.js";
@@ -1290,6 +1292,8 @@ registerAiProviderRoutes(app, { requireAuth });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
 //  SERVE THE BUILT FRONTEND (production)

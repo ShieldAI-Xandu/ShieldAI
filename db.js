@@ -30,7 +30,10 @@ const defaultData = {
   adminAudit: [],    // { id, actorUserId, actorEmail, action, targetUserId, detail, at }
   assignments: [],   // { id, analystUserId, clientUserId, assignedBy, assignedAt }
   clientActions: [], // { id, clientUserId, actorUserId, actorRole, action, detail, recommendationId, at }
-  notifications: [], // { id, userId, type, title, body, link, read, createdAt, actorRole }
+  tasks: [],         // { id, ownerUserId, controlId, targetLabel, title, status, priority, dueDate, assigneeUserId, projectedGain, actualGain, evidence[], history[] }
+  postureHistory: [],// { id, userId, at, score, level, reason }
+  evidence: [],      // { id, ownerUserId, kind, refId, title, note, filename, mimeType, bytes, sha256, storagePath, uploadedBy, uploadedAt }
+  branding: [],      // { ownerUserId, productName, companyName, tagline, logoUrl, primaryColor, accentColor, ... }
 };
 
 const adapter = new JSONFile(file);
@@ -55,7 +58,10 @@ db.data.transactions ||= [];
 db.data.adminAudit ||= [];
 db.data.assignments ||= [];
 db.data.clientActions ||= [];
-db.data.notifications ||= [];
+db.data.tasks ||= [];
+db.data.postureHistory ||= [];
+db.data.evidence ||= [];
+db.data.branding ||= [];
 await db.write();
 
 export default db;
