@@ -81,7 +81,7 @@ Your specialty: ${modelInfo.specialty}
 
 ${systemPrompt}`;
 
-  const res = await authFetch("http://localhost:3001/api/claude", {
+  const res = await authFetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { 
        "Content-Type": "application/json",
@@ -539,7 +539,11 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:3001";
+// In production the Express backend serves this built frontend from ./dist, so
+// the API lives on the same origin — an empty base makes every fetch relative
+// and correct regardless of the deployed domain. In dev, Vite serves the
+// frontend on its own port, so calls must be pointed at the backend explicitly.
+const API_BASE = import.meta.env.DEV ? "http://localhost:3001" : "";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
