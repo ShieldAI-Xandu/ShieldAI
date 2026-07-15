@@ -41,7 +41,7 @@ dotenv.config();
 
 const app = express();
 const gate = makeTierGate(db);
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
