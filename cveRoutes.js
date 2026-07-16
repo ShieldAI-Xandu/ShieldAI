@@ -89,7 +89,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
       targetId = req.query.userId;
     }
 
-    const software = clientSoftwareDescriptors(db, targetId);
+    const software = clientSoftwareDescriptors(db, targetId, { isDemo: req.isDemo });
     if (software.length === 0) {
       return res.json({
         userId: targetId, software: [], exposure: null,
@@ -112,7 +112,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
       }
       targetId = req.body.userId;
     }
-    const record = await refreshClientExposure(db, targetId);
+    const record = await refreshClientExposure(db, targetId, { isDemo: req.isDemo });
     res.json({ userId: targetId, exposure: record });
   });
 
@@ -131,8 +131,8 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
     }
     // clientExposure enforces the verification gates: it will not query HIBP
     // for a domain the client hasn't registered and proved control of.
-    const exposure = await clientExposure(db, targetId);
-    res.json({ userId: targetId, configured: darkwebConfigured(), exposure });
+    const exposure = await clientExposure(db, targetId, { isDemo: req.isDemo });
+    res.json({ userId: targetId, configured: darkwebConfigured() || !!req.isDemo, exposure });
   });
 
   app.post("/api/client/darkweb-exposure/refresh", requireAuth, async (req, res) => {
@@ -145,7 +145,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
       }
       targetId = req.body.userId;
     }
-    const record = await refreshClientDarkweb(db, targetId);
+    const record = await refreshClientDarkweb(db, targetId, { isDemo: req.isDemo });
     res.json({ userId: targetId, exposure: record });
   });
 }

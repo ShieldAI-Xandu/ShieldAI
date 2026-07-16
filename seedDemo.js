@@ -21,6 +21,7 @@ import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import db, { runInStore, DEMO_STORE, getStore, PROD_STORE } from "./db.js";
 import { DEMO_PERSONAS } from "./demoGateway.js";
+import { demoDomainRecord } from "./demoIntel.js";
 import { PIPELINE } from "./generators.js";
 import { computePostureScore } from "./riskEngine.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
@@ -398,6 +399,13 @@ async function main() {
     }
     await db.write(); // save progress after each company
   }
+
+  // Give the demo client a fully-verified domain record so the breach-monitoring
+  // card shows the finished state rather than an empty form. The workflow itself
+  // stays fully clickable inside each visitor's sandbox.
+  db.data.clientDomains ||= [];
+  db.data.clientDomains = db.data.clientDomains.filter(d => d.userId !== user.id);
+  db.data.clientDomains.push(demoDomainRecord(user.id, COMPANIES[0].company.name));
 
   await db.write();
   console.log(`\n✅ Demo seed complete — written to demo-db.json ONLY.`);

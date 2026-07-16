@@ -240,7 +240,17 @@ export async function domainExposure(domain) {
 //
 // Every refusal returns an honest status describing exactly what's missing —
 // never a "Low risk" that a client could mistake for an all-clear.
-export async function clientExposure(db, userId) {
+export async function clientExposure(db, userId, { isDemo = false } = {}) {
+  // Demo sandbox: HIBP cannot answer for a fictional domain (it isn't verified
+  // in our dashboard, and never could be), so a live query is impossible by
+  // construction. Serve the fixture — flagged `simulated: true` so nothing
+  // downstream can mistake it for live intelligence.
+  if (isDemo) {
+    const user = (db.data.users || []).find(u => u.id === userId);
+    const { demoDarkwebExposure } = await import("./demoIntel.js");
+    return demoDarkwebExposure(user?.companyName);
+  }
+
   const record = getClientDomain(db, userId);
   const view = clientView(record, { hibpConfigured: darkwebConfigured() });
 
@@ -268,8 +278,8 @@ export async function clientExposure(db, userId) {
 }
 
 // DB-backed snapshot, parallel to the CVE one, so Mastermind reads cached data.
-export async function refreshClientDarkweb(db, userId) {
-  const exposure = await clientExposure(db, userId);
+export async function refreshClientDarkweb(db, userId, opts = {}) {
+  const exposure = await clientExposure(db, userId, opts);
   db.data.darkwebExposure ||= {};
   db.data.darkwebExposure[userId] = { ...exposure, refreshedAt: new Date().toISOString() };
   await db.write();

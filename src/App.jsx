@@ -576,7 +576,19 @@ async function startDemoSession(persona = "client") {
   if (!res.ok) throw new Error(data.error || "Could not start the demo.");
   IS_DEMO_SESSION = true;
   setAuthToken(data.token);
-  return { ...data.user, isDemo: true, readOnly: true };
+  return { ...data.user, isDemo: true, readOnly: false };
+}
+
+// Tell the server to destroy this visitor's sandbox now rather than waiting for
+// it to expire. Everything they created in the demo disappears with it.
+async function endDemoSession() {
+  if (!IS_DEMO_SESSION) return;
+  try {
+    await authFetch(`${API_BASE}/api/demo/exit`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } catch { /* best-effort: the sandbox expires on its own regardless */ }
+  IS_DEMO_SESSION = false;
 }
 
 function getAuthToken() {
@@ -3143,7 +3155,10 @@ function DemoBanner({ onExit }) {
       justifyContent:"center",gap:14,flexWrap:"wrap",padding:"9px 16px",
       background:"linear-gradient(90deg,#7C3AED,#4F46E5)",color:"#fff",
       fontSize:13,fontWeight:600,letterSpacing:0.2}}>
-      <span>DEMO SANDBOX — sample data only, read-only. Nothing here is a real client.</span>
+      <span>
+        DEMO SANDBOX — everything works, but the data is sample data and your changes
+        are discarded when you leave. Nothing here is a real client.
+      </span>
       <button onClick={onExit}
         style={{padding:"4px 12px",background:"rgba(255,255,255,0.16)",
           border:"1px solid rgba(255,255,255,0.4)",borderRadius:6,color:"#fff",
@@ -3294,7 +3309,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
             <LivePulse color={C.purple} size={6}/>
             <span style={{fontSize:12.5,color:dim,lineHeight:1.5}}>
               <strong style={{color:C.text,fontWeight:600}}>No signup, no credentials.</strong>{" "}
-              A read-only sandbox with sample companies — fully isolated from live client data.
+              A private, fully working sandbox with sample companies — isolated from live
+              client data and discarded when you leave.
             </span>
           </div>
         )}
@@ -8869,7 +8885,11 @@ export default function ShieldAI() {
   // Sandbox marker rides above every authenticated view, including the analyst
   // console and Mastermind — there is no screen where a visitor can forget
   // they're in the demo.
-  const demoBanner = user.isDemo ? <DemoBanner onExit={signOut}/> : null;
+  async function exitDemo() {
+    await endDemoSession();
+    signOut();
+  }
+  const demoBanner = user.isDemo ? <DemoBanner onExit={exitDemo}/> : null;
 
   // Client-facing Mastermind (Enterprise clients only; staff use admin console)
   if (showClientMastermind && !user.isAdmin && !user.isAnalyst) {

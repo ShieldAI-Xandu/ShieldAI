@@ -16,7 +16,8 @@
 // must never contain real client data, and nothing in it can reach production.
 
 import jwt from "jsonwebtoken";
-import { DEMO_STORE, PROD_STORE, getStore } from "./db.js";
+import { randomUUID } from "crypto";
+import { DEMO_STORE, PROD_STORE, getStore, destroySandbox, sandboxStats } from "./db.js";
 
 // Separate secret from production. If unset, derive a distinct one so demo and
 // prod tokens are never interchangeable even in a bare dev environment.
@@ -35,7 +36,7 @@ export const DEMO_PERSONAS = {
 };
 
 // ── Token helpers ─────────────────────────────────────────────
-export function signDemoToken(user) {
+export function signDemoToken(user, sessionId = randomUUID()) {
   return jwt.sign(
     {
       userId: user.id,
@@ -43,10 +44,20 @@ export function signDemoToken(user) {
       isAdmin: false,           // demo sessions are never admin
       isAnalyst: !!user.isAnalyst,
       store: DEMO_STORE,        // the claim that routes this session
+      sid: sessionId,           // the key to this visitor's private sandbox
     },
     DEMO_JWT_SECRET,
     { expiresIn: DEMO_TOKEN_EXPIRY }
   );
+}
+
+// Which sandbox does this request belong to? Read ONLY from the signed token —
+// a visitor cannot name someone else's sandbox, because they can't forge a
+// token carrying that sid.
+export function demoSessionId(req) {
+  const token = bearer(req);
+  if (!token) return null;
+  return verifyDemoToken(token)?.sid || null;
 }
 
 export function verifyDemoToken(token) {
@@ -86,26 +97,31 @@ export function requireDemoAuth(req, res, next) {
   req.isAdmin = false;
   req.isAnalyst = !!payload.isAnalyst;
   req.isDemo = true;
+  req.demoSessionId = payload.sid || null;
   next();
 }
 
-// ── Middleware: block writes inside the demo sandbox ──────────
-// The demo is read-only by design: visitors explore seeded data, they don't
-// mutate it. This keeps the sandbox pristine for the next visitor without a
-// reset job, and means a hostile visitor has nothing to corrupt.
-const DEMO_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+// ── The demo is fully writable ────────────────────────────────
+// Each visitor works inside their own in-memory sandbox (see db.js), so writes
+// are safe: they can't reach production, can't reach the seeded template, and
+// can't reach another visitor. Everything a real account can do, a demo visitor
+// can do — which is the point. An investor clicking a button that silently
+// refuses is worse than no demo at all.
+//
+// A small number of things stay off because they'd touch the real world rather
+// than the sandbox — real money, real credentials, real infrastructure.
+const DEMO_BLOCKED_PREFIXES = [
+  { prefix: "/api/billing",       why: "Billing is disabled in the demo — it would create real Stripe charges." },
+  { prefix: "/api/admin",         why: "Admin controls aren't part of the demo — they manage real accounts." },
+  { prefix: "/api/agents/enroll", why: "Agent enrollment is disabled in the demo — it would mint a real enrollment token." },
+];
 
-// Gateway routes that must stay POST-able — starting a session is the one write
-// a visitor is allowed, and it writes nothing to the store anyway.
-const DEMO_WRITE_ALLOWLIST = new Set([`${DEMO_PATH_PREFIX}/session`]);
-
-export function demoReadOnly(req, res, next) {
-  if (DEMO_SAFE_METHODS.has(req.method)) return next();
-  if (DEMO_WRITE_ALLOWLIST.has(req.path)) return next();
-  return res.status(403).json({
-    error: "This is a read-only demo sandbox. Create an account to run assessments and generate documents.",
-    code: "DEMO_READ_ONLY",
-  });
+export function demoGuard(req, res, next) {
+  const hit = DEMO_BLOCKED_PREFIXES.find(b => req.path.startsWith(b.prefix));
+  if (hit) {
+    return res.status(403).json({ error: hit.why, code: "DEMO_RESTRICTED" });
+  }
+  next();
 }
 
 // ── Public routes ─────────────────────────────────────────────
@@ -125,11 +141,17 @@ export function registerDemoRoutes(app, db) {
         });
       }
 
+      // A fresh session id = a fresh private sandbox, cloned from the template
+      // on first use. Nothing this visitor does will outlive their session.
+      const sessionId = randomUUID();
+
       res.json({
-        token: signDemoToken(user),
+        token: signDemoToken(user, sessionId),
         persona: key,
+        sessionId,
         expiresIn: DEMO_TOKEN_EXPIRY,
-        readOnly: true,
+        readOnly: false,
+        sandbox: true,
         user: {
           id: user.id,
           email: user.email,
@@ -146,13 +168,27 @@ export function registerDemoRoutes(app, db) {
     }
   });
 
+  // End a demo session and destroy its sandbox immediately.
+  // Sandboxes expire on their own, but discarding on exit is what "the data
+  // stays in the demo" should mean in practice rather than eventually.
+  app.post(`${DEMO_PATH_PREFIX}/exit`, (req, res) => {
+    const sid = demoSessionId(req);
+    const destroyed = sid ? destroySandbox(sid) : false;
+    res.json({ ended: true, destroyed });
+  });
+
   // Is the demo available, and what can visitors enter as?
   app.get(`${DEMO_PATH_PREFIX}/status`, (req, res) => {
     const emails = new Set((db.data.users || []).map(u => u.email));
     const available = Object.entries(DEMO_PERSONAS)
       .filter(([, p]) => emails.has(p.email))
       .map(([id, p]) => ({ id, label: p.label }));
-    res.json({ seeded: available.length > 0, readOnly: true, personas: available });
+    res.json({
+      seeded: available.length > 0,
+      readOnly: false,
+      personas: available,
+      sandbox: sandboxStats(),
+    });
   });
 }
 

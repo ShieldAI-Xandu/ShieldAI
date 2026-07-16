@@ -8,13 +8,43 @@ cross.
 
 | | Production | Demo |
 |---|---|---|
-| Data file | `db.json` | `demo-db.json` |
+| Data | `db.json` | private in-memory sandbox per visitor |
 | Entry | Login (email + password) | Public "Try the demo" button |
 | JWT secret | `JWT_SECRET` | `DEMO_JWT_SECRET` (separate) |
-| Token claim | *(none)* | `store: "demo"` |
-| Writes | Yes | **No — read-only sandbox** |
-| Admin / Billing | Yes | Blocked (403) |
+| Token claim | *(none)* | `store: "demo"`, `sid: <session>` |
+| Writes | Yes | **Yes — fully functional** |
+| Billing / Admin / Agent enrollment | Yes | Blocked (403) |
 | Accounts | Real clients | `*@shieldai.demo` only |
+| Lifetime | Permanent | Discarded on exit (or after 4h) |
+
+## Per-visitor sandboxes
+
+`demo-db.json` is a **template, not a live store**. Each visitor gets a deep
+in-memory clone of it, keyed by a session id inside their signed token.
+
+- Every button works. Writes persist within the session.
+- No visitor can see another's work — different sandbox objects entirely.
+- The template is never written to, so it stays pristine without a reset job.
+- Exiting destroys the sandbox immediately; abandoned ones expire after 4h.
+- Sandboxes die with the process. A redeploy ends live demo sessions — correct
+  for throwaway data, and it never affects production.
+
+Capped at 200 concurrent sandboxes with LRU eviction, as back-pressure.
+
+## Demo threat intelligence
+
+This is the one place where "make the demo realistic" could have meant shipping
+fake security data. It doesn't.
+
+| | Approach | Why |
+|---|---|---|
+| **CVEs** | **Real, live from NVD** | Demo companies have fixed, plausible software stacks. We query NVD for them exactly as a real client does. Copy any CVE ID out of the demo and look it up at nvd.nist.gov — it's real and says what we said. |
+| **Breach data** | **Canned fixture**, flagged `simulated: true` | HIBP can only answer for domains verified in our dashboard, and the demo companies are fictional — a live query is impossible by construction. |
+
+No LLM invents a CVE number, a CVSS score, or a breach. A fabricated CVE ID
+would either collide with a real record that says something else, or be
+checkable-and-absent in ten seconds — in the exact feature the pitch sells as
+"real data, unlike competitors."
 
 ## How it's enforced (four independent layers)
 
@@ -102,9 +132,12 @@ DB_DIR=./testdata JWT_SECRET=test node e2e.test.mjs
 
 ## Design notes
 
-- **The sandbox is read-only.** Anyone can enter, so it must stay pristine and
-  there must be nothing to corrupt. Visitors explore seeded data; "Try the
-  assessment" still routes to real signup.
+- **The sandbox is fully writable.** An investor clicking a button that silently
+  refuses is worse than no demo. Isolation comes from giving each visitor their
+  own copy, not from taking features away.
+- **Only real-world side effects are blocked**: billing (real Stripe charges),
+  admin (real accounts), agent enrollment (real tokens). Each returns a specific
+  reason, not a generic refusal.
 - **A purple banner rides above every authenticated demo view** so sample
   companies are never mistaken for real clients.
 - **Demo sessions are never admin**, regardless of the underlying record.

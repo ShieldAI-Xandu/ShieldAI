@@ -11,8 +11,9 @@ import { fileURLToPath } from "url";
 import db, { storeBinder } from "./db.js";
 import {
   isDemoRequest,
+  demoSessionId,
   registerDemoRoutes,
-  demoReadOnly,
+  demoGuard,
   assertStoreSeparation,
   DEMO_PATH_PREFIX,
 } from "./demoGateway.js";
@@ -75,20 +76,14 @@ app.use((req, res, next) => {
 // Bind every request to exactly one data store before any route runs.
 // Demo requests → demo-db.json. Everything else → db.json. Nothing downstream
 // can reach across: db.data always resolves to the bound store.
-app.use(storeBinder(isDemoRequest));
+// Demo requests bind to the visitor's own private, in-memory sandbox — a full
+// writable clone of the seeded demo data that no one else can see and that is
+// discarded when they leave. Everything else binds to production.
+app.use(storeBinder(isDemoRequest, demoSessionId));
 
-// The demo sandbox never writes. Blocks mutations on both the /api/demo
-// routes and any real route reached with a demo token.
-app.use((req, res, next) => (req.isDemo ? demoReadOnly(req, res, next) : next()));
-
-// Demo billing and enrollment are meaningless and must never touch Stripe or
-// mint real agent tokens — refuse outright rather than half-work.
-app.use((req, res, next) => {
-  if (req.isDemo && (req.path.startsWith("/api/billing") || req.path.startsWith("/api/admin"))) {
-    return res.status(403).json({ error: "Not available in the demo sandbox.", code: "DEMO_RESTRICTED" });
-  }
-  next();
-});
+// The demo is otherwise fully functional. Only things that would reach the real
+// world — real money, real accounts, real enrollment tokens — are blocked.
+app.use((req, res, next) => (req.isDemo ? demoGuard(req, res, next) : next()));
 
 const progressStore = {};
 

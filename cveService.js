@@ -41,6 +41,28 @@ export const SECURITY_REFERENCES = [
     org: "CNSS", purpose: "Policy and instructions (e.g. CNSSI-1253) for U.S. national-security systems. Reference framework — not a live database." },
 ];
 
+// ── Demo software stacks ──────────────────────────────────────────
+// Fixed, plausible inventories for the fictional demo companies. These live
+// here rather than in demoIntel.js so there's no import cycle, and so the demo
+// path is visibly the SAME code path as production — it differs only in where
+// the software list comes from, never in how CVEs are fetched or presented.
+//
+// Versions are chosen to be realistic for an SMB and to return real, meaningful
+// CVEs from NVD. An empty result set makes a poor demo; old versions of
+// widely-deployed software are also simply what SMBs actually run.
+export const DEMO_STACKS = {
+  "Meridian Dental Group": [
+    "Windows Server 2019", "Apache 2.4.49", "OpenSSL 1.1.1", "WordPress 6.1", "MySQL 5.7",
+  ],
+  "Cascade Logistics": [
+    "Ubuntu 20.04", "nginx 1.18.0", "Log4j 2.14.1", "PostgreSQL 12.9", "OpenSSH 8.2",
+  ],
+  "Northgate Financial": [
+    "Windows Server 2016", "Microsoft Exchange Server 2016", "OpenSSL 3.0.1",
+    "Apache Tomcat 9.0.30", "Jenkins 2.303",
+  ],
+};
+
 // ── Service status ────────────────────────────────────────────────
 // Whether NVD is keyed, and what that costs us in latency. The key is optional
 // but the difference is large: without one, NVD demands ~6s between requests,
@@ -206,8 +228,8 @@ export async function exposureForSoftware(softwareList, { perItem = 3 } = {}) {
 // record into db.data.cveExposure and the snapshot reads that. Refresh can be
 // triggered on a schedule, after an agent report, or on demand.
 
-export async function refreshClientExposure(db, userId) {
-  const software = clientSoftwareDescriptors(db, userId);
+export async function refreshClientExposure(db, userId, { isDemo = false } = {}) {
+  const software = clientSoftwareDescriptors(db, userId, { isDemo });
   db.data.cveExposure ||= {};
   if (software.length === 0) {
     db.data.cveExposure[userId] = { software: [], counts: {}, top: [], degraded: false, refreshedAt: new Date().toISOString(), empty: true };
@@ -235,7 +257,17 @@ export function cachedExposure(db, userId) {
 // Pull the software descriptors a client has reported, from (a) their agents'
 // latest report inventory and (b) an optional assessment techStack field.
 // Best-effort and defensive about shapes — returns a de-duplicated string list.
-export function clientSoftwareDescriptors(db, userId) {
+export function clientSoftwareDescriptors(db, userId, { isDemo = false } = {}) {
+  // Demo sandbox: the fictional companies have no agents reporting inventory,
+  // so we use their fixed demo stack. Crucially, the CVE lookup that follows is
+  // the SAME live NVD query a real client gets — only the software list is
+  // fixture data. The vulnerabilities returned are real records from NIST.
+  if (isDemo) {
+    const user = (db.data.users || []).find(u => u.id === userId);
+    const stack = DEMO_STACKS[user?.companyName];
+    if (stack) return [...stack];
+  }
+
   const out = new Set();
 
   // Latest report per agent for this user (inventory lives in agentReports).
