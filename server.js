@@ -22,6 +22,8 @@ import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
+import { registerCveRoutes } from "./cveRoutes.js";
+import { registerDomainRoutes } from "./domainRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -1051,6 +1053,8 @@ registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
+registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
+registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

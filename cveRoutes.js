@@ -12,7 +12,7 @@ import {
 } from "./cveService.js";
 import {
   clientDomain,
-  domainExposure,
+  clientExposure,
   refreshClientDarkweb,
   darkwebConfigured,
 } from "./darkwebService.js";
@@ -88,8 +88,9 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
       }
       targetId = req.query.userId;
     }
-    const domain = clientDomain(db, targetId);
-    const exposure = await domainExposure(domain);
+    // clientExposure enforces the verification gates: it will not query HIBP
+    // for a domain the client hasn't registered and proved control of.
+    const exposure = await clientExposure(db, targetId);
     res.json({ userId: targetId, configured: darkwebConfigured(), exposure });
   });
 

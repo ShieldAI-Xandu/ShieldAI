@@ -16,6 +16,8 @@
 // Requires: process.env.HIBP_API_KEY (32-char hex from https://haveibeenpwned.com/API/Key)
 // Optional: process.env.HIBP_USER_AGENT (defaults to "ShieldAI-vCISO")
 
+import { getClientDomain, isMonitorable, clientView, OWNERSHIP, HIBP_STATUS } from "./domainService.js";
+
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
 const HIBP_API_KEY = process.env.HIBP_API_KEY || "";
 const HIBP_USER_AGENT = process.env.HIBP_USER_AGENT || "ShieldAI-vCISO";
@@ -44,21 +46,32 @@ function schedule(fn) {
   return run;
 }
 
-// Pull a domain from a client's record / assessment. Best-effort, defensive.
+// The domain we are ALLOWED to query HIBP for — i.e. one the client has
+// explicitly registered and proved control of.
+//
+// This used to fall back to guessing from the user's email address. That was
+// unsafe: querying breach data for a domain nobody proved they own means
+// exposing a third party's exposure to whoever signed up with an address at
+// it. Guessing is now only used as a *suggestion* in the UI (see
+// suggestedDomain), never as an input to a live query.
 export function clientDomain(db, userId) {
+  const record = getClientDomain(db, userId);
+  return record?.domain || null;
+}
+
+// A best-effort guess to pre-fill the "what's your domain?" field. Never used
+// for querying — the client still has to submit and verify it.
+export function suggestedDomain(db, userId) {
   const user = (db.data.users || []).find(u => u.id === userId);
-  // Prefer an explicit website/domain field; fall back to the email domain.
   const assessments = (db.data.assessments || []).filter(a => a.userId === userId);
   const latest = assessments[assessments.length - 1];
   const fromAssessment = latest?.data?.company?.website || latest?.data?.company?.domain
     || latest?.company?.website || latest?.company?.domain || null;
-  const raw = user?.companyDomain || user?.website || fromAssessment || null;
-  let domain = raw;
+  let domain = user?.companyDomain || user?.website || fromAssessment || null;
   if (domain) {
     domain = String(domain).trim().toLowerCase()
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
   }
-  // Fall back to the email's domain if nothing else is available.
   if (!domain && user?.email && user.email.includes("@")) {
     domain = user.email.split("@")[1].toLowerCase();
   }
@@ -161,10 +174,43 @@ export async function domainExposure(domain) {
   }
 }
 
+// ── Per-client exposure, gated on verification ────────────────
+// The ONLY entry point the app should use for a specific client. It refuses to
+// hit HIBP unless the client registered the domain AND proved control of it
+// AND an admin confirmed it's enrolled in our HIBP dashboard.
+//
+// Every refusal returns an honest status describing exactly what's missing —
+// never a "Low risk" that a client could mistake for an all-clear.
+export async function clientExposure(db, userId) {
+  const record = getClientDomain(db, userId);
+  const view = clientView(record, { hibpConfigured: darkwebConfigured() });
+
+  if (!record) {
+    return { source: "hibp", domain: null, monitored: false, statusLevel: "Not monitored",
+      reason: view.detail, configured: darkwebConfigured(), state: view.state, nextStep: view.nextStep };
+  }
+  if (!darkwebConfigured()) {
+    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not active",
+      reason: "Dark-web monitoring isn't active — no Have I Been Pwned API key is configured.",
+      configured: false, state: view.state };
+  }
+  if (record.ownership !== OWNERSHIP.VERIFIED) {
+    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not monitored",
+      reason: view.detail, configured: true, state: view.state, nextStep: view.nextStep,
+      needsVerification: true };
+  }
+  if (record.hibpStatus !== HIBP_STATUS.VERIFIED) {
+    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not monitored",
+      reason: view.detail, configured: true, state: view.state, nextStep: view.nextStep };
+  }
+
+  // Both gates green — safe to query.
+  return domainExposure(record.domain);
+}
+
 // DB-backed snapshot, parallel to the CVE one, so Mastermind reads cached data.
 export async function refreshClientDarkweb(db, userId) {
-  const domain = clientDomain(db, userId);
-  const exposure = await domainExposure(domain);
+  const exposure = await clientExposure(db, userId);
   db.data.darkwebExposure ||= {};
   db.data.darkwebExposure[userId] = { ...exposure, refreshedAt: new Date().toISOString() };
   await db.write();
