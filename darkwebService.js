@@ -35,6 +35,65 @@ function cacheSet(k, d) { cache.set(k, { at: Date.now(), data: d }); }
 
 export function darkwebConfigured() { return !!HIBP_API_KEY; }
 
+// ── Service status ────────────────────────────────────────────
+// Unlike NVD, the HIBP key is REQUIRED: with no key there is no breach data at
+// all, and we report "Not active" rather than inventing an all-clear.
+export function darkwebServiceStatus(db) {
+  const domains = (db?.data?.clientDomains) || [];
+  return {
+    id: "hibp",
+    name: "Have I Been Pwned",
+    purpose: "Breach and credential exposure monitoring for verified client domains.",
+    configured: !!HIBP_API_KEY,
+    required: true,
+    envVar: "HIBP_API_KEY",
+    keyUrl: "https://haveibeenpwned.com/API/Key",
+    dashboardUrl: "https://haveibeenpwned.com/DomainSearch",
+    userAgent: HIBP_USER_AGENT,
+    minIntervalMs: MIN_INTERVAL_MS,
+    impact: HIBP_API_KEY
+      ? "Keyed — breach lookups run for domains verified in the HIBP dashboard."
+      : "No key — breach monitoring is inactive for every client.",
+    degradesTo: "Without a key, clients are shown \"Not active\" — never a fabricated all-clear.",
+    cacheEntries: cache.size,
+    cacheTtlHours: CACHE_TTL_MS / 3600000,
+    // The manual half of the workflow, which a key alone doesn't solve.
+    domainsRegistered: domains.length,
+    domainsMonitored: domains.filter(d => d.ownership === "verified" && d.hibpStatus === "verified").length,
+  };
+}
+
+// Live probe. HIBP has no unauthenticated health endpoint, so we call the
+// breaches list — it's public, cheap, and proves the service answers.
+export async function probeDarkweb() {
+  const t0 = Date.now();
+  if (!HIBP_API_KEY) {
+    return { reachable: null, ok: false, latencyMs: 0,
+      detail: "Not probed — no API key configured.", checkedAt: new Date().toISOString() };
+  }
+  try {
+    const res = await hibpFetch("/breaches?Domain=adobe.com"); // known, stable breach record
+    if (res.status === 401) {
+      return { reachable: true, ok: false, latencyMs: Date.now() - t0,
+        detail: "HIBP rejected the configured API key (401). Check HIBP_API_KEY.",
+        checkedAt: new Date().toISOString() };
+    }
+    if (res.status === 429) {
+      return { reachable: true, ok: false, latencyMs: Date.now() - t0,
+        detail: "HIBP is rate-limiting this key right now (429).", checkedAt: new Date().toISOString() };
+    }
+    if (!res.ok) {
+      return { reachable: true, ok: false, latencyMs: Date.now() - t0,
+        detail: `HIBP returned HTTP ${res.status}.`, checkedAt: new Date().toISOString() };
+    }
+    return { reachable: true, ok: true, latencyMs: Date.now() - t0,
+      detail: "HIBP responded and the API key is valid.", checkedAt: new Date().toISOString() };
+  } catch (err) {
+    return { reachable: false, ok: false, latencyMs: Date.now() - t0,
+      detail: `Could not reach HIBP: ${err.message || err}`, checkedAt: new Date().toISOString() };
+  }
+}
+
 function schedule(fn) {
   const run = queue.then(async () => {
     const wait = Math.max(0, MIN_INTERVAL_MS - (Date.now() - lastRequestAt));

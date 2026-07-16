@@ -1330,9 +1330,212 @@ function ComplianceSection({ results }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  BREACH MONITORING — company domain card
+// ─────────────────────────────────────────────────────────────
+// Real HIBP-backed breach exposure, gated on two things the backend enforces:
+//   1. the client proving they control the domain (DNS TXT record)
+//   2. an admin enrolling it in the HIBP dashboard (manual, no API for it)
+//
+// Everything shown here comes from the server's clientView(), which is the
+// single source of truth for what a client is told. This component deliberately
+// does NOT compute its own status — that's how a UI drifts into implying
+// monitoring that isn't actually running.
+function DomainMonitoringCard() {
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(null);   // "submit" | "verify"
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load domain status.");
+      setState(data);
+      if (!data.domain && data.suggested) setInput(data.suggested);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function submit() {
+    if (!input.trim()) return;
+    setBusy("submit"); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: input.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that domain.");
+      setState(data);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function verify() {
+    setBusy("verify"); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain/verify`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification check failed.");
+      setState(data);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  function copyTxt() {
+    const v = state?.instructions?.value;
+    if (!v) return;
+    navigator.clipboard?.writeText(v).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {});
+  }
+
+  if (loading) return <Card style={{marginBottom:14}}><Spinner/></Card>;
+
+  const tone = {
+    monitored:          { color: C.green,  icon: "🛡️" },
+    awaiting_hibp:      { color: C.amber,  icon: "⏳" },
+    awaiting_ownership: { color: C.accent, icon: "🔑" },
+    service_inactive:   { color: C.textSec,icon: "○"  },
+    rejected:           { color: C.red,    icon: "⚠️" },
+    none:               { color: C.textSec,icon: "＋" },
+  }[state?.state] || { color: C.textSec, icon: "○" };
+
+  const ins = state?.instructions;
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Breach & Dark-Web Monitoring"/>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,
+          padding:"4px 10px",borderRadius:20,background:`${tone.color}15`,
+          border:`1px solid ${tone.color}38`}}>
+          <span style={{fontSize:11}}>{tone.icon}</span>
+          <span style={{fontSize:11,fontWeight:700,color:tone.color,letterSpacing:0.3}}>
+            {state?.monitored ? "ACTIVE" : "NOT ACTIVE"}
+          </span>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:5}}>{state?.headline}</div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>{state?.detail}</p>
+
+      {state?.domain && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,
+          padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7}}>
+          <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>DOMAIN</span>
+          <span style={{fontSize:13,color:C.text,fontWeight:600,fontFamily:"monospace"}}>{state.domain}</span>
+          {state.ownershipVerifiedAt && (
+            <span style={{marginLeft:"auto",fontSize:10.5,color:C.green,fontWeight:600}}>✓ ownership verified</span>
+          )}
+        </div>
+      )}
+
+      {/* ── Submit / change the domain ── */}
+      {(state?.state === "none" || state?.nextStep === "verify_dns") && (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:ins?14:0}}>
+          <input value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+            placeholder="yourcompany.com"
+            style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,
+              border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,
+              fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <button onClick={submit} disabled={busy==="submit"||!input.trim()}
+            style={{padding:"10px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+              borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
+              cursor:busy||!input.trim()?"default":"pointer",opacity:busy||!input.trim()?0.5:1}}>
+            {busy==="submit" ? "Saving…" : state?.domain ? "Change domain" : "Add domain"}
+          </button>
+        </div>
+      )}
+
+      {/* ── DNS TXT instructions ── */}
+      {ins && (
+        <div style={{padding:"14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+          <div style={{fontSize:11.5,fontWeight:700,color:C.text,marginBottom:4,letterSpacing:0.3}}>
+            STEP 1 · PUBLISH THIS DNS RECORD
+          </div>
+          <p style={{fontSize:11.5,color:C.textSec,lineHeight:1.55,margin:"0 0 12px"}}>{ins.help}</p>
+
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"7px 14px",
+            fontSize:12,marginBottom:12,alignItems:"center"}}>
+            <span style={{color:C.textMut,fontWeight:600}}>Type</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.type}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Host</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.host}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Value</span>
+            <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+              <span style={{color:C.accent,fontFamily:"monospace",fontSize:11.5,
+                wordBreak:"break-all",lineHeight:1.4}}>{ins.value}</span>
+              <button onClick={copyTxt}
+                style={{flexShrink:0,padding:"3px 9px",background:copied?`${C.green}20`:C.card,
+                  border:`1px solid ${copied?C.green+"55":C.border}`,borderRadius:5,
+                  color:copied?C.green:C.textSec,fontSize:10.5,fontWeight:600,cursor:"pointer"}}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
+            paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11.5,fontWeight:700,color:C.text,letterSpacing:0.3}}>STEP 2</div>
+            <button onClick={verify} disabled={busy==="verify"}
+              style={{padding:"8px 16px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                borderRadius:7,color:C.green,fontSize:12,fontWeight:700,
+                cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+              {busy==="verify" ? "Checking DNS…" : "Check DNS record"}
+            </button>
+            {state?.lastCheckedAt && (
+              <span style={{fontSize:11,color:C.textMut}}>
+                Last checked {new Date(state.lastCheckedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Why we ask ── */}
+      {state?.state !== "monitored" && (
+        <p style={{fontSize:11,color:C.textMut,lineHeight:1.55,margin:"14px 0 0"}}>
+          We verify domain control before monitoring so we never pull breach data for a
+          domain that isn't yours.
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function ThreatIntelSection({ results }) {
   const tl = results?.threatIntel?.threatLandscape;
-  if (!tl) return <div style={{color:C.textSec,padding:20}}>Threat intelligence not loaded.</div>;
+
+  // Breach monitoring is live data and independent of the AI-generated threat
+  // landscape, so it renders even when the program hasn't been generated yet.
+  if (!tl) {
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+          <SectionLabel text="Threat Intelligence"/>
+        </div>
+        <DomainMonitoringCard/>
+        <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
+          The threat-landscape briefing appears once your security program has been generated.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -1340,12 +1543,11 @@ function ThreatIntelSection({ results }) {
         <SectionLabel text="Threat Intelligence"/>
         <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
       </div>
-      {tl.darkWebMentions && tl.darkWebMentions !== "No intel" && (
-        <div style={{padding:"12px 16px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
-          borderRadius:8,marginBottom:14,color:C.red,fontSize:13}}>
-          ⚠️ Dark web monitoring: {tl.darkWebMentions}
-        </div>
-      )}
+      {/* Real, HIBP-backed breach monitoring. This replaces the old
+          `darkWebMentions` banner, which was model-generated text rather than
+          actual breach data — exactly the kind of thing that must never appear
+          in a security product. */}
+      <DomainMonitoringCard/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
         <Card>
           <SectionLabel text="Industry Threats"/>
@@ -3722,6 +3924,383 @@ function ChecklistScreen({ onComplete, onBack }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  ADMIN — HIBP domain enrollment queue
+// ─────────────────────────────────────────────────────────────
+// HIBP has no API to enroll a domain: a human must add it at
+// haveibeenpwned.com/DomainSearch and complete their verification. This queue
+// is the bridge between that manual step and ShieldAI's state — it shows what
+// is actionable right now and records what happened.
+//
+// The backend refuses to mark a domain "verified" until the client has proved
+// ownership via DNS, so this UI can't be used to switch monitoring on for a
+// domain nobody proved they control.
+// ─────────────────────────────────────────────────────────────
+//  ADMIN — threat intelligence service status
+// ─────────────────────────────────────────────────────────────
+// Shows which external intel services are wired up and, more usefully, what
+// each gap actually costs. Distinguishes a BLOCKER (no HIBP key = no breach
+// data at all) from an ADVISORY (no NVD key = slow, but still accurate) —
+// because treating those the same would train you to ignore both.
+//
+// The probe button really calls each API. A key being set is not proof the
+// service answers, and during a demo "configured" is a much weaker claim than
+// "responded in 240ms".
+function AdminThreatIntelStatus() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [probes, setProbes] = useState(null);
+  const [probing, setProbing] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/threat-intel/status`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load service status.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function probe() {
+    setProbing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/threat-intel/probe`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Probe failed.");
+      setProbes(d.probes);
+    } catch (e) { setError(e.message); }
+    finally { setProbing(false); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  const s = data?.summary || {};
+
+  return (
+    <div>
+      {error && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,fontSize:13}}>{error}</div>
+      )}
+
+      {/* Blockers — things that mean a feature is simply off */}
+      {(s.blockers || []).map((b,i)=>(
+        <div key={i} style={{marginBottom:10,padding:"11px 14px",background:`${C.red}12`,
+          border:`1px solid ${C.red}38`,borderRadius:8,color:C.red,fontSize:12.5,lineHeight:1.55}}>
+          ⛔ {b}
+        </div>
+      ))}
+      {/* Advisories — degraded, not broken */}
+      {(s.advisories || []).map((a,i)=>(
+        <div key={i} style={{marginBottom:10,padding:"11px 14px",background:`${C.amber}12`,
+          border:`1px solid ${C.amber}38`,borderRadius:8,color:C.amber,fontSize:12.5,lineHeight:1.55}}>
+          ⚠️ {a}
+        </div>
+      ))}
+      {!(s.blockers||[]).length && !(s.advisories||[]).length && (
+        <div style={{marginBottom:10,padding:"11px 14px",background:`${C.green}12`,
+          border:`1px solid ${C.green}38`,borderRadius:8,color:C.green,fontSize:12.5}}>
+          ✓ All threat-intelligence services are configured.
+        </div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+        <button onClick={probe} disabled={probing}
+          style={{padding:"8px 15px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:7,color:C.accent,fontSize:12,fontWeight:700,
+            cursor:probing?"default":"pointer",opacity:probing?0.6:1}}>
+          {probing ? "Probing live services…" : "Run live probe"}
+        </button>
+      </div>
+
+      {(data?.services || []).map(svc => {
+        const p = probes?.[svc.id];
+        const tone = svc.configured ? (svc.required ? C.green : C.accent) : (svc.required ? C.red : C.amber);
+        return (
+          <Card key={svc.id} style={{marginBottom:12,borderColor:`${tone}33`}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12}}>
+              <div style={{flex:"1 1 280px",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
+                  <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{svc.name}</span>
+                  <Badge label={svc.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
+                  <Badge label={svc.required ? "REQUIRED" : "OPTIONAL"}
+                    color={svc.required ? C.purple : C.textMut}/>
+                </div>
+                <div style={{fontSize:12,color:C.textSec,lineHeight:1.55}}>{svc.purpose}</div>
+              </div>
+              {!svc.configured && (
+                <a href={svc.keyUrl} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"7px 13px",background:`${tone}15`,border:`1px solid ${tone}44`,
+                    borderRadius:6,color:tone,fontSize:11.5,fontWeight:700,textDecoration:"none",
+                    whiteSpace:"nowrap"}}>
+                  Get a key ↗
+                </a>
+              )}
+            </div>
+
+            <div style={{padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:7,marginBottom:10}}>
+              <div style={{fontSize:12,color:C.text,marginBottom:5}}>{svc.impact}</div>
+              <div style={{fontSize:11,color:C.textMut,lineHeight:1.5}}>{svc.degradesTo}</div>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
+              <IntelStat label="Env var" value={svc.envVar} mono/>
+              <IntelStat label="Rate limit" value={`${(svc.minIntervalMs/1000).toFixed(1)}s / request`}/>
+              <IntelStat label="Cached" value={`${svc.cacheEntries} (${svc.cacheTtlHours}h TTL)`}/>
+              {svc.id === "nvd" && (
+                <IntelStat label="Full refresh" value={`~${svc.worstCaseRefreshSec}s`}
+                  color={svc.configured ? C.green : C.amber}/>
+              )}
+              {svc.id === "hibp" && (
+                <IntelStat label="Domains live" value={`${svc.domainsMonitored} / ${svc.domainsRegistered}`}
+                  color={svc.domainsMonitored ? C.green : C.textMut}/>
+              )}
+            </div>
+
+            {p && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <Badge label={p.ok ? "RESPONDING" : p.reachable === null ? "NOT PROBED" : "FAILED"}
+                  color={p.ok ? C.green : p.reachable === null ? C.textMut : C.red}/>
+                <span style={{fontSize:12,color:C.textSec,flex:"1 1 200px"}}>{p.detail}</span>
+                {p.latencyMs > 0 && (
+                  <span style={{fontSize:11.5,color:C.textMut,fontFamily:"monospace"}}>{p.latencyMs}ms</span>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+
+      <div style={{fontSize:11,color:C.textMut,lineHeight:1.6,marginTop:4}}>
+        Keys are read from the environment at startup. After changing one on Railway,
+        redeploy for it to take effect.
+      </div>
+    </div>
+  );
+}
+
+// Small labelled figure used by the threat-intel status cards. Named distinctly
+// because AnalystConsole defines its own local `Stat` with a different API —
+// relying on shadowing to keep them apart would be a trap for the next edit.
+function IntelStat({ label, value, color, mono }) {
+  return (
+    <div style={{padding:"9px 11px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7}}>
+      <div style={{fontSize:10,color:C.textMut,fontWeight:600,letterSpacing:0.3,marginBottom:4}}>
+        {label.toUpperCase()}
+      </div>
+      <div style={{fontSize:12.5,fontWeight:700,color:color||C.text,
+        fontFamily:mono?"monospace":"inherit",wordBreak:"break-word"}}>{value}</div>
+    </div>
+  );
+}
+
+function AdminDomainQueue() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [noteFor, setNoteFor] = useState(null);
+  const [noteText, setNoteText] = useState("");
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load domains.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function setStatus(userId, status, note = "") {
+    setBusy(userId + status); setError(null); setNotice(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/hibp-status`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, note }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not update status.");
+      setNotice(`${d.domain} → ${status.replace("_"," ")}`);
+      setNoteFor(null); setNoteText("");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function recheck(userId) {
+    setBusy(userId + "recheck"); setError(null); setNotice(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/recheck`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Recheck failed.");
+      setNotice(`DNS recheck: ${d.ownership}`);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  const c = data?.counts || {};
+  const stats = [
+    { label:"Ready to enroll",  value:c.readyToEnroll||0, color:C.green },
+    { label:"Awaiting HIBP",    value:c.awaitingHibp||0,  color:C.amber },
+    { label:"Awaiting client",  value:c.awaitingClient||0,color:C.accent },
+    { label:"Monitored",        value:c.monitored||0,     color:C.purple },
+  ];
+
+  const ownershipBadge = (o) =>
+    o === "verified" ? { label:"OWNERSHIP VERIFIED", color:C.green }
+    : o === "failed"  ? { label:"DNS CHECK FAILED",   color:C.red }
+    : { label:"AWAITING DNS", color:C.textMut };
+
+  const hibpBadge = (h) => ({
+    verified:      { label:"MONITORING LIVE", color:C.green },
+    submitted:     { label:"SUBMITTED",       color:C.amber },
+    rejected:      { label:"REJECTED",        color:C.red },
+    not_submitted: { label:"NOT ENROLLED",    color:C.textMut },
+  }[h] || { label:h, color:C.textMut });
+
+  return (
+    <div>
+      {!data?.serviceConfigured && (
+        <div style={{marginBottom:16,padding:"11px 14px",background:`${C.amber}15`,
+          border:`1px solid ${C.amber}38`,borderRadius:8,color:C.amber,fontSize:12.5,lineHeight:1.55}}>
+          ⚠️ <strong>HIBP_API_KEY isn't set on this deployment.</strong> Breach monitoring stays
+          inactive for every client regardless of the statuses below.
+        </div>
+      )}
+      {notice && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.green}15`,
+          border:`1px solid ${C.green}33`,borderRadius:8,color:C.green,fontSize:13}}>{notice}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,fontSize:13}}>{error}</div>
+      )}
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+        {stats.map((s,i)=>(
+          <div key={i} style={{flex:"1 1 120px",padding:"12px 14px",background:C.card,
+            border:`1px solid ${C.border}`,borderRadius:9}}>
+            <div style={{fontSize:22,fontWeight:800,color:s.color,lineHeight:1}}>{s.value}</div>
+            <div style={{fontSize:11,color:C.textSec,marginTop:5}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{marginBottom:16,padding:"11px 14px",background:C.surface,
+        border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.textSec,lineHeight:1.6}}>
+        {data?.note}{" "}
+        <a href={data?.dashboardUrl} target="_blank" rel="noopener noreferrer"
+          style={{color:C.accent,fontWeight:600,textDecoration:"none"}}>
+          Open HIBP Domain Search ↗
+        </a>
+      </div>
+
+      {(data?.domains || []).length === 0 ? (
+        <Card><div style={{color:C.textSec,fontSize:13,padding:"8px 0"}}>
+          No client has registered a company domain yet.
+        </div></Card>
+      ) : (data.domains).map(d => {
+        const ob = ownershipBadge(d.ownership);
+        const hb = hibpBadge(d.hibpStatus);
+        return (
+          <Card key={d.id} style={{marginBottom:10,
+            borderColor: d.actionable ? `${C.green}44` : C.border}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:"1 1 260px",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
+                  <span style={{fontSize:14,fontWeight:700,color:C.text,fontFamily:"monospace"}}>{d.domain}</span>
+                  {d.actionable && <Badge label="READY TO ENROLL" color={C.green}/>}
+                </div>
+                <div style={{fontSize:12,color:C.textSec,marginBottom:8}}>
+                  {d.companyName} · {d.email}
+                </div>
+                <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                  <Badge label={ob.label} color={ob.color}/>
+                  <Badge label={hb.label} color={hb.color}/>
+                </div>
+                {d.lastCheckError && d.ownership !== "verified" && (
+                  <div style={{fontSize:11,color:C.textMut,marginTop:8,lineHeight:1.5}}>
+                    {d.lastCheckError}
+                  </div>
+                )}
+                {d.hibpNote && (
+                  <div style={{fontSize:11,color:C.textMut,marginTop:6,fontStyle:"italic"}}>
+                    Note: {d.hibpNote}
+                  </div>
+                )}
+              </div>
+
+              <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"flex-start"}}>
+                <button onClick={()=>recheck(d.userId)} disabled={!!busy}
+                  style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:6,color:C.textSec,fontSize:11.5,cursor:busy?"default":"pointer"}}>
+                  {busy===d.userId+"recheck" ? "Checking…" : "Recheck DNS"}
+                </button>
+
+                {d.ownership === "verified" && d.hibpStatus === "not_submitted" && (
+                  <button onClick={()=>setStatus(d.userId,"submitted","added to HIBP dashboard")} disabled={!!busy}
+                    style={{padding:"7px 12px",background:`${C.amber}18`,border:`1px solid ${C.amber}55`,
+                      borderRadius:6,color:C.amber,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
+                    Mark submitted
+                  </button>
+                )}
+                {d.ownership === "verified" && d.hibpStatus === "submitted" && (
+                  <button onClick={()=>setStatus(d.userId,"verified")} disabled={!!busy}
+                    style={{padding:"7px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                      borderRadius:6,color:C.green,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
+                    Mark verified — go live
+                  </button>
+                )}
+                {d.hibpStatus !== "rejected" && d.ownership === "verified" && (
+                  <button onClick={()=>{ setNoteFor(noteFor===d.userId?null:d.userId); setNoteText(""); }}
+                    style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
+                      borderRadius:6,color:C.textMut,fontSize:11.5,cursor:"pointer"}}>
+                    Reject
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {noteFor === d.userId && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                display:"flex",gap:8,flexWrap:"wrap"}}>
+                <input value={noteText} onChange={e=>setNoteText(e.target.value)}
+                  placeholder="Why is monitoring not possible for this domain?"
+                  style={{flex:"1 1 260px",padding:"9px 11px",background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5,
+                    fontFamily:"Inter,system-ui,sans-serif"}}/>
+                <button onClick={()=>setStatus(d.userId,"rejected",noteText)} disabled={!!busy||!noteText.trim()}
+                  style={{padding:"9px 14px",background:`${C.red}18`,border:`1px solid ${C.red}55`,
+                    borderRadius:7,color:C.red,fontSize:12,fontWeight:600,
+                    cursor:busy||!noteText.trim()?"default":"pointer",opacity:!noteText.trim()?0.5:1}}>
+                  Confirm reject
+                </button>
+              </div>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdminPanel({ onClose }) {
   const [view, setView] = useState("list");   // list | user | program
   const [listTab, setListTab] = useState("accounts"); // accounts | leads
@@ -4564,6 +5143,8 @@ function AdminPanel({ onClose }) {
             { id:"accounts", label:"Accounts" },
             { id:"billing", label:"Billing" },
             { id:"assignments", label:"Assignments" },
+            { id:"domains", label:"Domains" },
+            { id:"intel", label:"Threat Intel" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
           ].map(t => {
@@ -4698,6 +5279,10 @@ function AdminPanel({ onClose }) {
             )}
           </>
         )}
+
+        {listTab === "domains" && <AdminDomainQueue/>}
+
+        {listTab === "intel" && <AdminThreatIntelStatus/>}
 
         {listTab === "leads" && (
           <LeadsPanel

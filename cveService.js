@@ -41,6 +41,58 @@ export const SECURITY_REFERENCES = [
     org: "CNSS", purpose: "Policy and instructions (e.g. CNSSI-1253) for U.S. national-security systems. Reference framework — not a live database." },
 ];
 
+// ── Service status ────────────────────────────────────────────────
+// Whether NVD is keyed, and what that costs us in latency. The key is optional
+// but the difference is large: without one, NVD demands ~6s between requests,
+// so a 12-item software inventory takes ~78s instead of ~8s.
+export function cveServiceStatus() {
+  return {
+    id: "nvd",
+    name: "NVD — National Vulnerability Database",
+    purpose: "Live CVE matching against reported software versions.",
+    configured: !!NVD_API_KEY,
+    required: false,
+    envVar: "NVD_API_KEY",
+    keyUrl: "https://nvd.nist.gov/developers/request-an-api-key",
+    minIntervalMs: MIN_INTERVAL_MS,
+    // What a full inventory refresh actually costs the client, in wall time.
+    worstCaseRefreshSec: Math.round((MIN_INTERVAL_MS * 12) / 100) / 10,
+    impact: NVD_API_KEY
+      ? "Keyed — lookups run at roughly one every 0.7s."
+      : "Unkeyed — NVD throttles us to one lookup every ~6.5s. CVE refreshes are slow but still accurate.",
+    degradesTo: "Without a key the service still works; it's only slower. It never returns fabricated CVEs.",
+    cacheEntries: cache.size,
+    cacheTtlHours: CACHE_TTL_MS / 3600000,
+  };
+}
+
+// Live reachability probe. A key being present doesn't prove the service
+// answers — this actually calls NVD with a trivial query and reports what
+// happened. Used by the admin status panel so "operational" means something.
+export async function probeCve() {
+  const t0 = Date.now();
+  try {
+    const params = new URLSearchParams({ cveId: "CVE-2021-44228" }); // Log4Shell — stable, always present
+    const json = await nvdFetch(params);
+    const found = (json.vulnerabilities || []).length > 0;
+    return {
+      reachable: true,
+      ok: found,
+      latencyMs: Date.now() - t0,
+      detail: found ? "NVD responded with a known CVE record." : "NVD responded but returned no data.",
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    return {
+      reachable: false,
+      ok: false,
+      latencyMs: Date.now() - t0,
+      detail: `Could not reach NVD: ${err.message || err}`,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
 // ── Simple in-memory cache + rate limiter ─────────────────────────
 const cache = new Map();            // key -> { at, data }
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours

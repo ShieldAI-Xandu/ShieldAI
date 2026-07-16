@@ -9,15 +9,56 @@ import {
   exposureForSoftware,
   clientSoftwareDescriptors,
   refreshClientExposure,
+  cveServiceStatus,
+  probeCve,
 } from "./cveService.js";
 import {
   clientDomain,
   clientExposure,
   refreshClientDarkweb,
   darkwebConfigured,
+  darkwebServiceStatus,
+  probeDarkweb,
 } from "./darkwebService.js";
 
 export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient }) {
+  // ── Admin: threat-intelligence service status ───────────────
+  // Shows which external intel services are configured and what the gaps cost.
+  // Deliberately reports capability honestly rather than a green light per key:
+  // a configured key is not the same as a working service, and for HIBP a key
+  // alone still isn't enough (domains need manual enrollment).
+  app.get("/api/admin/threat-intel/status", requireAdmin, (req, res) => {
+    const cve = cveServiceStatus();
+    const hibp = darkwebServiceStatus(db);
+    res.json({
+      services: [cve, hibp],
+      summary: {
+        // Only HIBP is required; NVD unkeyed is slow, not broken.
+        operational: hibp.configured,
+        degraded: !cve.configured,
+        blockers: [
+          !hibp.configured && "HIBP_API_KEY is not set — breach monitoring is inactive for all clients.",
+          hibp.configured && hibp.domainsRegistered > 0 && hibp.domainsMonitored === 0 &&
+            "No client domains are fully enrolled yet — monitoring won't return data until they are.",
+        ].filter(Boolean),
+        advisories: [
+          !cve.configured &&
+            `NVD_API_KEY is not set — CVE refreshes take up to ~${cve.worstCaseRefreshSec}s instead of ~8s. Accuracy is unaffected.`,
+        ].filter(Boolean),
+      },
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
+  // ── Admin: live probe of both services ──────────────────────
+  // Actually calls each API. Slower than the status read, so it's a separate,
+  // explicit action rather than something that runs on page load.
+  app.post("/api/admin/threat-intel/probe", requireAdmin, async (req, res) => {
+    const [cve, hibp] = await Promise.all([probeCve(), probeDarkweb()]);
+    res.json({ probes: { nvd: cve, hibp }, checkedAt: new Date().toISOString() });
+  });
+
+
   // Public-ish: the curated reference links (cve.org, MITRE, NVD, NIST, CNSS).
   app.get("/api/cve/refs", requireAuth, (req, res) => {
     res.json({ references: SECURITY_REFERENCES });
