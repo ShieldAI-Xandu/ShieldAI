@@ -10,7 +10,17 @@
 // Methodology: NIST Cybersecurity Framework — five functions, each
 // scored 0-100 from weighted factors. Direction: HIGHER = BETTER.
 
-import { SECURITY_CHECKLIST } from "./securityChecklist.js";
+// SCORING_CHECKLIST, not SECURITY_CHECKLIST. This is deliberate and load-bearing.
+//
+// SECURITY_CHECKLIST now also contains evidence-only questions (scoring: false)
+// that exist to give control-mapped frameworks real signal — access reviews,
+// encryption, vendor diligence, privacy rights, and so on. Those must never
+// reach this engine: scoreFromChecklist() normalises by total factor weight,
+// so every question it sees dilutes the 13 posture factors and shifts the
+// score. Importing the full list here would retroactively change the posture
+// score of every client on record, silently, with no change in their actual
+// security. Import the filtered list.
+import { SCORING_CHECKLIST } from "./securityChecklist.js";
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
 
@@ -65,7 +75,7 @@ function findingFor(factorId, score, label) {
 function scoreFromChecklist(answers) {
   // Group questions by NIST function
   const byFunction = {};
-  for (const q of SECURITY_CHECKLIST) {
+  for (const q of SCORING_CHECKLIST) {
     byFunction[q.nistFunction] = byFunction[q.nistFunction] || [];
 
     // Find the selected option's score
@@ -77,7 +87,7 @@ function scoreFromChecklist(answers) {
       label: q.question,
       factorId: q.factor,
       score,
-      weight: FACTOR_WEIGHTS[q.factor] || (1 / SECURITY_CHECKLIST.length),
+      weight: FACTOR_WEIGHTS[q.factor] || (1 / SCORING_CHECKLIST.length),
       finding: findingFor(q.factor, score, q.question),
     });
   }

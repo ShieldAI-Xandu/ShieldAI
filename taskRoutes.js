@@ -23,7 +23,7 @@
 //                             analystOwnsClient, analystClientIds });
 
 import { randomUUID } from "crypto";
-import { SECURITY_CHECKLIST } from "./securityChecklist.js";
+import { SECURITY_CHECKLIST, SCORING_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
 
 const nowIso = () => new Date().toISOString();
@@ -176,9 +176,15 @@ export function registerTaskRoutes(app, {
 
   // ── Catalogue of controls (drives the "add task" picker) ──
   app.get("/api/tasks/controls", requireAuth, (req, res) => {
+    // Includes evidence-only questions: a client can legitimately open a task
+    // against "quarterly access reviews" even though it doesn't move the NIST
+    // posture score. `affectsPostureScore` lets the UI set the right
+    // expectation rather than implying a gain that will never arrive.
     res.json(SECURITY_CHECKLIST.map(q => ({
-      id: q.id, question: q.question, nistFunction: q.nistFunction,
-      factor: q.factor, options: q.options,
+      id: q.id, question: q.question, nistFunction: q.nistFunction ?? null,
+      factor: q.factor ?? null, options: q.options,
+      section: q.section ?? q.nistFunction ?? null,
+      affectsPostureScore: q.scoring !== false,
     })));
   });
 
@@ -195,7 +201,12 @@ export function registerTaskRoutes(app, {
     const posture = computePostureScore(assessment.data);
     const checklist = checklistOf(assessment);
 
-    const gaps = SECURITY_CHECKLIST.map(control => {
+    // SCORING_CHECKLIST only. This endpoint ranks fixes by how much they move
+    // the posture score, and evidence-only questions cannot move it by
+    // construction — including them would list 22 "improves your score by 0"
+    // items and bury the fixes that actually matter. Evidence gaps surface in
+    // the per-framework compliance workspace, where they carry real meaning.
+    const gaps = SCORING_CHECKLIST.map(control => {
       const currentLabel = checklist[control.id] || null;
       const currentScore = scoreOfLabel(control, currentLabel);
       const best = bestOption(control);

@@ -313,9 +313,9 @@ export const PCI_REQUIREMENTS = [
       { id: "3.2", covers: "Storage of account data is kept to a minimum, with defined retention and disposal", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["dataInventory"] },
       { id: "3.3", covers: "Sensitive authentication data is not retained after authorization", saq: ALL, evidence: ["dataInventory"], v4new: true },
       { id: "3.4", covers: "Access to displays of full PAN and the ability to copy it are restricted", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa","documentedPolicies"] },
-      { id: "3.5", covers: "Primary account number is secured wherever it is stored", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["dataInventory"] },
-      { id: "3.6", covers: "Cryptographic keys used to protect stored account data are secured", saq: ["A-EP","D-Merchant","D-Service"], evidence: [] },
-      { id: "3.7", covers: "Key management processes and procedures are defined and implemented", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
+      { id: "3.5", covers: "Primary account number is secured wherever it is stored", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["encryptionAtRest", "dataInventory"] },
+      { id: "3.6", covers: "Cryptographic keys used to protect stored account data are secured", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["encryptionAtRest"] },
+      { id: "3.7", covers: "Key management processes and procedures are defined and implemented", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["encryptionAtRest", "documentedPolicies"] },
     ],
   },
   {
@@ -326,7 +326,7 @@ export const PCI_REQUIREMENTS = [
     nistFunctions: ["Protect"],
     subs: [
       { id: "4.1", covers: "Processes and mechanisms for protecting cardholder data in transit are defined and understood", saq: ["A","A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "4.2", covers: "Cardholder data is protected with strong cryptography during transmission over open, public networks", saq: ["A","A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["emailSecurity"] },
+      { id: "4.2", covers: "Cardholder data is protected with strong cryptography during transmission over open, public networks", saq: ["A","A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["encryptionInTransit"] },
     ],
   },
   {
@@ -352,10 +352,10 @@ export const PCI_REQUIREMENTS = [
     note: "v4.0 added payment-page script management (6.4.3) — a direct response to Magecart-style skimming attacks on e-commerce checkout pages.",
     subs: [
       { id: "6.1", covers: "Processes and mechanisms for developing and maintaining secure systems are defined and understood", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "6.2", covers: "Bespoke and custom software is developed securely", saq: ["A-EP","D-Merchant","D-Service"], evidence: [] },
-      { id: "6.3", covers: "Security vulnerabilities are identified and addressed", saq: ["A","A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["monitoring","itManagement"] },
-      { id: "6.4", covers: "Public-facing web applications are protected against attacks, including management of payment page scripts", saq: ["A-EP","D-Merchant","D-Service"], evidence: [], v4new: true },
-      { id: "6.5", covers: "Changes to all system components are managed securely", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["documentedPolicies","itManagement"] },
+      { id: "6.2", covers: "Bespoke and custom software is developed securely", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["changeManagement"] },
+      { id: "6.3", covers: "Security vulnerabilities are identified and addressed", saq: ["A","A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["vulnManagement", "monitoring"] },
+      { id: "6.4", covers: "Public-facing web applications are protected against attacks, including management of payment page scripts", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["vulnManagement"], v4new: true },
+      { id: "6.5", covers: "Changes to all system components are managed securely", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["changeManagement", "documentedPolicies"] },
     ],
   },
   {
@@ -366,8 +366,8 @@ export const PCI_REQUIREMENTS = [
     nistFunctions: ["Protect"],
     subs: [
       { id: "7.1", covers: "Processes and mechanisms for restricting access by business need to know are defined and understood", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "7.2", covers: "Access to system components and data is appropriately defined and assigned", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa","documentedPolicies"] },
-      { id: "7.3", covers: "Access to system components and data is managed via an access control system", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["mfa"] },
+      { id: "7.2", covers: "Access to system components and data is appropriately defined and assigned", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa", "accessReviews"] },
+      { id: "7.3", covers: "Access to system components and data is managed via an access control system", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["mfa", "privilegedAccess"] },
     ],
   },
   {
@@ -379,11 +379,11 @@ export const PCI_REQUIREMENTS = [
     note: "The biggest v4.0 change for small merchants: 8.3.1 extends MFA to ALL user access into the CDE — not just remote and not just administrators. Mandatory since 31 March 2025.",
     subs: [
       { id: "8.1", covers: "Processes and mechanisms for identifying users and authenticating access are defined and understood", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "8.2", covers: "User identification and related accounts are managed throughout their lifecycle", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa","documentedPolicies"] },
-      { id: "8.3", covers: "Strong authentication for users and administrators is established and managed", saq: ["A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa"], v4new: true },
+      { id: "8.2", covers: "User identification and related accounts are managed throughout their lifecycle", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa", "offboarding"] },
+      { id: "8.3", covers: "Strong authentication for users and administrators is established and managed", saq: ["A-EP","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa", "passwordPolicy"], v4new: true },
       { id: "8.4", covers: "Multi-factor authentication is implemented to secure access into the CDE", saq: ["A-EP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa"], v4new: true },
       { id: "8.5", covers: "Multi-factor authentication systems are configured to prevent misuse", saq: ["A-EP","C","C-VT","D-Merchant","D-Service"], evidence: ["mfa"], v4new: true },
-      { id: "8.6", covers: "Use of application and system accounts and associated authentication factors is managed", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["mfa"], v4new: true },
+      { id: "8.6", covers: "Use of application and system accounts and associated authentication factors is managed", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["privilegedAccess", "passwordPolicy"], v4new: true },
     ],
   },
   {
@@ -394,10 +394,10 @@ export const PCI_REQUIREMENTS = [
     nistFunctions: ["Protect"],
     subs: [
       { id: "9.1", covers: "Processes and mechanisms for restricting physical access are defined and understood", saq: ["B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "9.2", covers: "Physical access controls manage entry into facilities and systems containing cardholder data", saq: ["C","D-Merchant","D-Service"], evidence: [] },
-      { id: "9.3", covers: "Physical access for personnel and visitors is authorized and managed", saq: ["C","D-Merchant","D-Service"], evidence: [] },
-      { id: "9.4", covers: "Media with cardholder data is securely stored, accessed, distributed, and destroyed", saq: ["B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["dataInventory"] },
-      { id: "9.5", covers: "Point-of-interaction devices are protected from tampering and unauthorized substitution", saq: ["B","B-IP","C","C-VT","P2PE","D-Merchant","D-Service"], evidence: [] },
+      { id: "9.2", covers: "Physical access controls manage entry into facilities and systems containing cardholder data", saq: ["C","D-Merchant","D-Service"], evidence: ["physicalSecurity"] },
+      { id: "9.3", covers: "Physical access for personnel and visitors is authorized and managed", saq: ["C","D-Merchant","D-Service"], evidence: ["physicalSecurity"] },
+      { id: "9.4", covers: "Media with cardholder data is securely stored, accessed, distributed, and destroyed", saq: ["B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["mediaDisposal", "dataInventory"] },
+      { id: "9.5", covers: "Point-of-interaction devices are protected from tampering and unauthorized substitution", saq: ["B","B-IP","C","C-VT","P2PE","D-Merchant","D-Service"], evidence: ["physicalSecurity"] },
     ],
   },
   {
@@ -413,7 +413,7 @@ export const PCI_REQUIREMENTS = [
       { id: "10.4", covers: "Audit logs are reviewed to identify anomalies or suspicious activity", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["monitoring"], v4new: true },
       { id: "10.5", covers: "Audit log history is retained and available for analysis", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["monitoring"] },
       { id: "10.6", covers: "Time-synchronization mechanisms support consistent time settings across systems", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: [] },
-      { id: "10.7", covers: "Failures of critical security control systems are detected, reported, and responded to promptly", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["monitoring","incidentResponse"], v4new: true },
+      { id: "10.7", covers: "Failures of critical security control systems are detected, reported, and responded to promptly", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["monitoring", "vulnManagement"], v4new: true },
     ],
   },
   {
@@ -426,8 +426,8 @@ export const PCI_REQUIREMENTS = [
     subs: [
       { id: "11.1", covers: "Processes and mechanisms for regularly testing security are defined and understood", saq: ["A-EP","B-IP","C","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
       { id: "11.2", covers: "Wireless access points are identified and monitored; unauthorized ones are addressed", saq: ["B-IP","C","D-Merchant","D-Service"], evidence: ["monitoring"] },
-      { id: "11.3", covers: "External and internal vulnerabilities are regularly identified, prioritized, and addressed", saq: ["A-EP","B-IP","C","D-Merchant","D-Service"], evidence: ["monitoring","priorAudit"], v4new: true },
-      { id: "11.4", covers: "External and internal penetration testing is regularly performed and findings corrected", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["priorAudit"] },
+      { id: "11.3", covers: "External and internal vulnerabilities are regularly identified, prioritized, and addressed", saq: ["A-EP","B-IP","C","D-Merchant","D-Service"], evidence: ["vulnManagement"], v4new: true },
+      { id: "11.4", covers: "External and internal penetration testing is regularly performed and findings corrected", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["vulnManagement", "priorAudit"] },
       { id: "11.5", covers: "Network intrusions and unexpected file changes are detected and responded to", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["monitoring","endpoint"] },
       { id: "11.6", covers: "Unauthorized changes on payment pages are detected and responded to", saq: ["A","A-EP","D-Merchant","D-Service"], evidence: ["monitoring"], v4new: true },
     ],
@@ -440,16 +440,16 @@ export const PCI_REQUIREMENTS = [
     nistFunctions: ["Govern","Identify","Respond"],
     note: "v4.0 tightened third-party service provider management (12.8, 12.9) and requires security awareness training at least every 12 months covering phishing and social engineering specifically.",
     subs: [
-      { id: "12.1", covers: "A comprehensive information security policy governs and provides direction for protecting account data", saq: ALL, evidence: ["documentedPolicies"] },
+      { id: "12.1", covers: "A comprehensive information security policy governs and provides direction for protecting account data", saq: ALL, evidence: ["documentedPolicies", "policyReviewCadence", "securityOwnership"] },
       { id: "12.2", covers: "Acceptable use policies for end-user technologies are defined and implemented", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["documentedPolicies"] },
-      { id: "12.3", covers: "Risks to the cardholder data environment are formally identified, evaluated, and managed", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["priorAudit"], v4new: true },
+      { id: "12.3", covers: "Risks to the cardholder data environment are formally identified, evaluated, and managed", saq: ["A-EP","D-Merchant","D-Service"], evidence: ["riskAssessmentCadence"], v4new: true },
       { id: "12.4", covers: "PCI DSS compliance is managed", saq: ["D-Service"], evidence: ["documentedPolicies"] },
       { id: "12.5", covers: "PCI DSS scope is documented and validated", saq: ["D-Merchant","D-Service"], evidence: ["dataInventory"], v4new: true,
         note: "12.5.2 — annual scope confirmation. Applies to SAQ D only, so most self-assessing merchants are not responsible for it." },
       { id: "12.6", covers: "Security awareness education is an ongoing activity", saq: ["A-EP","B","B-IP","C","C-VT","D-Merchant","D-Service"], evidence: ["training"], v4new: true },
       { id: "12.7", covers: "Personnel are screened to reduce risks from insider threats", saq: ["C","D-Merchant","D-Service"], evidence: [] },
-      { id: "12.8", covers: "Risk to information assets associated with third-party service provider relationships is managed", saq: ["A","A-EP","B","B-IP","C","C-VT","P2PE","D-Merchant","D-Service"], evidence: ["itManagement"], v4new: true },
-      { id: "12.9", covers: "Third-party service providers support their customers' PCI DSS compliance", saq: ["D-Service"], evidence: ["itManagement"], v4new: true },
+      { id: "12.8", covers: "Risk to information assets associated with third-party service provider relationships is managed", saq: ["A","A-EP","B","B-IP","C","C-VT","P2PE","D-Merchant","D-Service"], evidence: ["vendorInventory", "vendorDueDiligence", "vendorContracts"], v4new: true },
+      { id: "12.9", covers: "Third-party service providers support their customers' PCI DSS compliance", saq: ["D-Service"], evidence: ["vendorContracts"], v4new: true },
       { id: "12.10", covers: "Suspected and confirmed security incidents are responded to immediately", saq: ["A-EP","C","D-Merchant","D-Service"], evidence: ["incidentResponse","responseSupport"] },
     ],
   },

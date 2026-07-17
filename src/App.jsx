@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import ComplianceWorkspace from "./ComplianceWorkspace.jsx";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -1264,6 +1265,15 @@ function WorkflowsSection({ results }) {
   );
 }
 
+// SUPERSEDED by ComplianceWorkspace.jsx and no longer routed.
+//
+// This rendered `results.compliance.frameworks` — prose the AI wrote during
+// program generation — which was the only compliance view a client ever saw
+// while the deterministic engine's 624 cited controls went unrendered. The
+// workspace now reads /api/compliance/* directly.
+//
+// Kept for reference until the AI-generated program output is reworked; it is
+// not imported anywhere. Delete once that's settled.
 function ComplianceSection({ results }) {
   const frames = results?.compliance?.frameworks || [];
 
@@ -3022,7 +3032,12 @@ function Dashboard({ assessment, results, onReset }) {
     priorities: <PrioritiesSection results={results}/>,
     policies:   <PoliciesSection results={results}/>,
     workflows:  <WorkflowsSection results={results}/>,
-    compliance: <ComplianceSection results={results}/>,
+    // The live compliance engine, not the AI's prose. ComplianceSection rendered
+    // `results.compliance.frameworks` — text generated during program creation —
+    // while 624 computed, cited controls sat unused on the server. This reads
+    // /api/compliance/* directly, so what a client sees is what the deterministic
+    // engine actually concluded from their answers.
+    compliance: <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
     training:   <TrainingSection results={results} assessment={assessment}/>,

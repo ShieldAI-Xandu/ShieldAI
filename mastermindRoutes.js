@@ -22,7 +22,14 @@ import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
 import { taskSummary, simulateControlChange, currentPosture } from "./taskRoutes.js";
 import { evidenceSummary } from "./evidenceRoutes.js";
 import { complianceSummary } from "./complianceRoutes.js";
-import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrameworkIds } from "./complianceFrameworks.js";
+// The BRIDGE, not complianceFrameworks.js. Same function signatures, but the
+// assessments are now computed by the deep control-mapped modules — so
+// check_compliance answers about ISO 27001 from 93 real Annex A controls with
+// citations rather than 10 hand-written summaries. Mastermind's answers are
+// only ever as good as the facts handed to it; this is that upgrade.
+import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrameworkIds, evaluateWithAgent, getFrameworkDef } from "./complianceBridge.js";
+import { corroborate, corroborationSummary } from "./agentEvidence.js";
+import { intakeFor, visibleQuestions, intakeStatus, toAssessOpts } from "./frameworkIntake.js";
 import { SECURITY_CHECKLIST } from "./securityChecklist.js";
 
 const nowIso = () => new Date().toISOString();
@@ -230,11 +237,35 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
     },
     {
       name: "check_compliance",
-      description: "Check a client's compliance against a framework (nist-csf, hipaa, soc2, iso-27001, pci-dss, cmmc), control by control. Returns which requirements are compliant, partial, gaps, or unknown, derived from their actual assessment answers — never guessed. Omit frameworkId for a summary across all frameworks. Read-only.",
+      description: "Check a client's compliance against a framework, control by control, from their real assessment answers — never guessed. Frameworks: nist-csf, cis, hipaa, soc2, iso-27001, pci-dss, nist-800-171, cmmc, nist-800-53, ftc-safeguards, state-privacy, gdpr. Control-mapped frameworks return every real control with its citation (ISO returns all 93 Annex A controls; 800-53 returns 149; PCI returns the sub-requirements in your SAQ scope). Omit frameworkId for a summary across all. Read-only.",
       input_schema: { type: "object", properties: {
         clientIdOrEmail: { type: "string", description: "The client to check." },
-        frameworkId: { type: "string", description: "Optional: nist-csf, hipaa, soc2, iso-27001, pci-dss, or cmmc." },
+        frameworkId: { type: "string", description: "Optional framework id. Omit for a cross-framework summary." },
       }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "explain_control",
+      description: "Explain one specific control or requirement for a client: what it asks, its citation, the client's current status, which assessment answers drive it, and what answer would satisfy it. Use this when someone asks 'what does A.8.24 mean' or 'why is Req 8 failing'. Returns deterministic facts to narrate — it does not invent remediation. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client." },
+        frameworkId: { type: "string", description: "Framework id, e.g. iso-27001." },
+        requirementId: { type: "string", description: "The control/requirement id, e.g. 'A.8.24', 'Req 8', 'AC-2', '3.1.1'." },
+      }, required: ["clientIdOrEmail", "frameworkId", "requirementId"] },
+    },
+    {
+      name: "check_agent_evidence",
+      description: "Compare what the read-only monitoring agent OBSERVED on a client's endpoints against what the client SAID in their questionnaire. Returns confirmations (measured evidence an auditor will value) and disputes (the client's answer disagrees with telemetry). Disputes are findings, not errors — they are the gap between what a business believes and what is true. The agent informs; it never overrides an answer. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client to check." },
+      }, required: ["clientIdOrEmail"] },
+    },
+    {
+      name: "check_framework_scoping",
+      description: "Check whether a client has completed a framework's scoping intake, and what the assessment assumed if they skipped it. Scoping materially changes what gets assessed — a merchant with a hosted payment page is responsible for ~7 PCI sub-requirements instead of 61. Use this when a client's framework result looks unexpectedly large or harsh. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client." },
+        frameworkId: { type: "string", description: "Framework id, e.g. pci-dss, soc2, iso27001, cmmc, hipaa-security, ftc-safeguards." },
+      }, required: ["clientIdOrEmail", "frameworkId"] },
     },
     {
       name: "check_evidence",
@@ -252,9 +283,52 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
     },
   ];
 
+  // The most recent report from each host. An agent reports repeatedly; using
+  // every historical report would count one laptop five times and make a single
+  // machine look like a fleet.
+  function latestReportPerHost(ownerUserId) {
+    const byHost = new Map();
+    for (const r of (db.data.agentReports || [])) {
+      if (r.ownerUserId !== ownerUserId) continue;
+      const rep = r.report || r;
+      const host = rep?.host?.hostname;
+      if (!host) continue;
+      const prev = byHost.get(host);
+      if (!prev || new Date(r.receivedAt || 0) > new Date(prev.receivedAt || 0)) {
+        byHost.set(host, { receivedAt: r.receivedAt, rep });
+      }
+    }
+    return [...byHost.values()].map(v => v.rep);
+  }
+
+  // Stored checklists are { id: "selected label" }. Frameworks read
+  // { id: { label, score } }. Resolve via the checklist definition rather than
+  // trusting a stored score — the option scores are the source of truth.
+  function toEvidenceShape(checklist = {}) {
+    const out = {};
+    for (const q of SECURITY_CHECKLIST) {
+      const raw = checklist[q.id];
+      const label = typeof raw === "string" ? raw : raw?.label;
+      if (!label) continue;
+      const opt = q.options.find(o => o.label === label);
+      if (opt) out[q.id] = { label: opt.label, score: opt.score };
+    }
+    return out;
+  }
+
+  // A client's saved scoping answers → the opts their framework assessment
+  // should use. Without this, Mastermind would report an unscoped PCI result
+  // (61 sub-requirements) for a merchant the product already knows is SAQ A (7).
+  function frameworkOptsFor(assessment, frameworkId) {
+    if (!frameworkId) return {};
+    const key = String(frameworkId).replace("iso-27001", "iso27001").replace(/^hipaa$/, "hipaa-security");
+    const answers = assessment?.data?.frameworkIntake?.[key];
+    if (!answers) return {};
+    try { return toAssessOpts(key, answers); } catch { return {}; }
+  }
+
   // Resolve a client by id or email → the user record (or null).
-  function resolveClient(idOrEmail) {
-    const key = String(idOrEmail || "").trim().toLowerCase();
+  function resolveClient(idOrEmail) {    const key = String(idOrEmail || "").trim().toLowerCase();
     return (db.data.users || []).find(u =>
       !u.isAdmin && !u.isAnalyst && (u.id === idOrEmail || (u.email || "").toLowerCase() === key)
     ) || null;
@@ -337,7 +411,8 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           return { client: u.companyName || u.email, frameworks: evaluateAllFrameworks(checklist),
                    note: "Derived from assessment answers, not estimated." };
         }
-        const rep = evaluateFramework(input.frameworkId, checklist);
+        const opts = frameworkOptsFor(a, input.frameworkId);
+        const rep = evaluateFramework(input.frameworkId, checklist, opts);
         if (!rep) return { error: `Unknown framework. Available: ${listFrameworkIds().join(", ")}` };
         return {
           client: u.companyName || u.email,
@@ -349,6 +424,97 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           })),
         };
       }
+      case "explain_control": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const list = (db.data.assessments || []).filter(a => a.userId === u.id);
+        if (!list.length) return { error: "Client has no assessment — this control cannot be evaluated." };
+        const a = list.reduce((b,x)=> !b || new Date(x.updatedAt||x.createdAt) > new Date(b.updatedAt||b.createdAt) ? x : b, null);
+        const checklist = a.data?.checklist || a.data?.securityChecklist || {};
+        const opts = frameworkOptsFor(a, input.frameworkId);
+        const ctx = remediationContext(input.frameworkId, input.requirementId, checklist, opts);
+        if (!ctx) {
+          const rep = evaluateFramework(input.frameworkId, checklist, opts);
+          if (!rep) return { error: `Unknown framework. Available: ${listFrameworkIds().join(", ")}` };
+          if (rep.notControlMapped) return { error: `${rep.framework.name} is not control-mapped, so individual controls can't be explained. ${rep.why}` };
+          return {
+            error: `Requirement '${input.requirementId}' not found in ${rep.framework.name}.`,
+            hint: `Valid ids include: ${rep.requirements.slice(0, 8).map(r => r.id).join(", ")}${rep.requirements.length > 8 ? ", …" : ""}`,
+            excludedFromScope: (rep.excluded || []).some(e => e.id === input.requirementId)
+              ? `'${input.requirementId}' IS in this framework but was scoped OUT for this client. Reason: ${(rep.excluded.find(e => e.id === input.requirementId) || {}).reason}`
+              : undefined,
+          };
+        }
+        return {
+          client: u.companyName || u.email,
+          ...ctx,
+          note: "Status and the answers driving it are computed from the client's assessment. Explain what the control asks and what would satisfy it — do not invent a status.",
+        };
+      }
+
+      case "check_agent_evidence": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const list = (db.data.assessments || []).filter(a => a.userId === u.id);
+        const a = list.length ? list.reduce((b,x)=> !b || new Date(x.updatedAt||x.createdAt) > new Date(b.updatedAt||b.createdAt) ? x : b, null) : null;
+        const checklist = a?.data?.checklist || a?.data?.securityChecklist || {};
+        const reports = latestReportPerHost(u.id);
+        if (!reports.length) {
+          return {
+            client: u.companyName || u.email,
+            reportingHosts: 0,
+            note: "No agent reports for this client. Every control answer is self-reported — which is normal, and is what most compliance tooling relies on entirely. Installing the read-only agent would let us corroborate endpoint-observable controls with measured evidence.",
+          };
+        }
+        const evidence = toEvidenceShape(checklist);
+        const all = corroborate(reports, evidence);
+        return {
+          client: u.companyName || u.email,
+          summary: corroborationSummary(reports, evidence),
+          confirmed: all.filter(c => c.status === "confirmed").map(c => ({
+            control: c.question, observes: c.observes, hosts: c.agent.hosts, note: c.note,
+          })),
+          disputed: all.filter(c => c.status === "disputed").map(c => ({
+            control: c.question, clientAnswer: c.clientAnswer,
+            agentFound: `${c.agent.pass} pass / ${c.agent.fail} fail / ${c.agent.warn} warn across ${c.agent.hosts} host(s)`,
+            note: c.note, limits: c.limits,
+          })),
+          boundary: "The agent informs; the questionnaire decides. Endpoint telemetry is never promoted to an org-wide control answer, and disputes are surfaced for a human to reconcile — not auto-resolved. Present disputes as findings worth investigating, not as the client being wrong.",
+        };
+      }
+
+      case "check_framework_scoping": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const rid = input.frameworkId;
+        const intake = intakeFor(rid) || intakeFor(String(rid).replace("iso-27001", "iso27001").replace(/^hipaa$/, "hipaa-security"));
+        if (!intake) {
+          const def = getFrameworkDef(rid);
+          if (!def) return { error: `Unknown framework. Available: ${listFrameworkIds().join(", ")}` };
+          return { client: u.companyName || u.email, framework: def.name, hasIntake: false,
+                   note: "This framework needs no scoping questionnaire — it assesses the same controls for everyone." };
+        }
+        const list = (db.data.assessments || []).filter(a => a.userId === u.id);
+        const a = list.length ? list.reduce((b,x)=> !b || new Date(x.updatedAt||x.createdAt) > new Date(b.updatedAt||b.createdAt) ? x : b, null) : null;
+        const answers = a?.data?.frameworkIntake?.[intake.frameworkId] || {};
+        const st = intakeStatus(intake.frameworkId, answers);
+        return {
+          client: u.companyName || u.email,
+          framework: intake.title,
+          why: intake.why,
+          hasIntake: true,
+          status: st,
+          answered: answers,
+          unanswered: visibleQuestions(intake.frameworkId, answers)
+            .filter(q => answers[q.id] === undefined)
+            .map(q => ({ id: q.id, question: q.question, help: q.help || null })),
+          suggestionNote: intake.suggestionNote || null,
+          note: st.complete
+            ? "Scoping is complete — this client's assessment reflects their real scope."
+            : `Scoping is incomplete, so the assessment used defaults: ${st.defaultIfSkipped} Completing it may substantially change what applies.`,
+        };
+      }
+
       case "check_evidence": {
         if (input.clientIdOrEmail) {
           const u = resolveClient(input.clientIdOrEmail);

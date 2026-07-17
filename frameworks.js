@@ -36,6 +36,8 @@ import { PCI_META, assessPciDss, suggestSaq } from "./pciDss.js";
 import { ISO27001_META, assessIso27001, new2022Controls } from "./iso27001.js";
 import { NIST800171_META, assessNist800171, NIST800171_REV3 } from "./nist800171.js";
 import { CMMC_META, assessCmmc, suggestCmmcLevel, level1Practices } from "./cmmc.js";
+import { NIST80053_META, assessNist80053, baselineGuidance, NIST80053_BASELINES } from "./nist80053.js";
+import { STATE_PRIVACY_META, assessStatePrivacy, applicabilityPrompt, STATE_ROSTER } from "./statePrivacy.js";
 import { HIPAA_SECURITY_META, assessHipaaSecurity } from "./hipaaSecurityRule.js";
 import { CIS_VERSION } from "./cisControls.js";
 
@@ -174,6 +176,20 @@ export const FRAMEWORKS = [
     note: "CMMC adds no controls of its own — Level 2 is 800-171 Rev 2's 110 requirements. Phase 2 begins 10 November 2026.",
   },
   {
+    id: "nist-800-53",
+    name: NIST80053_META.shortName,
+    fullName: NIST80053_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "The Low-impact baseline: 149 controls across 18 families, taken from NIST's own OSCAL profile.",
+    audience: NIST80053_META.whoMustComply,
+    citation: NIST80053_META.version,
+    url: NIST80053_META.url,
+    meta: NIST80053_META,
+    assess: assessNist80053,
+    helpers: { baselineGuidance, baselines: NIST80053_BASELINES },
+    note: "Low baseline only. FIPS 199 decides your impact level — if a contract names Moderate (287 controls), you need an assessor, not a self-service gap analysis.",
+  },
+  {
     id: "ftc-safeguards",
     name: FTC_SAFEGUARDS_META.shortName,
     fullName: FTC_SAFEGUARDS_META.name,
@@ -203,22 +219,20 @@ export const FRAMEWORKS = [
     url: "https://gdpr.eu",
   },
 
-  // ── Planned ───────────────────────────────────────────────
   {
     id: "state-privacy",
-    name: "State Privacy Laws",
-    fullName: "US State Privacy Laws (CCPA/CPRA and successors)",
-    depth: DEPTH.PLANNED,
-    desc: "The growing patchwork of state consumer-privacy statutes.",
-    audience: "Businesses meeting state thresholds — increasingly, most SMBs.",
-  },
-  {
-    id: "nist-800-53",
-    name: "NIST 800-53",
-    fullName: "NIST SP 800-53 Rev. 5 — Security and Privacy Controls (Low/Moderate baselines)",
-    depth: DEPTH.PLANNED,
-    desc: "The foundational US control catalogue. Public domain, and the source 800-171 derives from.",
-    audience: "Federal systems, contractors, and anyone wanting the canonical control set behind most US frameworks.",
+    name: STATE_PRIVACY_META.shortName,
+    fullName: STATE_PRIVACY_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "The 18 obligations the ~20 state consumer-privacy laws share — notice, rights, opt-out, contracts, minimisation.",
+    audience: STATE_PRIVACY_META.whoMustComply,
+    citation: STATE_PRIVACY_META.version,
+    url: STATE_PRIVACY_META.url,
+    meta: STATE_PRIVACY_META,
+    assess: assessStatePrivacy,
+    helpers: { applicabilityPrompt, roster: STATE_ROSTER },
+    legalReviewRequired: true,
+    note: "Obligation-mapped, not state-by-state. We assess the common template and flag where states diverge; we never determine whether a given state's law applies to you — that's a legal question with fines attached.",
   },
 ];
 
@@ -239,7 +253,9 @@ export const NOT_OFFERED = [
     alternative:
       "For healthcare clients, our control-mapped HIPAA Security Rule assessment covers the underlying regulatory obligation. HITRUST certification itself requires a HITRUST-authorised assessor.",
     reviewedOn: "2026-07",
-  },SOC1_GUIDANCE];
+  },
+  SOC1_GUIDANCE,
+];
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -288,8 +304,16 @@ export function coverageSummary() {
     aiAssisted: ai.length,
     planned: planned.length,
     total: mapped.length + ai.length,
-    // The claim we can actually defend in a diligence conversation.
-    marketingClaim: `${mapped.length} frameworks with full control-level mapping, ${ai.length} with AI-assisted gap analysis, ${planned.length} more on the roadmap.`,
+    // The claim we can actually defend in a diligence conversation. Built from
+    // the registry rather than typed into a slide, so it cannot drift from what
+    // the code actually does — if someone demotes a framework, the claim moves
+    // with it. Clauses are omitted when their count is zero: "0 more on the
+    // roadmap" is worse than saying nothing.
+    marketingClaim: [
+      `${mapped.length} frameworks with full control-level mapping`,
+      ai.length ? `${ai.length} with AI-assisted gap analysis` : null,
+      planned.length ? `${planned.length} more on the roadmap` : null,
+    ].filter(Boolean).join(", ") + ".",
     names: {
       controlMapped: mapped.map(f => f.name),
       aiAssisted: ai.map(f => f.name),

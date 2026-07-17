@@ -69,7 +69,7 @@ export const HIPAA_ADMINISTRATIVE = [
     specs: [
       { id: "308-a-1-ii-A", citation: "§ 164.308(a)(1)(ii)(A)", name: "Risk Analysis", type: R,
         description: "Conduct an accurate and thorough assessment of the potential risks and vulnerabilities to the confidentiality, integrity, and availability of ePHI you hold.",
-        evidence: ["priorAudit", "dataInventory"] },
+        evidence: ["riskAssessmentCadence"] },
       { id: "308-a-1-ii-B", citation: "§ 164.308(a)(1)(ii)(B)", name: "Risk Management", type: R,
         description: "Implement security measures sufficient to reduce risks and vulnerabilities to a reasonable and appropriate level.",
         evidence: ["documentedPolicies", "endpoint"] },
@@ -110,7 +110,7 @@ export const HIPAA_ADMINISTRATIVE = [
         evidence: ["documentedPolicies"] },
       { id: "308-a-3-ii-C", citation: "§ 164.308(a)(3)(ii)(C)", name: "Termination Procedures", type: A,
         description: "Procedures for ending access to ePHI when employment ends or access is no longer appropriate.",
-        evidence: ["documentedPolicies"] },
+        evidence: ["offboarding"] },
     ],
   },
   {
@@ -129,7 +129,7 @@ export const HIPAA_ADMINISTRATIVE = [
         evidence: ["mfa"] },
       { id: "308-a-4-ii-C", citation: "§ 164.308(a)(4)(ii)(C)", name: "Access Establishment and Modification", type: A,
         description: "Procedures to establish, document, review, and modify a user's right of access.",
-        evidence: ["mfa", "documentedPolicies"] },
+        evidence: ["accessReviews"] },
     ],
   },
   {
@@ -151,7 +151,7 @@ export const HIPAA_ADMINISTRATIVE = [
         evidence: ["monitoring"] },
       { id: "308-a-5-ii-D", citation: "§ 164.308(a)(5)(ii)(D)", name: "Password Management", type: A,
         description: "Procedures for creating, changing, and safeguarding passwords.",
-        evidence: ["mfa", "documentedPolicies"] },
+        evidence: ["passwordPolicy"] },
     ],
   },
   {
@@ -234,13 +234,13 @@ export const HIPAA_PHYSICAL = [
         evidence: ["disasterRecovery"] },
       { id: "310-a-2-ii", citation: "§ 164.310(a)(2)(ii)", name: "Facility Security Plan", type: A,
         description: "Policies to safeguard the facility and equipment from unauthorized physical access, tampering, and theft.",
-        evidence: [] },
+        evidence: ["physicalSecurity"] },
       { id: "310-a-2-iii", citation: "§ 164.310(a)(2)(iii)", name: "Access Control and Validation Procedures", type: A,
         description: "Procedures to control and validate a person's access to facilities based on their role or function.",
-        evidence: [] },
+        evidence: ["physicalSecurity", "accessReviews"] },
       { id: "310-a-2-iv", citation: "§ 164.310(a)(2)(iv)", name: "Maintenance Records", type: A,
         description: "Document repairs and modifications to the physical components of a facility related to security.",
-        evidence: [] },
+        evidence: ["physicalSecurity", "changeManagement"] },
     ],
   },
   {
@@ -279,10 +279,10 @@ export const HIPAA_PHYSICAL = [
     specs: [
       { id: "310-d-2-i", citation: "§ 164.310(d)(2)(i)", name: "Disposal", type: R,
         description: "Procedures for the final disposition of ePHI and the hardware or media it's stored on.",
-        evidence: ["dataInventory"] },
+        evidence: ["mediaDisposal"] },
       { id: "310-d-2-ii", citation: "§ 164.310(d)(2)(ii)", name: "Media Re-use", type: R,
         description: "Procedures for removing ePHI from electronic media before it's reused.",
-        evidence: ["dataInventory"] },
+        evidence: ["mediaDisposal"] },
       { id: "310-d-2-iii", citation: "§ 164.310(d)(2)(iii)", name: "Accountability", type: A,
         description: "Maintain a record of movements of hardware and media and the person responsible.",
         evidence: ["dataInventory"] },
@@ -305,7 +305,7 @@ export const HIPAA_TECHNICAL = [
     specs: [
       { id: "312-a-2-i", citation: "§ 164.312(a)(2)(i)", name: "Unique User Identification", type: R,
         description: "Assign a unique name and/or number for identifying and tracking user identity. Shared logins fail this outright.",
-        evidence: ["mfa"] },
+        evidence: ["privilegedAccess"] },
       { id: "312-a-2-ii", citation: "§ 164.312(a)(2)(ii)", name: "Emergency Access Procedure", type: R,
         description: "Procedures for obtaining necessary ePHI during an emergency.",
         evidence: ["disasterRecovery"] },
@@ -314,7 +314,7 @@ export const HIPAA_TECHNICAL = [
         evidence: ["documentedPolicies"] },
       { id: "312-a-2-iv", citation: "§ 164.312(a)(2)(iv)", name: "Encryption and Decryption", type: A,
         description: "A mechanism to encrypt and decrypt ePHI at rest.",
-        evidence: [] },
+        evidence: ["encryptionAtRest", "encryptionInTransit"] },
     ],
   },
   {
@@ -369,7 +369,7 @@ export const HIPAA_TECHNICAL = [
         evidence: ["emailSecurity"] },
       { id: "312-e-2-ii", citation: "§ 164.312(e)(2)(ii)", name: "Encryption", type: A,
         description: "A mechanism to encrypt ePHI whenever deemed appropriate — in practice, essentially always for anything leaving your network.",
-        evidence: ["emailSecurity"] },
+        evidence: ["encryptionInTransit"] },
     ],
   },
 ];

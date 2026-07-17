@@ -25,6 +25,22 @@ import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
 import { registerCveRoutes } from "./cveRoutes.js";
 import { registerDomainRoutes } from "./domainRoutes.js";
+// The compliance workspace and task/gap engine. Both modules existed, were
+// tested, and were never registered — so every /api/compliance/* and /api/tasks/*
+// endpoint returned the SPA's index.html rather than a response. Registering
+// them is what puts the 11 control-mapped frameworks in front of a client.
+import { registerComplianceRoutes } from "./complianceRoutes.js";
+import { registerTaskRoutes } from "./taskRoutes.js";
+// Five more modules that were written, tested, and never registered — so every
+// one of their endpoints returned the SPA's index.html instead of a response.
+// portfolioRoutes is the notable one: its changelog records access control as
+// "verified via runtime smoke test", which cannot have been true through HTTP
+// while the route was unreachable. Registering it makes that testable.
+import { registerEvidenceRoutes } from "./evidenceRoutes.js";
+import { registerPortfolioRoutes } from "./portfolioRoutes.js";
+import { registerBrandingRoutes } from "./brandingRoutes.js";
+import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
+import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -1050,6 +1066,13 @@ registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, e
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
+registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds });
+registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
+registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
+registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
+registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND
