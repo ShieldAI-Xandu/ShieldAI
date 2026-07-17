@@ -31,6 +31,11 @@
 // The UI reads this field. It is not decoration.
 
 import { FTC_SAFEGUARDS_META, assessFtcSafeguards } from "./ftcSafeguards.js";
+import { SOC2_META, assessSoc2, SOC1_GUIDANCE } from "./soc2.js";
+import { PCI_META, assessPciDss, suggestSaq } from "./pciDss.js";
+import { ISO27001_META, assessIso27001, new2022Controls } from "./iso27001.js";
+import { NIST800171_META, assessNist800171, NIST800171_REV3 } from "./nist800171.js";
+import { CMMC_META, assessCmmc, suggestCmmcLevel, level1Practices } from "./cmmc.js";
 import { HIPAA_SECURITY_META, assessHipaaSecurity } from "./hipaaSecurityRule.js";
 import { CIS_VERSION } from "./cisControls.js";
 
@@ -99,6 +104,76 @@ export const FRAMEWORKS = [
     note: "Security Rule only. The Privacy and Breach Notification Rules are separate obligations we don't assess.",
   },
   {
+    id: "soc2",
+    name: SOC2_META.shortName,
+    fullName: "SOC 2 — Trust Services Criteria",
+    depth: DEPTH.CONTROL_MAPPED,
+    hasCategories: true,   // Security is mandatory; Availability optional
+    desc: "Security (CC1–CC9) and Availability (A1), criterion by criterion, mapped to your assessment.",
+    audience: SOC2_META.whoMustComply,
+    citation: SOC2_META.citation,
+    url: SOC2_META.url,
+    meta: SOC2_META,
+    assess: assessSoc2,
+    note: "Readiness, not an attestation. A licensed CPA firm issues the report — there is no such thing as being 'SOC 2 certified'.",
+  },
+  {
+    id: "pci-dss",
+    name: PCI_META.shortName,
+    fullName: PCI_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "All 12 requirements, scoped to the SAQ you actually file — most small merchants are responsible for a fraction of the standard.",
+    audience: PCI_META.whoMustComply,
+    citation: PCI_META.version,
+    url: PCI_META.url,
+    meta: PCI_META,
+    assess: assessPciDss,
+    helpers: { suggestSaq },
+    note: "Scoped by SAQ type. A hosted payment page means ~7 sub-requirements instead of 61 — knowing that is worth more than the gap analysis itself.",
+  },
+  {
+    id: "iso27001",
+    name: ISO27001_META.shortName,
+    fullName: ISO27001_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "All 93 Annex A controls across 4 themes, plus Clauses 4–10 — the requirements you're actually certified against.",
+    audience: ISO27001_META.whoNeedsIt,
+    citation: ISO27001_META.version,
+    url: ISO27001_META.url,
+    meta: ISO27001_META,
+    assess: assessIso27001,
+    helpers: { new2022Controls },
+    note: "Annex A is a reference catalogue, not a checklist — you select controls by risk and justify exclusions in a Statement of Applicability. We score in-scope controls only, never a percentage over all 93.",
+  },
+  {
+    id: "nist-800-171",
+    name: NIST800171_META.shortName,
+    fullName: NIST800171_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "All 110 requirements across 14 families — the security baseline written into defence contracts.",
+    audience: NIST800171_META.whoMustComply,
+    citation: NIST800171_META.version,
+    url: NIST800171_META.url,
+    meta: NIST800171_META,
+    assess: assessNist800171,
+    helpers: { rev3: NIST800171_REV3 },
+    note: "Rev 2, deliberately. Rev 3 is newer but CMMC and DFARS still assess Rev 2 — a contractor measured today is measured against these 110.",
+  },
+  {
+    id: "cmmc",
+    name: CMMC_META.shortName,
+    fullName: CMMC_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "Levels 1–3, built on the 800-171 requirements CMMC actually assesses.",
+    audience: CMMC_META.whoMustComply,
+    citation: CMMC_META.citation,
+    url: CMMC_META.url,
+    meta: CMMC_META,
+    assess: assessCmmc,
+    helpers: { suggestCmmcLevel, level1Practices },
+    note: "CMMC adds no controls of its own — Level 2 is 800-171 Rev 2's 110 requirements. Phase 2 begins 10 November 2026.",
+  },
+  {
     id: "ftc-safeguards",
     name: FTC_SAFEGUARDS_META.shortName,
     fullName: FTC_SAFEGUARDS_META.name,
@@ -115,37 +190,9 @@ export const FRAMEWORKS = [
   // ── AI-assisted ───────────────────────────────────────────
   // Honest about what these are. Each is a real candidate for promotion to
   // control-mapped; the pattern is established by HIPAA and FTC Safeguards.
-  {
-    id: "soc2",
-    name: "SOC 2",
-    fullName: "SOC 2 Trust Services Criteria",
-    depth: DEPTH.AI_ASSISTED,
-    desc: "Contextual gap analysis against the Trust Services Criteria.",
-    audience: "Service organizations whose customers demand an attestation.",
-    url: "https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2",
-    roadmap: "Control-mapped implementation planned — the five Trust Services Criteria and their points of focus.",
-  },
-  {
-    id: "pci-dss",
-    name: "PCI DSS",
-    fullName: "PCI Data Security Standard v4.0",
-    depth: DEPTH.AI_ASSISTED,
-    desc: "Contextual gap analysis against the 12 requirements.",
-    audience: "Any business that stores, processes, or transmits payment card data.",
-    url: "https://www.pcisecuritystandards.org",
-    roadmap: "Control-mapped implementation planned: the full 12 requirements, with SAQ scoping so you only see what applies to how you actually take payments.",
-  },
-  {
-    id: "iso27001",
-    name: "ISO 27001",
-    fullName: "ISO/IEC 27001:2022",
-    depth: DEPTH.AI_ASSISTED,
-    desc: "Contextual gap analysis against the ISMS clauses and Annex A themes.",
-    audience: "Businesses needing international recognition, often for enterprise procurement.",
-    url: "https://www.iso.org/standard/27001",
-    roadmap: "Control-mapped implementation planned — Annex A's 93 controls and clauses 4–10.",
-    note: "ISO's standard text is copyrighted, so we reference control identifiers and titles and write our own guidance. We can't reproduce the standard itself.",
-  },
+
+
+
   {
     id: "gdpr",
     name: "GDPR",
@@ -158,22 +205,6 @@ export const FRAMEWORKS = [
 
   // ── Planned ───────────────────────────────────────────────
   {
-    id: "cmmc",
-    name: "CMMC 2.0",
-    fullName: "Cybersecurity Maturity Model Certification",
-    depth: DEPTH.PLANNED,
-    desc: "Defense contractors and the DoD supply chain.",
-    audience: "Anyone in the defense industrial base.",
-  },
-  {
-    id: "nist-800-171",
-    name: "NIST 800-171",
-    fullName: "NIST SP 800-171 — Protecting CUI",
-    depth: DEPTH.PLANNED,
-    desc: "Controlled Unclassified Information in non-federal systems.",
-    audience: "Federal contractors and subcontractors.",
-  },
-  {
     id: "state-privacy",
     name: "State Privacy Laws",
     fullName: "US State Privacy Laws (CCPA/CPRA and successors)",
@@ -182,14 +213,33 @@ export const FRAMEWORKS = [
     audience: "Businesses meeting state thresholds — increasingly, most SMBs.",
   },
   {
-    id: "hitrust",
-    name: "HITRUST CSF",
-    fullName: "HITRUST Common Security Framework",
+    id: "nist-800-53",
+    name: "NIST 800-53",
+    fullName: "NIST SP 800-53 Rev. 5 — Security and Privacy Controls (Low/Moderate baselines)",
     depth: DEPTH.PLANNED,
-    desc: "Certifiable framework common in healthcare supply chains.",
-    audience: "Healthcare vendors facing HITRUST requirements from partners.",
+    desc: "The foundational US control catalogue. Public domain, and the source 800-171 derives from.",
+    audience: "Federal systems, contractors, and anyone wanting the canonical control set behind most US frameworks.",
   },
 ];
+
+// ── Deliberately not offered ──────────────────────────────────
+// SOC 1 audits financial-reporting controls, not security, and has no
+// predefined control catalog to assess against. See soc2.js for the full
+// reasoning. Exported so the UI can answer the question well when a client
+// asks "do you do SOC 1?" — the honest answer is more useful than a fake one.
+export const NOT_OFFERED = [
+  {
+    id: "hitrust",
+    name: "HITRUST CSF",
+    reason: "licence-prohibited",
+    // Recorded so this doesn't get re-litigated in six months. This is not
+    // caution — it is what the licence says.
+    detail:
+      "HITRUST's CSF licence prohibits commercial use and creation of derivative works without express written consent, and defines 'derivative work' to include any software that is based on or incorporates any part of the CSF, in any form in which it may be recast or adapted. A control-mapped implementation is precisely that. Separately, the licence restricts who may be a licensee: security service providers, consultants, and vendors are excluded — which describes ShieldAI. A commercial GRC vendor (SimpleRisk) reached the same conclusion and does not implement HITRUST for this reason.",
+    alternative:
+      "For healthcare clients, our control-mapped HIPAA Security Rule assessment covers the underlying regulatory obligation. HITRUST certification itself requires a HITRUST-authorised assessor.",
+    reviewedOn: "2026-07",
+  },SOC1_GUIDANCE];
 
 // ── Helpers ───────────────────────────────────────────────────
 
