@@ -92,6 +92,39 @@ const COMPANIES = [
       responseSupport: "Internal IT staff",
       backups: "Automated backups, not regularly tested",
       disasterRecovery: "Yes, a basic plan",
+
+      // ── Evidence answers (scoring: false — these don't move the posture
+      // score; they're what the frameworks read). Without them the demo shows
+      // 410 of 624 controls assessed instead of 597, the Privacy section is
+      // empty, and the agent has nothing to corroborate against — which is the
+      // differentiator.
+      //
+      // Profile: a dental practice with a decent MSP and genuinely weak
+      // governance. Encryption on laptops but not the server; no vendor
+      // programme; privacy handled by whoever opens the email. This is the
+      // shape that produces useful findings rather than a wall of red.
+      accessReviews: "Only when someone leaves",
+      offboarding: "Within a few days",
+      privilegedAccess: "Some people have admin on their normal account",
+      passwordPolicy: "Enforced complexity rules, no manager",
+      encryptionAtRest: "Full-disk encryption on laptops and servers",
+      encryptionInTransit: "HTTPS/TLS on everything public-facing",
+      dataRetention: "Informal — we delete things when we notice",
+      mediaDisposal: "We wipe or shred, no formal record",
+      vendorInventory: "We have a list of vendors",
+      vendorDueDiligence: "Only for the largest vendors",
+      vendorContracts: "Standard terms, security language in some",
+      riskAssessmentCadence: "Only when a customer or insurer asks",
+      securityOwnership: "A named individual, informally",
+      policyReviewCadence: "Occasionally, when something changes",
+      changeManagement: "Informal — people are careful",
+      vulnManagement: "Automatic updates enabled, occasional scans",
+      physicalSecurity: "Locked doors, keys issued to staff",
+      personalDataCategories: "Sensitive categories (health, biometric, precise geolocation, government ID)",
+      privacyNotice: "Yes, but it's generic or outdated",
+      consumerRights: "Yes, handled manually by whoever gets the email",
+      dataSaleSharing: "No — and we've confirmed our ad/analytics tools don't either",
+      privacyRequestVolume: "We've never received one",
     },
     policies: ["incident-response", "data-classification"],
   },
@@ -114,6 +147,34 @@ const COMPANIES = [
       responseSupport: "Retained security firm / MSP on call",
       backups: "Automated, offsite/cloud backups (tested)",
       disasterRecovery: "Yes, documented with recovery time goals",
+
+      // Evidence answers. Profile: mature for 28 people — in-house IT, real
+      // vendor programme, SOC 2 in progress. Deliberately NOT perfect: no
+      // in-house password manager and a retention policy that isn't enforced.
+      // A demo where everything is green teaches a prospect nothing and reads
+      // as a mock-up.
+      accessReviews: "Formal reviews at least quarterly, documented",
+      offboarding: "Same day, via a documented checklist",
+      privilegedAccess: "Separate admin accounts, MFA, access logged and time-limited",
+      passwordPolicy: "Enforced complexity rules, no manager",
+      encryptionAtRest: "Yes — full-disk plus database/file encryption, keys managed",
+      encryptionInTransit: "TLS everywhere, enforced and monitored for weak ciphers",
+      dataRetention: "Documented but not consistently enforced",
+      mediaDisposal: "Certified destruction/wiping with documented chain of custody",
+      vendorInventory: "Documented inventory with data types and contracts",
+      vendorDueDiligence: "Yes — questionnaire or SOC 2 review, documented, periodic re-review",
+      vendorContracts: "Yes — security terms plus DPAs/BAAs where required",
+      riskAssessmentCadence: "At least annually, documented, with tracked remediation",
+      securityOwnership: "A named individual with documented authority and budget",
+      policyReviewCadence: "At least annually, with documented management approval",
+      changeManagement: "Documented approval, testing, and rollback for every change",
+      vulnManagement: "Regular scanning with tracked remediation SLAs",
+      physicalSecurity: "Badge access with logging, visitors escorted, cloud-hosted infra",
+      personalDataCategories: "Standard identifiers plus commercial/behavioral data",
+      privacyNotice: "Yes — categories, purposes, rights, and updated in the last 12 months",
+      consumerRights: "Yes — a defined intake channel, identity verification, tracked to a deadline",
+      dataSaleSharing: "No — and we've confirmed our ad/analytics tools don't either",
+      privacyRequestVolume: "Yes — logged with dates, outcomes, and metrics we could report",
     },
     policies: ["access-control", "vendor-risk"],
   },
@@ -136,6 +197,38 @@ const COMPANIES = [
       responseSupport: "We'd figure it out / call someone",
       backups: "Manual or occasional backups",
       disasterRecovery: "Informal understanding only",
+
+      // Evidence answers. Profile: a manufacturer chasing defense contracts
+      // with security maturity well behind its growth. This is the most useful
+      // demo of the three — CMMC Level 2 means 110 requirements, and this
+      // client meets very few of them. The point isn't the wall of red; it's
+      // that the gap list is specific, cited, and ordered.
+      //
+      // Note physicalSecurity is genuinely good — a factory has controlled
+      // access even when its IT doesn't. Real businesses are uneven, and a
+      // demo where every answer tracks the posture score looks generated.
+      accessReviews: "Never / not sure",
+      offboarding: "Accounts often stay active / not sure",
+      privilegedAccess: "Most users are local admins / not sure",
+      passwordPolicy: "No policy / shared passwords in use",
+      encryptionAtRest: "Some systems only",
+      encryptionInTransit: "Mostly, but some internal traffic is plaintext",
+      dataRetention: "We keep everything indefinitely / not sure",
+      mediaDisposal: "Devices get reused or sit in a closet",
+      vendorInventory: "We could reconstruct it if asked",
+      vendorDueDiligence: "No / not sure",
+      vendorContracts: "Rarely — we sign their paper",
+      riskAssessmentCadence: "Never",
+      securityOwnership: "Shared across leadership — no single owner",
+      policyReviewCadence: "Written once, never revisited",
+      changeManagement: "Informal — people are careful",
+      vulnManagement: "We patch when something breaks or makes the news",
+      physicalSecurity: "Badge access with logging, visitors escorted, cloud-hosted infra",
+      personalDataCategories: "None — we're B2B and hold no consumer data",
+      privacyNotice: "A short blurb in our terms",
+      consumerRights: "We'd honor a request but have no process",
+      dataSaleSharing: "Not sure",
+      privacyRequestVolume: "We've never received one",
     },
     policies: ["incident-response", "backup-recovery"],
   },

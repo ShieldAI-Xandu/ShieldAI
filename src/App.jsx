@@ -3697,7 +3697,22 @@ function Landing({ onStart }) {
 // ─────────────────────────────────────────────────────────────
 //  STRUCTURED SECURITY CHECKLIST
 // ─────────────────────────────────────────────────────────────
-const SECURITY_CHECKLIST = [
+// Fallback only — the real checklist comes from GET /api/tasks/controls.
+//
+// This was a hardcoded duplicate of the backend's securityChecklist.js, frozen
+// at the original 13 scoring questions. The backend now has 35: those 13 plus 22
+// evidence-only questions covering access reviews, encryption, vendor diligence,
+// media disposal, physical security, and privacy rights.
+//
+// Those 22 are what make ISO's cryptography controls assessable, what let State
+// Privacy exist at all, and what the agent corroborates against. They unlocked
+// +187 controls across the frameworks — and none of it mattered, because this
+// list is what the client actually sees, and it never asked them.
+//
+// A duplicated catalogue in the frontend silently rots the moment the backend
+// moves. useSecurityChecklist() fetches the live set; this array renders only if
+// that request fails.
+const SECURITY_CHECKLIST_FALLBACK = [
   { id:"mfa", nistFunction:"Protect", question:"Does your organization use multi-factor authentication (MFA)?",
     options:["Yes, required on all accounts","Yes, but only on some accounts (e.g., admin)","No, but planning to add it","No / not sure"] },
   { id:"endpoint", nistFunction:"Protect", question:"What endpoint/antivirus protection is on your computers?",
@@ -3734,7 +3749,17 @@ const NIST_COLORS = {
 // Compliance frameworks the user can select in the assessment. These flow
 // into the AI-generated compliance mapping. CIS Controls additionally offers
 // an Implementation Group choice (IG1/IG2/IG3).
-const COMPLIANCE_FRAMEWORKS = [
+// Fallback only — the real list comes from GET /api/compliance/frameworks.
+//
+// This was the framework picker's hardcoded source: 7 frameworks, last edited
+// when that was true. The backend now serves 12 (NIST 800-53, 800-171, CMMC,
+// FTC Safeguards and State Privacy were all built and then unreachable at the
+// one place a client selects them). A hardcoded product catalogue in the UI
+// silently rots every time the backend ships something.
+//
+// useFrameworkCatalog() fetches the live list. This array is what renders if the
+// request fails — better a stale picker than an empty one.
+const COMPLIANCE_FRAMEWORKS_FALLBACK = [
   { id:"nist-csf", name:"NIST CSF",      desc:"NIST Cybersecurity Framework — always applied as the scoring baseline.", always:true },
   { id:"cis",      name:"CIS Controls v8.1", desc:"18 prioritized controls for small & mid-sized businesses.", hasIG:true },
   { id:"hipaa",    name:"HIPAA",         desc:"Health data privacy & security (US healthcare)." },
@@ -3750,14 +3775,113 @@ const CIS_IG_OPTIONS = [
   { id:"IG3", label:"IG3", sub:"Full set — high-value / targeted-threat orgs (153)" },
 ];
 
+// The live checklist — all 35 questions, straight from the engine that scores
+// them.
+//
+// Two kinds come back, distinguished by `affectsPostureScore`:
+//   true  — the 13 NIST-weighted questions that drive the posture score.
+//   false — 22 evidence questions that frameworks read but scoring ignores.
+//
+// The split matters and must be preserved in the UI. The posture score is
+// normalised across only the scoring questions; if the evidence answers ever
+// leaked into that calculation, every historical client's score would shift.
+// The backend enforces this (SCORING_CHECKLIST vs SECURITY_CHECKLIST), so the
+// UI just needs to collect all 35 and let the server sort it out.
+let _checklistCache = null;
+function useSecurityChecklist() {
+  const [list, setList] = useState(_checklistCache);
+  useEffect(() => {
+    if (_checklistCache) return;
+    let live = true;
+    fetch(`${API_BASE}/api/tasks/controls`, {
+      headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => {
+        const rows = (Array.isArray(d) ? d : []).map(q => ({
+          id: q.id,
+          question: q.question,
+          nistFunction: q.nistFunction,
+          factor: q.factor,
+          options: q.options,
+          section: q.section || q.nistFunction,
+          affectsPostureScore: q.affectsPostureScore !== false,
+        }));
+        if (live && rows.length) { _checklistCache = rows; setList(rows); }
+      })
+      .catch(() => { /* fall back to the static 13 */ });
+    return () => { live = false; };
+  }, []);
+  return list || SECURITY_CHECKLIST_FALLBACK;
+}
+// The live framework catalogue, straight from the registry that actually
+// assesses them. Depth ("control-mapped" vs "ai-assisted") comes through so the
+// picker can be honest about which frameworks get a real control walkthrough and
+// which get an AI gap analysis — a client choosing GDPR should know before they
+// pick it, not after.
+let _fwCatalogCache = null;
+function useFrameworkCatalog() {
+  const [list, setList] = useState(_fwCatalogCache);
+  useEffect(() => {
+    if (_fwCatalogCache) return;
+    let live = true;
+    fetch(`${API_BASE}/api/compliance/frameworks`, {
+      headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => {
+        const rows = (Array.isArray(d) ? d : []).map(f => ({
+          id: f.id,
+          name: f.short || f.name,
+          desc: f.description || "",
+          depth: f.depth,
+          // Carried through so the picker can show what a client is choosing:
+          // "93 controls" vs "AI gap analysis" is the difference between a
+          // control-by-control walkthrough and the model's interpretation.
+          requirementCount: f.requirementCount,
+          note: f.note || null,
+          legalReviewRequired: f.legalReviewRequired || false,
+          always: f.id === "nist-csf",
+          hasIG: f.id === "cis",
+        }));
+        if (live && rows.length) { _fwCatalogCache = rows; setList(rows); }
+      })
+      .catch(() => { /* fall back to the static list */ });
+    return () => { live = false; };
+  }, []);
+  return list || COMPLIANCE_FRAMEWORKS_FALLBACK;
+}
+
 function ChecklistScreen({ onComplete, onBack }) {
+  // Live catalogue, not the stale 7-item constant.
+  const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  // All 35 questions, not the frozen 13. The 22 evidence questions are what
+  // make most of the framework catalogue assessable — without them the backend
+  // scores what it can and reports "not yet assessed" for the rest.
+  const SECURITY_CHECKLIST = useSecurityChecklist();
   const [answers, setAnswers] = useState({});
   // Selected compliance frameworks (NIST CSF is always on). Stored as a set of ids.
   const [frameworks, setFrameworks] = useState(["nist-csf"]);
   const [cisIG, setCisIG] = useState("IG1");
+  // The gate is the 13 SCORING questions, not all 35.
+  //
+  // The posture score needs all 13 — it's normalised across them, and a missing
+  // answer would silently reweight the rest. The 22 evidence questions are
+  // different: the engine reports an unanswered one as "not yet assessed"
+  // rather than assuming it met or failed, so a partial answer set produces a
+  // partial assessment, which is honest and useful.
+  //
+  // Blocking submission on all 35 would turn a 13-question intake into a
+  // 35-question wall. People abandon those, and an abandoned assessment scores
+  // nothing at all. Answer what you can; every extra answer makes more of the
+  // framework catalogue assessable, and the UI says so.
+  const required = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore !== false);
+  const optional = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore === false);
   const total = SECURITY_CHECKLIST.length;
   const answered = Object.keys(answers).length;
-  const allAnswered = answered === total;
+  const requiredAnswered = required.filter(q => answers[q.id] !== undefined).length;
+  const optionalAnswered = optional.filter(q => answers[q.id] !== undefined).length;
+  const allAnswered = requiredAnswered === required.length;
 
   function selectAnswer(qId, option) {
     setAnswers(prev => ({ ...prev, [qId]: option }));
@@ -3781,8 +3905,15 @@ function ChecklistScreen({ onComplete, onBack }) {
     });
   }
 
+  // Scoring questions group under their NIST function; evidence questions under
+  // their own section (Access & Identity, Data Protection, Vendors, Governance,
+  // Privacy). Grouping evidence questions by nistFunction would file them all
+  // under "undefined" — they deliberately have no NIST weight.
   const grouped = SECURITY_CHECKLIST.reduce((acc, q) => {
-    (acc[q.nistFunction] = acc[q.nistFunction] || []).push(q);
+    const key = q.affectsPostureScore === false
+      ? (q.section || "Additional detail")
+      : q.nistFunction;
+    (acc[key] = acc[key] || []).push(q);
     return acc;
   }, {});
 
@@ -3838,8 +3969,17 @@ function ChecklistScreen({ onComplete, onBack }) {
                   </span>
                   <span>
                     <span style={{fontSize:13,fontWeight:600,display:"block"}}>{fw.name}</span>
-                    {fw.always &&
-                      <span style={{fontSize:10,color:C.textSec}}>baseline</span>}
+                    {/* What the client is actually choosing. "AI-assisted" means
+                        a contextual gap analysis, not a control-by-control
+                        walkthrough — they should know that before they pick it,
+                        not discover it in the report. */}
+                    {fw.always ? (
+                      <span style={{fontSize:10,color:C.textSec}}>baseline</span>
+                    ) : fw.depth === "ai-assisted" ? (
+                      <span style={{fontSize:10,color:C.amber}}>AI gap analysis</span>
+                    ) : typeof fw.requirementCount === "number" ? (
+                      <span style={{fontSize:10,color:C.textMut}}>{fw.requirementCount} controls</span>
+                    ) : null}
                   </span>
                 </button>
               );
@@ -3888,20 +4028,35 @@ function ChecklistScreen({ onComplete, onBack }) {
         <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,
           padding:"10px 0 14px",marginBottom:6}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <span style={{color:C.textSec,fontSize:12}}>{answered} of {total} answered</span>
+            <span style={{color:C.textSec,fontSize:12}}>
+              {requiredAnswered} of {required.length} required
+              {optionalAnswered > 0 && <span style={{color:C.textMut}}> · {optionalAnswered} of {optional.length} optional</span>}
+            </span>
             <span style={{color:C.accent,fontSize:12,fontWeight:700}}>
-              {Math.round((answered/total)*100)}%
+              {Math.round((requiredAnswered/required.length)*100)}%
             </span>
           </div>
-          <ProgressBar value={(answered/total)*100} color={C.accent}/>
+          <ProgressBar value={(requiredAnswered/required.length)*100} color={C.accent}/>
         </div>
 
-        {Object.entries(grouped).map(([fn, questions]) => (
+        {Object.entries(grouped).map(([fn, questions]) => {
+          // Evidence sections have no NIST colour because they carry no NIST
+          // weight — that's the point. They're marked optional and told why:
+          // a client skipping them isn't failing, they're leaving controls
+          // unassessed, and they should know which trade they're making.
+          const isEvidence = questions[0]?.affectsPostureScore === false;
+          const color = isEvidence ? C.textSec : NIST_COLORS[fn];
+          return (
           <div key={fn} style={{marginBottom:24}}>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-              <div style={{width:10,height:10,borderRadius:"50%",background:NIST_COLORS[fn]}}/>
-              <span style={{color:NIST_COLORS[fn],fontSize:12,fontWeight:700,
+              <div style={{width:10,height:10,borderRadius:"50%",background:color}}/>
+              <span style={{color,fontSize:12,fontWeight:700,
                 letterSpacing:1.5,textTransform:"uppercase"}}>{fn}</span>
+              {isEvidence && (
+                <span style={{fontSize:10,color:C.textMut,textTransform:"none",letterSpacing:0}}>
+                  optional — doesn't change your posture score, but makes more compliance controls assessable
+                </span>
+              )}
             </div>
 
             {questions.map(q => (
@@ -3937,7 +4092,7 @@ function ChecklistScreen({ onComplete, onBack }) {
               </div>
             ))}
           </div>
-        ))}
+        ); })}
 
         <div style={{position:"sticky",bottom:0,background:C.bg,padding:"16px 0",
           borderTop:`1px solid ${C.border}`,marginTop:8}}>
@@ -3947,7 +4102,11 @@ function ChecklistScreen({ onComplete, onBack }) {
               color: allAnswered ? C.bg : C.textMut,
               fontSize:15,fontWeight:700,
               cursor: allAnswered ? "pointer" : "not-allowed"}}>
-            {allAnswered ? "Generate Security Program →" : `Answer all questions (${total-answered} remaining)`}
+            {allAnswered
+              ? (optionalAnswered < optional.length
+                  ? `Generate Security Program → (${optional.length - optionalAnswered} optional left)`
+                  : "Generate Security Program →")
+              : `Answer the required questions (${required.length - requiredAnswered} remaining)`}
           </button>
         </div>
       </div>
@@ -6113,6 +6272,9 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
 //  EDIT ASSESSMENT — revise company info + checklist, optionally regenerate
 // ─────────────────────────────────────────────────────────────
 function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate }) {
+  // Live catalogue, not the stale 7-item constant.
+  const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  const SECURITY_CHECKLIST = useSecurityChecklist();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -6217,8 +6379,15 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
     }
   }
 
+  // Scoring questions group under their NIST function; evidence questions under
+  // their own section (Access & Identity, Data Protection, Vendors, Governance,
+  // Privacy). Grouping evidence questions by nistFunction would file them all
+  // under "undefined" — they deliberately have no NIST weight.
   const grouped = SECURITY_CHECKLIST.reduce((acc, q) => {
-    (acc[q.nistFunction] = acc[q.nistFunction] || []).push(q);
+    const key = q.affectsPostureScore === false
+      ? (q.section || "Additional detail")
+      : q.nistFunction;
+    (acc[key] = acc[key] || []).push(q);
     return acc;
   }, {});
 
@@ -6292,7 +6461,17 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                           display:"flex",alignItems:"center",justifyContent:"center"}}>
                           {on && <span style={{color:C.bg,fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
                         </span>
-                        {fw.name}
+                        <span style={{display:"flex",flexDirection:"column",alignItems:"flex-start",lineHeight:1.25}}>
+                          <span>{fw.name}</span>
+                          {/* Same honesty as the intake picker: an AI-assisted
+                              framework is a gap analysis, not a control
+                              walkthrough, and the client picks with that known. */}
+                          {fw.depth === "ai-assisted" ? (
+                            <span style={{fontSize:9.5,color:C.amber,fontWeight:400}}>AI gap analysis</span>
+                          ) : typeof fw.requirementCount === "number" ? (
+                            <span style={{fontSize:9.5,color:C.textMut,fontWeight:400}}>{fw.requirementCount} controls</span>
+                          ) : null}
+                        </span>
                       </button>
                     );
                   })}
@@ -6446,6 +6625,11 @@ const SOC = {
 };
 
 function pColor(s) {
+  // null/undefined means we haven't scored this client. It must NOT fall through
+  // to the red branch — an unscored client is not a critical one, and painting
+  // it red is as much a fabrication as painting it green. Neutral says "unknown",
+  // which is the truth and prompts someone to go and look.
+  if (typeof s !== "number") return SOC.textMut;
   return s >= 80 ? SOC.green : s >= 60 ? "#7ED957" : s >= 40 ? SOC.amber : SOC.red;
 }
 
@@ -6464,149 +6648,16 @@ function agentMeta(status) {
 }
 
 // 12 months of posture history per client (trend story)
-const SAMPLE_CLIENTS = [
-  {
-    id: "c1", name: "Meridian Dental Group", industry: "Healthcare", employees: "45",
-    posture: 53, level: "Developing", plan: "Managed vCISO", mrr: 1800,
-    status: "needs_review", lastActivity: "2h ago", compliance: ["HIPAA"],
-    weakest: ["Identify", "Respond"], openItems: 3,
-    history: [31, 34, 38, 38, 41, 44, 44, 47, 49, 49, 51, 53],
-    agent: { status: "healthy", endpoints: 38, lastSeen: "3 min ago", coverage: 84 },
-    compliancePct: { current: 62, target: 90, framework: "HIPAA" },
-    alerts: [
-      { sev: "high", title: "Phishing email reported by 2 staff", time: "18 min ago", detail: "Spoofed invoice from 'billing@meridian-dental.co' — quarantined." },
-      { sev: "medium", title: "Outdated OS on 3 endpoints", time: "2h ago", detail: "Workstations running unsupported Windows build." },
-      { sev: "low", title: "New device joined network", time: "5h ago", detail: "Unmanaged tablet on guest VLAN." },
-    ],
-    reviewQueue: [
-      { type: "Incident Response Policy", status: "awaiting_review", generated: "2h ago" },
-      { type: "Q2 Risk Reassessment", status: "awaiting_review", generated: "2h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Dr. Patel", text: "We had a staff member click something suspicious — should we be worried?", time: "20 min ago" },
-      { from: "analyst", who: "You", text: "Saw the alert come through — it was quarantined before any payload ran. I'm resetting that account's credentials as a precaution and will send a short refresher to the team.", time: "12 min ago" },
-      { from: "client", who: "Dr. Patel", text: "Thank you, that's a relief.", time: "8 min ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 71, enrolled: 45, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 38, avgScore: 84 },
-        { name: "Passwords & MFA", done: 41, avgScore: 91 },
-        { name: "Device & Mobile Security", done: 28, avgScore: 78 },
-        { name: "Incident Reporting", done: 25, avgScore: 73 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 45, clicked: 6, reported: 22, date: "Jun 12" },
-        { name: "Q1 Phishing Simulation", status: "complete", sent: 45, clicked: 11, reported: 14, date: "Mar 10" },
-      ] },
-  },
-  {
-    id: "c2", name: "Lakeside Financial Advisors", industry: "Finance", employees: "28",
-    posture: 91, level: "Strong", plan: "Managed vCISO", mrr: 2400,
-    status: "on_track", lastActivity: "1d ago", compliance: ["SEC", "SOC 2"],
-    weakest: ["Respond"], openItems: 1,
-    history: [68, 70, 72, 74, 77, 79, 81, 83, 85, 87, 89, 91],
-    agent: { status: "healthy", endpoints: 26, lastSeen: "1 min ago", coverage: 96 },
-    compliancePct: { current: 88, target: 95, framework: "SOC 2" },
-    alerts: [
-      { sev: "low", title: "Impossible-travel login flagged & cleared", time: "6h ago", detail: "VP logged in from two cities; confirmed VPN, no action needed." },
-    ],
-    reviewQueue: [
-      { type: "Backup & Recovery Policy", status: "approved", generated: "1d ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "Your SOC 2 evidence package is 88% complete — we're on track for the audit window.", time: "1d ago" },
-      { from: "client", who: "Sandra Kim", text: "Excellent. The board will be pleased.", time: "1d ago" },
-    ],
-    training: { active: "Annual Security Refresher", completion: 96, enrolled: 28, nextDue: "Complete",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 28, avgScore: 95 },
-        { name: "Business Email Compromise", done: 27, avgScore: 92 },
-        { name: "Data Protection & Privacy", done: 28, avgScore: 97 },
-        { name: "Secure Payment Verification", done: 26, avgScore: 90 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 28, clicked: 1, reported: 26, date: "Jun 5" },
-        { name: "Wire-Fraud Drill", status: "complete", sent: 28, clicked: 0, reported: 27, date: "May 2" },
-      ] },
-  },
-  {
-    id: "c3", name: "Apex Manufacturing", industry: "Manufacturing", employees: "120",
-    posture: 24, level: "At Risk", plan: "Assessment + Roadmap", mrr: 950,
-    status: "attention", lastActivity: "4h ago", compliance: ["CMMC"],
-    weakest: ["Protect", "Identify"], openItems: 7,
-    history: [18, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24],
-    agent: { status: "offline", endpoints: 0, lastSeen: "never", coverage: 0 },
-    compliancePct: { current: 19, target: 80, framework: "CMMC L2" },
-    alerts: [
-      { sev: "high", title: "No MFA on email — active brute-force attempts", time: "1h ago", detail: "47 failed logins on shared mailbox in past hour." },
-      { sev: "high", title: "Unpatched VPN appliance (critical CVE)", time: "3h ago", detail: "Internet-facing device vulnerable to known exploit." },
-      { sev: "medium", title: "Local admin rights on all workstations", time: "4h ago", detail: "Standard users can install software / disable controls." },
-    ],
-    reviewQueue: [
-      { type: "Initial Security Program", status: "awaiting_review", generated: "4h ago" },
-      { type: "Access Control Policy", status: "awaiting_review", generated: "4h ago" },
-      { type: "Data Classification Policy", status: "draft", generated: "5h ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "We've finished your initial assessment — there are a few urgent items I'd like to walk you through. Do you have 15 minutes tomorrow?", time: "3h ago" },
-      { from: "client", who: "Mike Torres", text: "Yeah, mornings are best. How bad is it?", time: "2h ago" },
-      { from: "analyst", who: "You", text: "Fixable, but we should move quickly on MFA and the VPN patch. I'll prep a prioritized list.", time: "2h ago" },
-    ],
-    training: { active: "Not yet deployed", completion: 0, enrolled: 0, nextDue: "—",
-      modules: [], campaigns: [] },
-  },
-  {
-    id: "c4", name: "BrightPath Marketing", industry: "Professional Services", employees: "16",
-    posture: 84, level: "Strong", plan: "Self-Serve + Quarterly Review", mrr: 450,
-    status: "on_track", lastActivity: "3d ago", compliance: ["GDPR"],
-    weakest: ["Detect"], openItems: 0,
-    history: [70, 72, 73, 75, 76, 78, 79, 80, 81, 82, 83, 84],
-    agent: { status: "degraded", endpoints: 14, lastSeen: "8 min ago", coverage: 64 },
-    compliancePct: { current: 80, target: 90, framework: "GDPR" },
-    alerts: [],
-    reviewQueue: [],
-    chat: [
-      { from: "client", who: "Jordan Lee", text: "Quick one — is it safe to use that new AI tool with client data?", time: "3d ago" },
-      { from: "analyst", who: "You", text: "Let me review their data-handling terms and get back to you with a recommendation.", time: "3d ago" },
-    ],
-    training: { active: "Data Privacy Essentials", completion: 88, enrolled: 16, nextDue: "Jul 15",
-      modules: [
-        { name: "Data Protection & Privacy", done: 15, avgScore: 89 },
-        { name: "Phishing & Social Engineering", done: 14, avgScore: 86 },
-        { name: "Remote Work & Wi-Fi Security", done: 13, avgScore: 82 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 16, clicked: 2, reported: 12, date: "Jun 8" },
-      ] },
-  },
-  {
-    id: "c5", name: "Coastal Property Mgmt", industry: "Real Estate", employees: "33",
-    posture: 61, level: "Moderate", plan: "Managed vCISO", mrr: 1600,
-    status: "needs_review", lastActivity: "6h ago", compliance: ["State Privacy"],
-    weakest: ["Respond"], openItems: 2,
-    history: [44, 46, 47, 49, 51, 52, 54, 55, 57, 58, 60, 61],
-    agent: { status: "healthy", endpoints: 29, lastSeen: "12 min ago", coverage: 79 },
-    compliancePct: { current: 64, target: 85, framework: "State Privacy" },
-    alerts: [
-      { sev: "medium", title: "Shared password detected in cloud drive", time: "6h ago", detail: "Plaintext credentials file found in shared folder." },
-    ],
-    reviewQueue: [
-      { type: "Vendor Risk Policy", status: "awaiting_review", generated: "6h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Rosa Mendes", text: "Got the vendor policy draft — looks good. One question on the cloud storage section.", time: "5h ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 58, enrolled: 33, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 24, avgScore: 79 },
-        { name: "Passwords & MFA", done: 22, avgScore: 81 },
-        { name: "Data Protection & Privacy", done: 18, avgScore: 75 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 33, clicked: 9, reported: 13, date: "Jun 14" },
-      ] },
-  },
-];
+// SAMPLE_CLIENTS deleted.
+//
+// 143 lines of hardcoded fake clients — "Meridian Dental Group", posture 53,
+// $1,800 MRR, invented phishing alerts — that drove the analyst console's
+// landing page and its KPI tiles, including Monthly Recurring Revenue and
+// Average Posture. Real client data was already being fetched from
+// /api/analyst/clients and rendered only in a secondary tab.
+//
+// The console now reads /api/analyst/portfolio. Every field is real or
+// explicitly null, and null renders as "—".
 
 // ── Small SVG sparkline / trend chart ──
 function TrendChart({ data, color, height = 120 }) {
@@ -6975,18 +7026,71 @@ function AnalystConsole({ user, onExit }) {
     }, 650);
   }
 
-  const clients = SAMPLE_CLIENTS;
-  const totalMRR = clients.reduce((s, c) => s + c.mrr, 0);
-  const avgPosture = Math.round(clients.reduce((s, c) => s + c.posture, 0) / clients.length);
-  const reviewCount = clients.reduce((s, c) => s + c.reviewQueue.filter(r => r.status === "awaiting_review").length, 0);
-  const highAlerts = clients.reduce((s, c) => s + c.alerts.filter(a => a.sev === "high").length, 0);
-  const agentsOnline = clients.filter(c => c.agent.status === "healthy").length;
+  // Real clients from /api/analyst/portfolio — scoped server-side to the ones
+  // assigned to this analyst.
+  //
+  // This replaced `const clients = SAMPLE_CLIENTS`: 143 lines of hardcoded fake
+  // clients ("Meridian Dental Group", posture 53, $1,800 MRR, invented phishing
+  // alerts) that rendered on the landing page an analyst sees first. The KPI
+  // tiles — including Monthly Recurring Revenue and Average Posture — were
+  // computed from that array. Real client data was already being fetched and was
+  // only shown in a secondary tab.
+  //
+  // Every field is now real or explicitly null, and null renders as "—". A
+  // fabricated posture score on a triage dashboard is worse than a blank one,
+  // because a blank prompts a question and a number gets acted on.
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioErr, setPortfolioErr] = useState(null);
+  useEffect(() => {
+    let live = true;
+    authFetch(`${API_BASE}/api/analyst/portfolio`)
+      .then(async r => {
+        if (!r.ok) throw new Error(r.status === 403 ? "Analyst access required." : `Couldn't load portfolio (${r.status}).`);
+        return r.json();
+      })
+      .then(d => { if (live) setPortfolio(Array.isArray(d) ? d : (d.clients || [])); })
+      .catch(e => { if (live) setPortfolioErr(e.message); });
+    return () => { live = false; };
+  }, []);
+  const clients = portfolio || [];
+  // KPIs computed from real data, with null meaning "we don't have this".
+  //
+  // MRR is null on every row because there is no billing integration yet
+  // (Stripe deferred). The tile stays — an analyst expects it — and renders "—"
+  // until billing is wired. Summing nulls to $0.0k would state that the book of
+  // business earns nothing, which is a claim we can't make; inventing a figure
+  // would be worse.
+  const mrrKnown = clients.filter(c => typeof c.mrr === "number");
+  const totalMRR = mrrKnown.length ? mrrKnown.reduce((s, c) => s + c.mrr, 0) : null;
+
+  // Average posture over clients we've actually SCORED. Treating an unscored
+  // client as 0 would drag the average toward alarm; treating them as average
+  // would hide them. They're excluded, and the tile says how many counted.
+  const scored = clients.filter(c => typeof c.posture === "number");
+  const avgPosture = scored.length
+    ? Math.round(scored.reduce((s, c) => s + c.posture, 0) / scored.length)
+    : null;
+
+  const reviewCount = clients.reduce((s, c) =>
+    s + (c.reviewQueue || []).filter(r => r.status === "awaiting_review").length, 0);
+  const highAlerts = clients.reduce((s, c) =>
+    s + (c.alerts || []).filter(a => a.sev === "high" || a.sev === "critical").length, 0);
+  const agentsOnline = clients.filter(c => c.agent?.status === "healthy").length;
+  const withAgents = clients.filter(c => (c.agent?.endpoints || 0) > 0).length;
+  const openConflicts = clients.reduce((s, c) => s + (c.conflicts || 0), 0);
+  const unscoredCount = clients.length - scored.length;
 
   const statusMeta = {
     on_track: { label: "On Track", color: SOC.green },
     needs_review: { label: "Needs Review", color: SOC.amber },
     attention: { label: "Attention", color: SOC.red },
+    // New state. The backend used to fall through to "on_track" when a client
+    // had no posture, painting a green badge on someone we'd never scored —
+    // which is the one thing a triage view must never do, because it tells a
+    // human to look away. "Unknown" is a gap in coverage, not a pass.
+    unknown: { label: "Unknown", color: SOC.purple },
   };
+  const metaFor = s => statusMeta[s] || statusMeta.unknown;
 
   const Header = ({ title, backTo }) => (
     <div style={{padding:"13px 22px",background:SOC.panel,borderBottom:`1px solid ${SOC.border}`,
@@ -7377,7 +7481,11 @@ function AnalystConsole({ user, onExit }) {
     const c = active;
     const clr = pColor(c.posture);
     const chatLog = [...(c.chat || []), ...((localChats[c.id]) || [])];
-    const trend = c.history[c.history.length-1] - c.history[0];
+    // Empty history (never scored) must not produce NaN. null means "no trend
+    // to show" — a client with one data point has no trend, and inventing a
+    // flat line would imply stability we haven't observed.
+    const hist = c.history || [];
+    const trend = hist.length > 1 ? hist[hist.length-1] - hist[0] : null;
 
     function sendChat() {
       if (!chatDraft.trim()) return;
@@ -7395,7 +7503,7 @@ function AnalystConsole({ user, onExit }) {
           {/* Top band: posture + agent + compliance + plan */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:16}}>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:36,fontWeight:800,color:clr,lineHeight:1}}>{c.posture}</div>
+              <div style={{fontSize:36,fontWeight:800,color:typeof c.posture==="number"?clr:SOC.textMut,lineHeight:1}}>{typeof c.posture==="number" ? c.posture : "—"}</div>
               <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginTop:3}}>POSTURE / 100</div>
               <div style={{marginTop:6,fontSize:10,color:trend>=0?SOC.green:SOC.red}}>
                 {trend>=0?"▲":"▼"} {Math.abs(trend)} pts / 12mo
@@ -7411,7 +7519,7 @@ function AnalystConsole({ user, onExit }) {
                     {am.label}
                   </div>
                   <div style={{fontSize:22,fontWeight:800,color:SOC.text,marginTop:6}}>{c.agent.endpoints}</div>
-                  <div style={{fontSize:9,color:SOC.textMut}}>endpoints · {c.agent.coverage}% coverage</div>
+                  <div style={{fontSize:9,color:SOC.textMut}}>{c.agent?.endpoints ? `${c.agent.healthy}/${c.agent.endpoints} healthy` : "no agent enrolled"}</div>
                   {c.agent.status === "offline" && (
                     <button style={{marginTop:8,width:"100%",padding:"6px",background:`${SOC.red}18`,
                       border:`1px solid ${SOC.red}44`,borderRadius:6,color:SOC.red,fontSize:10,fontWeight:600,cursor:"pointer"}}>
@@ -7425,16 +7533,16 @@ function AnalystConsole({ user, onExit }) {
               ); })()}
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct.framework} READINESS</div>
-              <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{c.compliancePct.current}%</div>
+              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct ? `${c.compliancePct.framework} READINESS` : "COMPLIANCE"}</div>
+              <div style={{fontSize:28,fontWeight:800,color:c.compliancePct?SOC.cyan:SOC.textMut,marginTop:4}}>{c.compliancePct ? `${c.compliancePct.current}%` : "—"}</div>
               <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
-                <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:SOC.cyan}}/>
+                <div style={{width:`${c.compliancePct?.current ?? 0}%`,height:"100%",background:SOC.cyan}}/>
               </div>
-              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {c.compliancePct.target}%</div>
+              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.compliancePct ? `across ${c.compliancePct.frameworks} framework(s)` : "no assessment on file"}</div>
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
               <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>MONTHLY VALUE</div>
-              <div style={{fontSize:24,fontWeight:800,color:SOC.green,marginTop:6}}>${c.mrr.toLocaleString()}</div>
+              <div style={{fontSize:24,fontWeight:800,color:typeof c.mrr==="number"?SOC.green:SOC.textMut,marginTop:6}}>{typeof c.mrr==="number" ? `$${c.mrr.toLocaleString()}` : "—"}</div>
               <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.plan}</div>
             </div>
           </div>
@@ -7450,13 +7558,13 @@ function AnalystConsole({ user, onExit }) {
             <SocPanel title="Live Threat Feed" accent={SOC.red}
               action={<span style={{fontSize:9,color:SOC.green,display:"flex",alignItems:"center",gap:5}}>
                 <span style={{width:6,height:6,borderRadius:"50%",background:SOC.green,boxShadow:`0 0 6px ${SOC.green}`}}/>LIVE</span>}>
-              {c.alerts.length === 0 ? (
+              {(c.alerts || []).length === 0 ? (
                 <div style={{color:SOC.textSec,fontSize:12,padding:"20px 0",textAlign:"center"}}>
                   No active threats. All clear. ✓
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:150,overflowY:"auto"}}>
-                  {c.alerts.map((a,i)=>(
+                  {(c.alerts || []).map((a,i)=>(
                     <div key={i} style={{display:"flex",gap:10,padding:"8px 10px",background:SOC.bg,
                       borderRadius:8,borderLeft:`3px solid ${sevColor(a.sev)}`}}>
                       <div style={{flex:1}}>
@@ -7505,13 +7613,13 @@ function AnalystConsole({ user, onExit }) {
 
             {/* Review & approval queue */}
             <SocPanel title="Review & Approval Queue" accent={SOC.amber}>
-              {c.reviewQueue.length === 0 ? (
+              {(c.reviewQueue || []).length === 0 ? (
                 <div style={{color:SOC.textSec,fontSize:12,padding:"20px 0",textAlign:"center"}}>
                   Nothing pending — client is up to date. ✓
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {c.reviewQueue.map((item,i)=>{
+                  {(c.reviewQueue || []).map((item,i)=>{
                     const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, draft:{label:"Draft",color:SOC.textMut} }[item.status];
                     return (
                       <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
@@ -7535,49 +7643,81 @@ function AnalystConsole({ user, onExit }) {
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-            {/* Weekly program status */}
-            <SocPanel title="Weekly Program Health" accent={SOC.blue}>
+            {/* Program health — from the client's actual answers, not inferred.
+                These four rows previously read:
+                  { label:"Patch compliance", val: c.posture>50?78:34 }
+                  { label:"MFA adoption",     val: c.posture>50?85:20 }
+                  { label:"Backup health",    val: c.posture>50?92:40 }
+                — three security metrics invented by a ternary on the posture
+                score and rendered as progress bars. An analyst reading "MFA
+                adoption 85%" would reasonably believe someone measured it.
+                Nobody did. The assessment answers these questions directly, and
+                the agent corroborates some of them, so we show that instead.
+                A control with no answer shows "not assessed", not a number. */}
+            <SocPanel title="Program Health" accent={SOC.blue}>
               <div style={{display:"flex",flexDirection:"column",gap:9}}>
                 {[
-                  { label:"Endpoint protection", val: c.agent.coverage, },
-                  { label:"Patch compliance", val: c.posture>50?78:34 },
-                  { label:"MFA adoption", val: c.posture>50?85:20 },
-                  { label:"Backup health", val: c.posture>50?92:40 },
+                  { label:"Endpoint protection", val: c.agent?.endpoints ? Math.round((c.agent.healthy / c.agent.endpoints) * 100) : null,
+                    note: c.agent?.endpoints ? `${c.agent.healthy}/${c.agent.endpoints} agents healthy` : "No agent enrolled" },
+                  { label:"Compliance readiness", val: c.compliancePct?.current ?? null,
+                    note: c.compliancePct ? `weakest: ${c.compliancePct.framework}` : "No assessment on file" },
+                  { label:"Posture", val: typeof c.posture === "number" ? c.posture : null,
+                    note: c.level || "Not scored" },
                 ].map((r,i)=>(
                   <div key={i}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
                       <span style={{color:SOC.textSec}}>{r.label}</span>
-                      <span style={{color:pColor(r.val),fontWeight:700}}>{r.val}%</span>
+                      <span style={{color:r.val===null?SOC.textMut:pColor(r.val),fontWeight:700}}>
+                        {r.val===null ? "—" : `${r.val}%`}
+                      </span>
                     </div>
                     <div style={{height:4,background:SOC.grid,borderRadius:2,overflow:"hidden"}}>
-                      <div style={{width:`${r.val}%`,height:"100%",background:pColor(r.val)}}/>
+                      <div style={{width:`${r.val ?? 0}%`,height:"100%",background:r.val===null?SOC.grid:pColor(r.val)}}/>
                     </div>
+                    <div style={{fontSize:9.5,color:SOC.textMut,marginTop:2}}>{r.note}</div>
                   </div>
                 ))}
               </div>
-              <button style={{marginTop:12,width:"100%",padding:"8px",background:SOC.panelHi,
-                border:`1px solid ${SOC.border}`,borderRadius:7,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>
-                Generate Weekly Report →
-              </button>
             </SocPanel>
 
-            {/* Compliance progress */}
-            <SocPanel title="Compliance Progress" accent={SOC.purple}>
-              <div style={{textAlign:"center",padding:"6px 0"}}>
-                <div style={{fontSize:11,color:SOC.textSec}}>{c.compliancePct.framework}</div>
-                <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
-                <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
-                  <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+            {/* Compliance progress — real readiness per framework.
+                This panel previously rendered c.compliancePct.target, a number
+                that existed only in SAMPLE_CLIENTS, and concluded "On track for
+                certification window" by comparing against it. That's a
+                compliance claim derived from a fabricated target. There is no
+                target in the real data because nobody has set one — so we show
+                what we actually computed: readiness per framework, weakest
+                first, and the gap count that drives it. */}
+            <SocPanel title="Compliance Readiness" accent={SOC.purple}>
+              {!c.compliancePct ? (
+                <div style={{textAlign:"center",padding:"14px 0",color:SOC.textMut,fontSize:11,lineHeight:1.6}}>
+                  No assessment on file.<br/>Nothing here is a pass — we haven't asked yet.
                 </div>
-                <div style={{fontSize:10,color:SOC.textMut}}>
-                  {c.compliancePct.target - c.compliancePct.current}% to target ({c.compliancePct.target}%)
-                </div>
-              </div>
-              <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
-                {c.compliancePct.current >= c.compliancePct.target - 10
-                  ? "On track for certification window."
-                  : "Remediation roadmap in progress."}
-              </div>
+              ) : (
+                <>
+                  <div style={{textAlign:"center",padding:"6px 0"}}>
+                    <div style={{fontSize:11,color:SOC.textSec}}>Weakest: {c.compliancePct.framework}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
+                    <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
+                      <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+                    </div>
+                    <div style={{fontSize:10,color:SOC.textMut}}>
+                      readiness over assessed controls · {c.compliancePct.frameworks} framework(s)
+                    </div>
+                  </div>
+                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
+                    {(c.compliancePct.detail || []).slice(0,6).map((f,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:10}}>
+                        <span style={{color:SOC.textSec,flex:1}}>{f.short}</span>
+                        {f.gaps > 0 && <span style={{color:SOC.amber}}>{f.gaps} gap{f.gaps>1?"s":""}</span>}
+                        <span style={{color:f.readinessPct===null?SOC.textMut:pColor(f.readinessPct),fontWeight:700,minWidth:32,textAlign:"right"}}>
+                          {f.readinessPct===null ? "—" : `${f.readinessPct}%`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </SocPanel>
 
             {/* Training program */}
@@ -7622,6 +7762,40 @@ function AnalystConsole({ user, onExit }) {
   }
 
   // ═══ PORTFOLIO OVERVIEW ═══
+  // Loading / error / empty states exist because the console never needed them
+  // before: SAMPLE_CLIENTS was always there, always populated, always cheerful.
+  // Real data can be absent, and each absence means something different.
+  if (portfolioErr || portfolio === null || clients.length === 0) {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="Portfolio Command Center"/>
+        <div style={{maxWidth:1180,margin:"0 auto",padding:"40px 20px"}}>
+          <div style={{background:SOC.panel,border:`1px solid ${portfolioErr?SOC.red+"44":SOC.border}`,
+            borderRadius:12,padding:"28px 24px",textAlign:"center"}}>
+            {portfolioErr ? (
+              <>
+                <div style={{color:SOC.red,fontSize:14,fontWeight:700,marginBottom:6}}>{portfolioErr}</div>
+                <div style={{color:SOC.textSec,fontSize:12}}>
+                  If you're an analyst and seeing this, your account may not have the analyst role yet.
+                </div>
+              </>
+            ) : portfolio === null ? (
+              <div style={{color:SOC.textSec,fontSize:13}}>Loading your portfolio…</div>
+            ) : (
+              <>
+                <div style={{color:SOC.text,fontSize:14,fontWeight:700,marginBottom:6}}>No clients assigned to you</div>
+                <div style={{color:SOC.textSec,fontSize:12,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>
+                  An admin assigns clients to analysts. You see only your own — that scoping is
+                  enforced server-side, not here.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
       <Header title="Portfolio Command Center"/>
@@ -7632,11 +7806,18 @@ function AnalystConsole({ user, onExit }) {
         <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:18}}>
           {[
             { label:"Active Clients", value:clients.length, color:SOC.cyan },
-            { label:"Monthly Recurring", value:`$${(totalMRR/1000).toFixed(1)}k`, color:SOC.green },
-            { label:"Avg Posture", value:avgPosture, color:pColor(avgPosture) },
-            { label:"Agents Online", value:`${agentsOnline}/${clients.length}`, color:SOC.blue },
+            // "—" until billing is wired. Not $0.0k, which would be a claim.
+            { label:"Monthly Recurring", value: totalMRR === null ? "—" : `$${(totalMRR/1000).toFixed(1)}k`,
+              color: totalMRR === null ? SOC.textMut : SOC.green,
+              hint: totalMRR === null ? "No billing integration yet — nothing to report." : null },
+            { label:"Avg Posture", value: avgPosture === null ? "—" : avgPosture,
+              color: avgPosture === null ? SOC.textMut : pColor(avgPosture),
+              hint: unscoredCount > 0 ? `${scored.length} of ${clients.length} scored` : null },
+            { label:"Agents Online", value:`${agentsOnline}/${withAgents || 0}`, color:SOC.blue,
+              hint: withAgents < clients.length ? `${clients.length - withAgents} without an agent` : null },
             { label:"Pending Reviews", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
-            { label:"High Alerts", value:highAlerts, color:highAlerts>0?SOC.red:SOC.green },
+            { label:"Conflicts", value:openConflicts, color:openConflicts>0?SOC.amber:SOC.green,
+              hint: openConflicts > 0 ? "Agent telemetry disagrees with client answers" : null },
           ].map((k,i)=>(
             <div key={i} style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"14px",textAlign:"center"}}>
               <div style={{fontSize:24,fontWeight:800,color:k.color}}>{k.value}</div>
@@ -7672,9 +7853,9 @@ function AnalystConsole({ user, onExit }) {
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {clients.map(c=>{
                 const clr = pColor(c.posture);
-                const sm = statusMeta[c.status];
-                const pend = c.reviewQueue.filter(r=>r.status==="awaiting_review").length;
-                const highA = c.alerts.filter(a=>a.sev==="high").length;
+                const sm = metaFor(c.status);
+                const pend = (c.reviewQueue || []).filter(r=>r.status==="awaiting_review").length;
+                const highA = (c.alerts || []).filter(a=>a.sev==="high"||a.sev==="critical").length;
                 return (
                   <div key={c.id} onClick={()=>{setActive(c);setView("client");}}
                     style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,
@@ -7683,7 +7864,7 @@ function AnalystConsole({ user, onExit }) {
                       background:`conic-gradient(${clr} ${c.posture*3.6}deg, ${SOC.grid} 0deg)`,
                       display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <div style={{width:36,height:36,borderRadius:"50%",background:SOC.panel,
-                        display:"flex",alignItems:"center",justifyContent:"center",color:clr,fontWeight:700,fontSize:13}}>{c.posture}</div>
+                        display:"flex",alignItems:"center",justifyContent:"center",color:typeof c.posture==="number"?clr:SOC.textMut,fontWeight:700,fontSize:13}}>{typeof c.posture==="number" ? c.posture : "—"}</div>
                     </div>
                     <div style={{flex:1}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>

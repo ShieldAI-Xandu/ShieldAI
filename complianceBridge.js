@@ -274,6 +274,16 @@ export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
   const sections = {};
   for (const r of requirements) (sections[r.section] ||= []).push(r);
 
+  // A module can veto a percentage even when controls scored.
+  //
+  // State Privacy does this for a business holding no consumer data: it sets
+  // noConsumerData and returns coveragePct: null, because reporting "0%
+  // compliant" would imply we'd decided those laws apply to them — and we
+  // explicitly refuse to decide that. The bridge computes its own percentage
+  // from control statuses, so without this check it would cheerfully report the
+  // 0% the module just declined to state.
+  const moduleVetoedPct = result?.summary?.coveragePct === null && assessed > 0;
+
   return {
     framework: def,
     depth: f.depth,
@@ -289,8 +299,13 @@ export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
       // by the total would let an unanswered questionnaire read as "0% compliant"
       // when the truth is "we haven't asked yet" — a different, and much less
       // alarming, statement.
-      compliancePct: assessed ? Math.round((compliant / assessed) * 100) : null,
-      readinessPct: assessed ? Math.round(((compliant + partial * 0.5) / assessed) * 100) : null,
+      compliancePct: moduleVetoedPct ? null : (assessed ? Math.round((compliant / assessed) * 100) : null),
+      readinessPct: moduleVetoedPct ? null : (assessed ? Math.round(((compliant + partial * 0.5) / assessed) * 100) : null),
+      // Why there's no percentage, when there is one to give. The UI should
+      // print this rather than a bare dash.
+      pctSuppressedReason: moduleVetoedPct
+        ? (result?.noConsumerDataNote || "This framework declined to score — see its notes.")
+        : null,
     },
     sectionNames: Object.keys(sections),
     requirements,

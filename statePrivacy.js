@@ -367,6 +367,9 @@ export function assessStatePrivacy(checklistAnswers = {}) {
     roster: STATE_ROSTER,
     applicability: applicabilityPrompt(checklistAnswers),
     noConsumerData,
+    noConsumerDataNote: noConsumerData
+      ? "You indicated you hold no consumer personal information. We're not scoring these obligations, because a percentage would imply we'd decided they apply to you — and applicability is a legal question we don't answer. Two cautions: several states treat some B2B contact data as in scope, and California explicitly covers employee data. If either could describe you, take it to counsel rather than relying on this."
+      : null,
     areas,
     summary: {
       total: STATE_PRIVACY_OBLIGATIONS.length,
@@ -376,7 +379,16 @@ export function assessStatePrivacy(checklistAnswers = {}) {
       partial: scored.filter(o => o.status === STATUS.PARTIAL).length,
       gaps: gaps.length,
       unknown: all.length - scored.length,
-      coveragePct: scored.length ? Math.round((met.length / scored.length) * 100) : null,
+      // A business holding no consumer data reports null, not 0%.
+      //
+      // We already set noConsumerData and refuse to determine applicability —
+      // but then scored them 0% with 18 gaps anyway, which is the same lie in
+      // the other direction. "You fail 18 privacy obligations" is a claim; the
+      // truth is that these obligations may not reach them at all, and we say
+      // elsewhere that we can't decide that. A B2B manufacturer opening this
+      // report should see "not applicable — verify with counsel", not a wall of
+      // red for consumer rights they'll never receive a request about.
+      coveragePct: noConsumerData ? null : (scored.length ? Math.round((met.length / scored.length) * 100) : null),
     },
     topGaps: gaps.slice(0, 5).map(g => ({ id: g.id, area: g.area, name: g.name, covers: g.covers })),
     weakestAreas: areas

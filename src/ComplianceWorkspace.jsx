@@ -126,6 +126,12 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
               <div style={{ color: C.textMut, fontSize: 11.5 }}>
                 No control-level walkthrough for this framework — we won't fake one.
               </div>
+            ) : f.pctSuppressedReason ? (
+              // A percentage was deliberately withheld. Say why — a bare dash
+              // looks like a loading state or a bug, and this is neither.
+              <div style={{ color: C.textSec, fontSize: 11.5, lineHeight: 1.6 }}>
+                {f.pctSuppressedReason}
+              </div>
             ) : (
               <>
                 <div style={{ height: 6, background: C.surface, borderRadius: 4, overflow: "hidden", marginBottom: 6 }}>

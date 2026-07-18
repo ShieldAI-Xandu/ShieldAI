@@ -22,6 +22,13 @@
 // clients; analysts see only clients assigned to them.
 
 import { logClientAction } from "./assignmentRoutes.js";
+// The same engine the client's own dashboard uses. Scoring the analyst's view
+// from a different source than the client's would let the two disagree, which
+// is the one thing a vCISO dashboard cannot do.
+import { computePostureScore } from "./riskEngine.js";
+import { disputes } from "./agentEvidence.js";
+import { toEvidence } from "./securityChecklist.js";
+import { evaluateAllFrameworks } from "./complianceBridge.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -132,7 +139,18 @@ export function registerPortfolioRoutes(
     return analystOwnsClient(db, req.userId, clientId);
   }
 
-  // Latest scored program for a user → posture score/level + weakest areas.
+  // Posture for a user.
+  //
+  // Prefers the stored program's riskOverview (which is what a client saw when
+  // their program was generated, so the two views agree). Falls back to
+  // computing from the latest assessment.
+  //
+  // The fallback matters more than it looks. Before it, this read ONLY
+  // db.data.programs — so a client who had completed the full assessment but
+  // never generated a program showed `posture: null` and, via deriveStatus,
+  // rendered as "on track" on the analyst's dashboard. Green for a client we
+  // had never scored. The answers were sitting in db.data.assessments the whole
+  // time; nothing was asking the engine.
   function latestPosture(userId) {
     const progs = (db.data.programs || [])
       .filter(p => p.userId === userId)
@@ -153,10 +171,149 @@ export function registerPortfolioRoutes(
           level: ro.postureLevel || null,
           weakest,
           scoredAt: p.meta?.generatedAt || p.createdAt,
+          source: "program",
         };
       }
     }
-    return null;
+
+    // No program — score the assessment directly. Same deterministic engine the
+    // client's own dashboard uses, so the numbers cannot drift apart.
+    const assessments = (db.data.assessments || [])
+      .filter(a => a.userId === userId)
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+    const a = assessments[0];
+    if (!a?.data) return null;
+    try {
+      const r = computePostureScore(a.data);
+      if (typeof r?.postureScore !== "number") return null;
+      return {
+        score: r.postureScore,
+        level: r.postureLevel || null,
+        weakest: (r.weakestAreas || []).map(w => (typeof w === "string" ? w : w.name)).filter(Boolean),
+        scoredAt: a.updatedAt || a.createdAt,
+        source: "assessment",
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // How many agent-vs-questionnaire conflicts are open for this client.
+  // Cheap enough to compute per row, and it's the thing an analyst most needs
+  // to triage on: a conflict means measured telemetry contradicts what the
+  // client believes about their own environment.
+  function conflictCount(userId) {
+    try {
+      const a = (db.data.assessments || [])
+        .filter(x => x.userId === userId)
+        .sort((x, y) => new Date(y.updatedAt || y.createdAt) - new Date(x.updatedAt || x.createdAt))[0];
+      if (!a?.data) return 0;
+      const byHost = new Map();
+      for (const r of (db.data.agentReports || [])) {
+        if (r.ownerUserId !== userId) continue;
+        const rep = r.report || r;
+        const h = rep?.host?.hostname;
+        if (!h) continue;
+        const prev = byHost.get(h);
+        if (!prev || new Date(r.receivedAt || 0) > new Date(prev.receivedAt || 0)) {
+          byHost.set(h, { receivedAt: r.receivedAt, rep });
+        }
+      }
+      if (!byHost.size) return 0;
+      const checklist = a.data.checklist || a.data.securityChecklist || {};
+      return disputes([...byHost.values()].map(v => v.rep), toEvidence(checklist)).length;
+    } catch { return 0; }
+  }
+
+  // ── Helpers for the analyst console's per-client fields ──────
+  // Each reads the same source as the dedicated endpoint that serves it, so the
+  // portfolio row and the drill-down can't disagree.
+
+  // The company profile from the client's latest assessment.
+  function latestCompany(userId) {
+    const a = (db.data.assessments || [])
+      .filter(x => x.userId === userId)
+      .sort((x, y) => new Date(y.updatedAt || y.createdAt) - new Date(x.updatedAt || x.createdAt))[0];
+    return a?.data?.company || null;
+  }
+
+  // Trailing posture scores, one per day, for a sparkline. Same source as
+  // /posture-history. Empty array when we've never scored them — NOT a
+  // flat line at some default, which would draw a trend that doesn't exist.
+  function postureTrend(userId) {
+    const points = [];
+    for (const s of db.data.postureSnapshots || []) {
+      if (s.userId === userId) points.push({ at: s.at, score: s.score });
+    }
+    for (const h of db.data.postureHistory || []) {
+      if (h.userId === userId) points.push({ at: h.at, score: h.score });
+    }
+    points.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const byDay = new Map();
+    for (const pt of points) byDay.set(new Date(pt.at).toISOString().slice(0, 10), pt);
+    return [...byDay.values()].slice(-12).map(p => p.score);
+  }
+
+  // Recent agent events. Same source as /alerts.
+  function recentAlerts(userId) {
+    return (db.data.agentEvents || [])
+      .filter(e => e.ownerUserId === userId)
+      .sort((a, b) => new Date(b.ts) - new Date(a.ts))
+      .slice(0, 5)
+      .map(e => ({
+        sev: e.severity || "info",
+        title: e.message || e.type || "Security event",
+        time: e.ts,
+        detail: e.detail || e.message || "",
+      }));
+  }
+
+  // Items awaiting an analyst decision. Same source as /review-queue.
+  function reviewItems(userId) {
+    const out = [];
+    for (const p of db.data.programs || []) {
+      if (p.userId !== userId) continue;
+      const gen = p.status || "complete";
+      if (!["complete", "awaiting_review", "pending", "in_review", "draft"].includes(gen)) continue;
+      out.push({
+        id: p.id, kind: "program",
+        title: p.meta?.companyName ? `Security program — ${p.meta.companyName}` : "Security program",
+        status: ["approved", "changes_requested"].includes(p.reviewStatus) ? p.reviewStatus : "awaiting_review",
+      });
+    }
+    for (const d of db.data.policyDocs || []) {
+      if (d.userId !== userId) continue;
+      out.push({
+        id: d.id, kind: "policy", title: d.title || d.name || "Policy",
+        status: ["approved", "changes_requested"].includes(d.reviewStatus) ? d.reviewStatus : "awaiting_review",
+      });
+    }
+    return out;
+  }
+
+  // Compliance across the client's frameworks, computed by the real engine.
+  // Returns null when there's no assessment — the console must render "—", not
+  // a percentage. "0% compliant" for a client who hasn't answered is a
+  // different and much more alarming statement than "we haven't asked yet".
+  function complianceRollup(userId) {
+    try {
+      const a = (db.data.assessments || [])
+        .filter(x => x.userId === userId)
+        .sort((x, y) => new Date(y.updatedAt || y.createdAt) - new Date(x.updatedAt || x.createdAt))[0];
+      if (!a?.data) return null;
+      const checklist = a.data.checklist || a.data.securityChecklist || {};
+      if (!Object.keys(checklist).length) return null;
+      const rows = evaluateAllFrameworks(checklist).filter(f => !f.notControlMapped && f.assessed > 0);
+      if (!rows.length) return null;
+      // Lead with the weakest framework — it's what an analyst should look at.
+      const worst = [...rows].sort((x, y) => (x.readinessPct ?? 101) - (y.readinessPct ?? 101))[0];
+      return {
+        framework: worst.short || worst.name,
+        current: worst.readinessPct,
+        frameworks: rows.length,
+        detail: rows.map(f => ({ short: f.short, readinessPct: f.readinessPct, gaps: f.gap })),
+      };
+    } catch { return null; }
   }
 
   // Agent-health rollup for a user across all their non-revoked agents.
@@ -201,11 +358,22 @@ export function registerPortfolioRoutes(
 
   // Derive a coarse "needs attention" status from real signals so the portfolio
   // cards can sort/triage without any hardcoded state.
-  function deriveStatus(posture, health, openRecs) {
+  function deriveStatus(posture, health, openRecs, conflicts = 0) {
     if (health.status === "offline") return "attention";
     if (posture && posture.score < 40) return "attention";
+    // A conflict means the agent measured something that contradicts what the
+    // client told us. That outranks a merely-mediocre score: a wrong answer
+    // makes every framework built on it wrong too, and only a human can settle
+    // it. It belongs at the top of an analyst's list.
+    if (conflicts > 0) return "needs_review";
     if (openRecs > 0) return "needs_review";
     if (posture && posture.score < 60) return "needs_review";
+    // No posture means we have no assessment for this client — we know nothing
+    // about them. That is NOT "on track". This is an analyst's triage view: a
+    // green badge against a client we've never scored is the same lie as
+    // reporting "0% compliant" for an unanswered questionnaire, except worse,
+    // because it tells a human to look away.
+    if (!posture) return "unknown";
     return "on_track";
   }
 
@@ -219,6 +387,7 @@ export function registerPortfolioRoutes(
         const posture = latestPosture(cid);
         const health = agentHealth(cid);
         const openRecs = openRecCount(cid);
+        const conflicts = conflictCount(cid);
         const sub = subOf(cid);
         return {
           id: cid,
@@ -230,16 +399,54 @@ export function registerPortfolioRoutes(
           level: posture ? posture.level : null,
           weakest: posture ? posture.weakest : [],
           scoredAt: posture ? posture.scoredAt : null,
+          // Whether this score came from a generated program or straight from
+          // the assessment. An analyst asking "why does this client have a
+          // score but no program?" deserves an answer in the payload.
+          postureSource: posture ? posture.source : null,
           agent: health,
           openItems: openRecs,
-          status: deriveStatus(posture, health, openRecs),
-          hasProgram: !!posture,
+          status: deriveStatus(posture, health, openRecs, conflicts),
+          hasProgram: !!posture && posture.source === "program",
+          hasAssessment: !!posture,
+          // Where the client's conflicts stand. This is the analyst's real
+          // queue: agent telemetry disagreeing with a client's answers is a
+          // finding that needs a human, and it should not be buried a click
+          // deep inside a framework view.
+          conflicts,
+
+          // ── Fields the analyst console reads ──────────────────
+          // These exist because the console previously rendered SAMPLE_CLIENTS:
+          // 143 lines of hardcoded fake clients — invented posture scores,
+          // fabricated phishing alerts, made-up MRR — on the landing page an
+          // analyst sees first. Real data was being fetched and shown only in a
+          // secondary tab.
+          //
+          // Every field below is real or explicitly null. Nothing is
+          // approximated to fill a slot: `null` means we don't have it, and the
+          // UI must render that as "—" rather than a plausible-looking number.
+          // A fabricated posture score on an analyst's dashboard is worse than
+          // an empty one, because it gets acted on.
+          industry: latestCompany(cid)?.industry || null,
+          employees: latestCompany(cid)?.size || null,
+          // No billing integration yet (Stripe deferred), so there is no MRR to
+          // report. null, not 0 — zero would read as "this client pays nothing",
+          // which is a claim we can't make.
+          mrr: null,
+          history: postureTrend(cid),
+          alerts: recentAlerts(cid),
+          reviewQueue: reviewItems(cid),
+          compliancePct: complianceRollup(cid),
+          lastActivity: posture?.scoredAt || null,
         };
       })
       .filter(Boolean)
       // Attention first, then by weakest posture.
       .sort((a, b) => {
-        const rank = s => (s === "attention" ? 0 : s === "needs_review" ? 1 : 2);
+        // attention > needs_review > unknown > on_track.
+        // "unknown" sits above "on_track" deliberately: a client we've never
+        // scored is a gap in the analyst's coverage, not a success. Sorting it
+        // to the bottom next to healthy clients is how it stays unnoticed.
+        const rank = s => (s === "attention" ? 0 : s === "needs_review" ? 1 : s === "unknown" ? 2 : 3);
         if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
         return (a.posture ?? 101) - (b.posture ?? 101);
       });

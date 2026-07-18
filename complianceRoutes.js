@@ -125,10 +125,30 @@ export function registerComplianceRoutes(app, {
 
   // ── Framework catalogue ──
   app.get("/api/compliance/frameworks", requireAuth, (req, res) => {
-    res.json(Object.values(FRAMEWORKS).map(f => ({
-      id: f.id, name: f.name, short: f.short,
-      description: f.description, requirementCount: f.requirements.length,
-    })));
+    // depth is the honesty flag the picker needs: a client choosing GDPR should
+    // know it gets an AI-assisted gap analysis rather than a control-level
+    // walkthrough BEFORE they pick it, not after.
+    //
+    // requirementCount previously read f.requirements.length off the
+    // back-compat FRAMEWORKS object, whose `requirements` array is always
+    // empty — so every framework reported 0. Count from the registry instead,
+    // and report null (not 0) for frameworks that have no control list, since
+    // "zero controls" and "not a control-mapped framework" are different claims.
+    res.json(listFrameworkIds().map(id => {
+      const def = getFrameworkDef(id);
+      const report = evaluateFramework(id, {});
+      return {
+        id: def.id,
+        name: def.name,
+        short: def.short,
+        description: def.description,
+        depth: def.depth,
+        citation: def.citation,
+        note: def.note,
+        legalReviewRequired: def.legalReviewRequired || false,
+        requirementCount: report && !report.notControlMapped ? report.summary.total : null,
+      };
+    }));
   });
 
   // ── Multi-framework overview for one client ──
