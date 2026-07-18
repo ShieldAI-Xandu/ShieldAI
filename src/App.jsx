@@ -604,6 +604,39 @@ function getAuthToken() {
 const CapabilityContext = createContext({ can: () => false, tier: "free", capabilities: {} });
 function useCapabilities() { return useContext(CapabilityContext); }
 
+// ── White-label branding store ──
+// Resolves the brand THIS user should see (their assigned analyst's brand, the
+// platform default, or ShieldAI's built-in default) from GET /api/branding.
+// Implemented as a tiny subscribable store rather than a context provider so it
+// can re-skin every ShieldLockup without wrapping the app's many render
+// branches. Display-only; the advisory boundary is untouched.
+const DEFAULT_BRAND = {
+  productName: "ShieldAI", companyName: "ShieldAI", tagline: "Virtual CISO Platform",
+  logoUrl: null, primaryColor: "#2E5EAA", accentColor: "#00C8FF",
+  supportEmail: null, supportUrl: null, footerNote: null, isDefault: true,
+};
+let _brand = DEFAULT_BRAND;
+const _brandSubs = new Set();
+function setBrand(b) {
+  _brand = b ? { ...DEFAULT_BRAND, ...b } : DEFAULT_BRAND;
+  _brandSubs.forEach(fn => { try { fn(_brand); } catch { /* ignore */ } });
+}
+// React hook: subscribe to the current brand.
+function useBranding() {
+  const [b, setB] = useState(_brand);
+  useEffect(() => { _brandSubs.add(setB); setB(_brand); return () => { _brandSubs.delete(setB); }; }, []);
+  return b;
+}
+// Fetch + publish the resolved brand for the logged-in user. Call from the root
+// whenever the user changes; resets to default when logged out.
+function refreshBrandForUser(user) {
+  if (!user) { setBrand(DEFAULT_BRAND); return; }
+  authFetch(`${API_BASE}/api/branding`)
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (d) setBrand(d); })
+    .catch(() => { /* keep default — branding must never block the app */ });
+}
+
 // Global hook for tier-gate (HTTP 402) responses. The root registers a handler
 // that shows an "upgrade" modal; any gated API call that returns 402 triggers it.
 let _onUpgradeRequired = null;
@@ -1393,6 +1426,926 @@ function ComplianceSection({ results }) {
 // single source of truth for what a client is told. This component deliberately
 // does NOT compute its own status — that's how a UI drifts into implying
 // monitoring that isn't actually running.
+// ─────────────────────────────────────────────────────────────
+//  CVE EXPOSURE — live NVD-backed vulnerability matching.
+//  Reads /api/client/cve-exposure, which derives real CVEs from the
+//  software the monitoring agent / assessment actually reports. This is
+//  the real-data replacement for the model-generated "recentCVEs" prose
+//  that used to sit in this section — nothing here is fabricated.
+// ─────────────────────────────────────────────────────────────
+const SEV_TONE = {
+  CRITICAL: C.red, HIGH: C.red, MEDIUM: C.amber, LOW: C.green, UNKNOWN: C.textSec,
+};
+function cveSevColor(s) { return SEV_TONE[String(s || "UNKNOWN").toUpperCase()] || C.textSec; }
+
+function CveExposureCard() {
+  const [data, setData] = useState(null);     // { software, exposure, note? }
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/cve-exposure`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load CVE exposure.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function refresh() {
+    setRefreshing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/cve-exposure/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Refresh failed.");
+      // Refresh returns { userId, exposure }; reload the full view so
+      // software list + note stay in sync with the recomputed exposure.
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setRefreshing(false); }
+  }
+
+  const exposure = data?.exposure;
+  const counts = exposure?.counts || {};
+  const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+  const totalFindings = order.reduce((n, k) => n + (counts[k] || 0), 0);
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="CVE Exposure"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>LIVE · NVD/CVE</span>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          {exposure?.degraded && (
+            <span style={{fontSize:11,color:C.amber,fontWeight:600}}>⚠ partial results</span>
+          )}
+          <button onClick={refresh} disabled={refreshing||loading}
+            style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.border}`,
+              background:C.surface,color:C.accent,fontSize:12,fontWeight:600,
+              cursor:(refreshing||loading)?"default":"pointer",opacity:(refreshing||loading)?0.6:1}}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* No inventory — honest empty state, not a fabricated all-clear. */}
+          {(!data?.software || data.software.length === 0) ? (
+            <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+              {data?.note ||
+                "No software inventory found yet. CVE matching needs the monitoring agent's inventory or a tech-stack entry in the assessment."}
+            </div>
+          ) : (
+            <>
+              {/* Severity rollup */}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+                {order.filter(k => counts[k]).map(k => (
+                  <div key={k} style={{display:"flex",alignItems:"center",gap:7,padding:"6px 12px",
+                    background:`${cveSevColor(k)}12`,border:`1px solid ${cveSevColor(k)}33`,borderRadius:8}}>
+                    <span style={{fontSize:16,fontWeight:800,color:cveSevColor(k)}}>{counts[k]}</span>
+                    <span style={{fontSize:11,fontWeight:600,color:cveSevColor(k),letterSpacing:0.4}}>{k}</span>
+                  </div>
+                ))}
+                {totalFindings === 0 && (
+                  <div style={{padding:"6px 12px",background:`${C.green}12`,
+                    border:`1px solid ${C.green}33`,borderRadius:8,color:C.green,fontSize:12,fontWeight:600}}>
+                    No CVEs matched the current inventory.
+                  </div>
+                )}
+              </div>
+
+              {/* Monitored software */}
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                MONITORED SOFTWARE ({data.software.length})
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+                {data.software.map((sw,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                    border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>{sw}</span>
+                ))}
+              </div>
+
+              {/* Top CVEs, most severe first */}
+              {(exposure?.top || []).length > 0 && (
+                <>
+                  <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                    HIGHEST-SEVERITY MATCHES
+                  </div>
+                  {(exposure.top || []).map((c,i) => (
+                    <div key={c.id+i} style={{marginBottom:8,padding:"10px 12px",
+                      background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                        <a href={c.url||`https://www.cve.org/CVERecord?id=${c.id}`} target="_blank" rel="noreferrer"
+                          style={{color:C.accent,fontSize:12.5,fontWeight:700,textDecoration:"none"}}>{c.id}</a>
+                        <Badge label={String(c.severity||"UNKNOWN")} color={cveSevColor(c.severity)}/>
+                        {c.score != null && (
+                          <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>CVSS {c.score}</span>
+                        )}
+                        {c.software && (
+                          <span style={{marginLeft:"auto",fontSize:11,color:C.textSec}}>{c.software}</span>
+                        )}
+                      </div>
+                      <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{c.description}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {exposure?.queriedAt && (
+                <div style={{marginTop:10,fontSize:11,color:C.textMut}}>
+                  Queried {new Date(exposure.queriedAt).toLocaleString()} · source: NVD
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  REMEDIATION — the closed loop.
+//  Gaps ranked by projected posture gain → create task → work it →
+//  complete it → the deterministic engine re-scores and the trend moves.
+//  Everything here reads/writes /api/tasks/*; no score is ever invented.
+// ─────────────────────────────────────────────────────────────
+const TASK_STATUS_TONE = {
+  open:        { color: C.textSec, label: "Open" },
+  in_progress: { color: C.accent,  label: "In Progress" },
+  blocked:     { color: C.red,     label: "Blocked" },
+  done:        { color: C.green,   label: "Done" },
+  cancelled:   { color: C.textMut, label: "Cancelled" },
+};
+const TASK_PRIO_TONE = {
+  critical: C.red, high: "#FF8C00", medium: C.amber, low: C.textSec,
+};
+
+// Small dependency-free SVG line chart for posture over time.
+function PostureTrend({ history }) {
+  const pts = (history || []).map(h => ({ t: new Date(h.at).getTime(), score: h.score }));
+  if (pts.length < 2) {
+    return (
+      <div style={{color:C.textMut,fontSize:12,padding:"8px 0"}}>
+        The trend chart fills in as tasks are completed — each completion records a real posture snapshot.
+      </div>
+    );
+  }
+  const W = 640, H = 120, pad = 24;
+  const xs = pts.map(p => p.t), ys = pts.map(p => p.score);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.max(0, Math.min(...ys) - 5), yMax = Math.min(100, Math.max(...ys) + 5);
+  const xOf = t => pad + ((t - xMin) / (xMax - xMin || 1)) * (W - pad * 2);
+  const yOf = s => H - pad - ((s - yMin) / (yMax - yMin || 1)) * (H - pad * 2);
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${xOf(p.t).toFixed(1)},${yOf(p.score).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1], first = pts[0];
+  const net = last.score - first.score;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{display:"block"}}>
+        <line x1={pad} y1={H-pad} x2={W-pad} y2={H-pad} stroke={C.border} strokeWidth="1"/>
+        <path d={path} fill="none" stroke={C.accent} strokeWidth="2"/>
+        {pts.map((p,i) => (
+          <circle key={i} cx={xOf(p.t)} cy={yOf(p.score)} r="3" fill={C.accent}/>
+        ))}
+        <circle cx={xOf(last.t)} cy={yOf(last.score)} r="4.5" fill={C.green}/>
+      </svg>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.textMut,marginTop:4}}>
+        <span>{new Date(first.t).toLocaleDateString()} · {first.score}</span>
+        <span style={{color: net >= 0 ? C.green : C.red, fontWeight:600}}>
+          {net >= 0 ? "+" : ""}{net} over {pts.length} snapshots
+        </span>
+        <span>{new Date(last.t).toLocaleDateString()} · {last.score}</span>
+      </div>
+    </div>
+  );
+}
+
+function RemediationSection() {
+  const [gaps, setGaps] = useState(null);      // { posture, gaps[] }
+  const [tasks, setTasks] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [tab, setTab] = useState("gaps");       // gaps | tasks
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [gRes, tRes, hRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/tasks/gaps`),
+        authFetch(`${API_BASE}/api/tasks`),
+        authFetch(`${API_BASE}/api/tasks/posture-history`),
+      ]);
+      const g = await gRes.json();
+      const t = await tRes.json();
+      const h = await hRes.json();
+      if (!gRes.ok) throw new Error(g.error || "Could not load gap analysis.");
+      setGaps(g);
+      setTasks(Array.isArray(t) ? t : []);
+      setHistory(Array.isArray(h) ? h : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  function flash(msg, tone = C.green) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function createTask(gap, priority = "medium") {
+    setBusyId("gap:" + gap.controlId); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          controlId: gap.controlId, targetLabel: gap.targetAnswer,
+          title: `Improve: ${gap.question}`, priority,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not create task.");
+      flash(`Task created · projected +${gap.projectedGain} posture`);
+      await loadAll();
+      setTab("tasks");
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function setStatus(task, status) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not update task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function complete(task) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not complete task.");
+      const p = d.posture || {};
+      const delta = p.delta ?? 0;
+      flash(`Completed · posture ${p.before} → ${p.after} (${delta >= 0 ? "+" : ""}${delta})`,
+        delta >= 0 ? C.green : C.amber);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function removeTask(task) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Could not delete task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  const posture = gaps?.posture;
+  const openGaps = (gaps?.gaps || []).filter(g => !g.hasOpenTask);
+  const activeTasks = tasks.filter(t => !["done", "cancelled"].includes(t.status));
+  const doneTasks = tasks.filter(t => t.status === "done");
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Remediation"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>DETERMINISTIC SCORING</span>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* Posture header + trend */}
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:20,flexWrap:"wrap"}}>
+              <div style={{minWidth:120}}>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:4}}>POSTURE SCORE</div>
+                {posture ? (
+                  <>
+                    <div style={{fontSize:40,fontWeight:800,color:C.accent,lineHeight:1}}>{posture.score}</div>
+                    <div style={{fontSize:12,color:C.textSec,marginTop:4}}>{posture.level}</div>
+                  </>
+                ) : (
+                  <div style={{fontSize:13,color:C.textSec}}>No assessment yet.</div>
+                )}
+              </div>
+              <div style={{flex:1,minWidth:280}}>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:6}}>POSTURE TREND</div>
+                <PostureTrend history={history}/>
+              </div>
+            </div>
+            {posture?.weakestAreas?.length > 0 && (
+              <div style={{marginTop:12,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>WEAKEST:</span>
+                {posture.weakestAreas.map((w,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:`${C.red}12`,
+                    border:`1px solid ${C.red}30`,color:C.red,fontSize:11}}>{w}</span>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Tabs */}
+          <div style={{display:"flex",gap:8,marginBottom:14}}>
+            {[["gaps",`Prioritized Gaps (${openGaps.length})`],["tasks",`Tasks (${activeTasks.length})`]].map(([id,label]) => (
+              <button key={id} onClick={()=>setTab(id)}
+                style={{padding:"7px 16px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",
+                  border:`1px solid ${tab===id?C.accent:C.border}`,
+                  background:tab===id?`${C.accent}18`:C.surface,
+                  color:tab===id?C.accent:C.textSec}}>{label}</button>
+            ))}
+          </div>
+
+          {/* GAPS */}
+          {tab === "gaps" && (
+            <>
+              {!posture ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>
+                  Complete a security assessment to see prioritized remediation gaps.
+                </div></Card>
+              ) : openGaps.length === 0 ? (
+                <Card><div style={{color:C.green,fontSize:13,fontWeight:600}}>
+                  ✓ No open gaps. Every scored control is at its best answer, or already has a task.
+                </div></Card>
+              ) : (
+                <div style={{fontSize:12,color:C.textSec,marginBottom:10}}>
+                  Ranked by how much each fix would move the deterministic posture score. Creating a task lets you track the work; completing it applies the change and re-scores.
+                </div>
+              )}
+              {openGaps.map(g => {
+                const busy = busyId === "gap:" + g.controlId;
+                return (
+                  <Card key={g.controlId} style={{marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+                      <div style={{textAlign:"center",minWidth:60}}>
+                        <div style={{fontSize:22,fontWeight:800,color:C.green}}>+{g.projectedGain}</div>
+                        <div style={{fontSize:9,color:C.textMut,letterSpacing:0.5}}>PROJECTED</div>
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                          <Badge label={g.nistFunction} color={NIST_COLORS[g.nistFunction]}/>
+                          <span style={{fontSize:11,color:C.textMut}}>→ score {g.projectedScore}</span>
+                        </div>
+                        <div style={{color:C.text,fontSize:13.5,fontWeight:600,marginBottom:6}}>{g.question}</div>
+                        <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>
+                          <span style={{color:C.textMut}}>Now:</span> {g.currentAnswer || "Unanswered"}
+                          <span style={{margin:"0 8px",color:C.textMut}}>→</span>
+                          <span style={{color:C.green}}>{g.targetAnswer}</span>
+                        </div>
+                      </div>
+                      <button onClick={()=>createTask(g)} disabled={busy}
+                        style={{padding:"8px 14px",borderRadius:8,border:"none",
+                          background:C.accent,color:"#04121F",fontSize:12.5,fontWeight:700,
+                          cursor:busy?"default":"pointer",opacity:busy?0.6:1,whiteSpace:"nowrap"}}>
+                        {busy ? "Creating…" : "Create Task"}
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </>
+          )}
+
+          {/* TASKS */}
+          {tab === "tasks" && (
+            <>
+              {activeTasks.length === 0 && doneTasks.length === 0 ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>
+                  No tasks yet. Open the Prioritized Gaps tab to turn your biggest fixes into tracked work.
+                </div></Card>
+              ) : null}
+
+              {activeTasks.map(t => {
+                const busy = busyId === t.id;
+                const tone = TASK_STATUS_TONE[t.status] || TASK_STATUS_TONE.open;
+                const overdue = t.dueDate && new Date(t.dueDate) < new Date();
+                return (
+                  <Card key={t.id} style={{marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                      <span style={{width:8,height:8,borderRadius:"50%",background:TASK_PRIO_TONE[t.priority]||C.textSec}}/>
+                      <span style={{color:C.text,fontSize:13.5,fontWeight:600,flex:1}}>{t.title}</span>
+                      {t.projectedGain != null && (
+                        <span style={{fontSize:11,color:C.green,fontWeight:600}}>+{t.projectedGain} projected</span>
+                      )}
+                      <span style={{fontSize:11,fontWeight:700,color:tone.color,
+                        padding:"2px 9px",borderRadius:20,background:`${tone.color}18`}}>{tone.label}</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10}}>
+                      <span>{t.nistFunction}</span>
+                      {t.dueDate && (
+                        <span style={{color:overdue?C.red:C.textMut}}>
+                          {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {t.status !== "in_progress" && (
+                        <button onClick={()=>setStatus(t,"in_progress")} disabled={busy}
+                          style={miniBtn(C.accent,busy)}>Start</button>
+                      )}
+                      {t.status !== "blocked" && (
+                        <button onClick={()=>setStatus(t,"blocked")} disabled={busy}
+                          style={miniBtn(C.red,busy)}>Block</button>
+                      )}
+                      <button onClick={()=>complete(t)} disabled={busy}
+                        style={{...miniBtn(C.green,busy),background:C.green,color:"#04121F",border:"none"}}>
+                        {busy ? "Working…" : "Complete & Re-score"}
+                      </button>
+                      <button onClick={()=>removeTask(t)} disabled={busy}
+                        style={{...miniBtn(C.textMut,busy),marginLeft:"auto"}}>Delete</button>
+                    </div>
+                  </Card>
+                );
+              })}
+
+              {doneTasks.length > 0 && (
+                <>
+                  <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,margin:"16px 0 8px"}}>
+                    COMPLETED ({doneTasks.length})
+                  </div>
+                  {doneTasks.map(t => (
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+                      background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
+                      <span style={{color:C.green}}>✓</span>
+                      <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{t.title}</span>
+                      {t.actualGain != null && (
+                        <span style={{fontSize:11,color: t.actualGain >= 0 ? C.green : C.amber,fontWeight:600}}>
+                          {t.actualGain >= 0 ? "+" : ""}{t.actualGain} posture
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+function miniBtn(color, busy) {
+  return {
+    padding:"6px 12px", borderRadius:7, border:`1px solid ${color}55`,
+    background:`${color}12`, color, fontSize:12, fontWeight:600,
+    cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  EVIDENCE / AUDIT READINESS.
+//  Auditors, insurers, and boards want proof, not assertions. This reads
+//  /api/evidence/* — coverage (completed work that can't be proven),
+//  the evidence list, base64 upload, authenticated download, delete.
+// ─────────────────────────────────────────────────────────────
+const EVIDENCE_ACCEPT =
+  ".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.doc,.docx,.xls,.xlsx";
+const EVIDENCE_MAX_BYTES = 3.5 * 1024 * 1024;
+
+function fmtBytes(n) {
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Read a File into { filename, mimeType, content } where content is raw base64.
+function fileToUpload(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const res = String(r.result || "");
+      const comma = res.indexOf(",");
+      resolve({ filename: file.name, mimeType: file.type, content: comma >= 0 ? res.slice(comma + 1) : res });
+    };
+    r.onerror = () => reject(new Error("Could not read the file."));
+    r.readAsDataURL(file);
+  });
+}
+
+// Download an auth-protected evidence file as a blob (can't use a bare href
+// because the endpoint requires the Authorization header).
+async function downloadEvidence(ev) {
+  const res = await authFetch(`${API_BASE}${ev.downloadUrl}`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = ev.filename || "evidence";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function EvidenceSection() {
+  const [coverage, setCoverage] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  // Upload form
+  const [file, setFile] = useState(null);
+  const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
+  const fileRef = useRef(null);
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [cRes, lRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/evidence/coverage`),
+        authFetch(`${API_BASE}/api/evidence`),
+      ]);
+      const c = await cRes.json();
+      const l = await lRes.json();
+      if (!cRes.ok) throw new Error(c.error || "Could not load coverage.");
+      setCoverage(c);
+      setItems(Array.isArray(l) ? l : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function submitEvidence(extra = {}) {
+    setBusy(true); setError(null);
+    try {
+      let payload = { kind: "general", title: title.trim() || undefined, note: note.trim() || undefined, ...extra };
+      if (file) {
+        if (file.size > EVIDENCE_MAX_BYTES) throw new Error(`File is ${(file.size/1024/1024).toFixed(1)}MB — the limit is 3.5MB.`);
+        const up = await fileToUpload(file);
+        payload = { ...payload, ...up };
+      } else if (!payload.note && !payload.title) {
+        throw new Error("Attach a file, or add a title/note.");
+      }
+      const res = await authFetch(`${API_BASE}/api/evidence`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Upload failed.");
+      flash("Evidence added.");
+      setFile(null); setTitle(""); setNote("");
+      if (fileRef.current) fileRef.current.value = "";
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Quick-attach a note against a specific completed task that lacks proof.
+  async function attachToTask(taskId, taskTitle) {
+    const proof = window.prompt(`Describe the evidence for "${taskTitle}"\n(e.g. "MFA screenshot filed in IT drive; confirmed with admin")`);
+    if (proof == null || !proof.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/evidence`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "task", refId: taskId, title: `Evidence: ${taskTitle}`, note: proof.trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not attach evidence.");
+      flash("Evidence attached to task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(ev) {
+    if (!window.confirm(`Delete "${ev.title}"? This cannot be undone.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/evidence/${ev.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Delete failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function doDownload(ev) {
+    try { await downloadEvidence(ev); }
+    catch (e) { setError(e.message); }
+  }
+
+  const pct = coverage?.coveragePct ?? 100;
+  const covTone = pct >= 80 ? C.green : pct >= 50 ? C.amber : C.red;
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Evidence & Audit Readiness"/>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* Coverage banner */}
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+              <div style={{minWidth:96,textAlign:"center"}}>
+                <div style={{fontSize:38,fontWeight:800,color:covTone,lineHeight:1}}>{pct}%</div>
+                <div style={{fontSize:10,color:C.textMut,letterSpacing:1,marginTop:2}}>AUDIT COVERAGE</div>
+              </div>
+              <div style={{flex:1,minWidth:240}}>
+                <div style={{fontSize:13.5,color:C.text,fontWeight:600,marginBottom:4}}>
+                  {coverage?.completedTasks
+                    ? `${coverage.withEvidence} of ${coverage.completedTasks} completed tasks have proof on file.`
+                    : "No completed tasks yet — audit coverage tracks proof for work you finish."}
+                </div>
+                <p style={{fontSize:12,color:C.textSec,lineHeight:1.6,margin:0}}>
+                  Auditors, insurers, and boards accept proof, not assertions. Anything below shows completed work that can't yet be evidenced.
+                </p>
+                {/* progress bar */}
+                <div style={{marginTop:10,height:8,borderRadius:6,background:C.surface,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",background:covTone,transition:"width .3s"}}/>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Completed tasks missing proof */}
+          {coverage?.missing?.length > 0 && (
+            <Card style={{marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <span style={{color:C.amber}}>⚠</span>
+                <SectionLabel text={`Completed — proof missing (${coverage.missing.length})`}/>
+              </div>
+              {coverage.missing.map(m => (
+                <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",
+                  background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
+                  <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{m.title}</span>
+                  {m.completedAt && <span style={{fontSize:11,color:C.textMut}}>{new Date(m.completedAt).toLocaleDateString()}</span>}
+                  <button onClick={()=>attachToTask(m.id, m.title)} disabled={busy}
+                    style={miniBtn(C.accent,busy)}>Attach proof</button>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {/* Upload */}
+          <Card style={{marginBottom:14}}>
+            <SectionLabel text="Add Evidence"/>
+            <div style={{marginTop:12,display:"grid",gap:10}}>
+              <input value={title} onChange={e=>setTitle(e.target.value)}
+                placeholder="Title (e.g. Q3 access review sign-off)" style={inputStyle}/>
+              <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2}
+                placeholder="Note (optional) — a note alone is valid evidence, e.g. 'Confirmed with IT on 3/14'"
+                style={{...inputStyle,resize:"vertical",fontFamily:"inherit"}}/>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <input ref={fileRef} type="file" accept={EVIDENCE_ACCEPT}
+                  onChange={e=>setFile(e.target.files?.[0]||null)}
+                  style={{fontSize:12,color:C.textSec}}/>
+                {file && <span style={{fontSize:11,color:C.textMut}}>{fmtBytes(file.size)}</span>}
+                <button onClick={()=>submitEvidence()} disabled={busy}
+                  style={{marginLeft:"auto",padding:"9px 18px",borderRadius:8,border:"none",
+                    background:C.accent,color:"#04121F",fontSize:13,fontWeight:700,
+                    cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                  {busy ? "Saving…" : "Add Evidence"}
+                </button>
+              </div>
+              <div style={{fontSize:11,color:C.textMut}}>
+                PDF, images, text, CSV, Word, Excel · 3.5MB max. Files are stored with a SHA-256 integrity hash.
+              </div>
+            </div>
+          </Card>
+
+          {/* Evidence list */}
+          <SectionLabel text={`Evidence on File (${items.length})`}/>
+          <div style={{marginTop:10}}>
+            {items.length === 0 ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No evidence stored yet.</div>
+            ) : items.map(ev => (
+              <div key={ev.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+                background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
+                <span style={{fontSize:18}}>{ev.filename ? "📎" : "📝"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:2}}>{ev.title}</div>
+                  <div style={{fontSize:11,color:C.textMut,display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <Badge label={ev.kind} color={C.textSec}/>
+                    {ev.filename && <span>{ev.filename} · {fmtBytes(ev.bytes)}</span>}
+                    <span>{new Date(ev.uploadedAt).toLocaleDateString()}</span>
+                    {ev.uploadedByName && <span>by {ev.uploadedByName}</span>}
+                  </div>
+                  {ev.note && <div style={{fontSize:12,color:C.textSec,marginTop:4,lineHeight:1.5}}>{ev.note}</div>}
+                </div>
+                {ev.filename && (
+                  <button onClick={()=>doDownload(ev)} style={miniBtn(C.accent,false)}>Download</button>
+                )}
+                <button onClick={()=>remove(ev)} disabled={busy} style={miniBtn(C.textMut,busy)}>Delete</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  NOTIFICATIONS — persistent bell in the dashboard top bar.
+//  Reads /api/notifications ({ unread, notifications }), marks single/all
+//  read. Polls lightly so analyst review outcomes surface without a reload.
+// ─────────────────────────────────────────────────────────────
+const NOTIF_TONE = {
+  review_approved:          { icon: "✅", color: C.green },
+  review_changes_requested: { icon: "✏️", color: C.amber },
+  info:                     { icon: "ℹ️", color: C.accent },
+  alert:                    { icon: "⚠️", color: C.red },
+  system:                   { icon: "🔔", color: C.textSec },
+};
+function notifTone(type) { return NOTIF_TONE[type] || NOTIF_TONE.system; }
+
+// Map a notification's link to a dashboard section id, when it points at one.
+function sectionForLink(link) {
+  if (!link) return null;
+  const l = String(link).toLowerCase();
+  if (l.includes("polic")) return "policies";
+  if (l.includes("complian")) return "compliance";
+  if (l.includes("task") || l.includes("remediat")) return "remediation";
+  if (l.includes("evidence")) return "evidence";
+  if (l.includes("threat") || l.includes("cve") || l.includes("breach")) return "threats";
+  if (l.includes("train")) return "training";
+  return null;
+}
+
+function NotificationBell({ onNavigate }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState({ unread: 0, notifications: [] });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+
+  async function load() {
+    try {
+      const res = await authFetch(`${API_BASE}/api/notifications`);
+      if (!res.ok) return;
+      const d = await res.json();
+      setData({ unread: d.unread || 0, notifications: d.notifications || [] });
+    } catch { /* silent — the bell must never break the dashboard */ }
+    finally { setLoading(false); }
+  }
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000); // light poll
+    return () => clearInterval(t);
+  }, []);
+
+  // Close on outside click.
+  useEffect(() => {
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    if (open) document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  async function markRead(n) {
+    if (!n.read) {
+      try {
+        await authFetch(`${API_BASE}/api/notifications/${n.id}/read`, { method: "POST", body: "{}" });
+        setData(d => ({
+          unread: Math.max(0, d.unread - 1),
+          notifications: d.notifications.map(x => x.id === n.id ? { ...x, read: true } : x),
+        }));
+      } catch { /* non-fatal */ }
+    }
+    const sec = sectionForLink(n.link);
+    if (sec && onNavigate) { onNavigate(sec); setOpen(false); }
+  }
+
+  async function markAll() {
+    setBusy(true);
+    try {
+      await authFetch(`${API_BASE}/api/notifications/read-all`, { method: "POST", body: "{}" });
+      setData(d => ({ unread: 0, notifications: d.notifications.map(x => ({ ...x, read: true })) }));
+    } catch { /* non-fatal */ }
+    finally { setBusy(false); }
+  }
+
+  const { unread, notifications } = data;
+
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(o=>!o)} aria-label="Notifications"
+        style={{position:"relative",width:38,height:38,borderRadius:9,cursor:"pointer",
+          border:`1px solid ${open?C.accent:C.border}`,background:open?`${C.accent}18`:C.surface,
+          color:C.text,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        🔔
+        {unread > 0 && (
+          <span style={{position:"absolute",top:-5,right:-5,minWidth:18,height:18,padding:"0 5px",
+            borderRadius:10,background:C.red,color:"#fff",fontSize:10.5,fontWeight:700,
+            display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${C.bg}`}}>
+            {unread > 99 ? "99+" : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{position:"absolute",right:0,top:46,width:360,maxHeight:460,overflowY:"auto",
+          background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:12,zIndex:50,
+          boxShadow:"0 12px 40px rgba(0,0,0,0.5)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            padding:"14px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.card}}>
+            <span style={{fontSize:14,fontWeight:700,color:C.text}}>Notifications</span>
+            {unread > 0 && (
+              <button onClick={markAll} disabled={busy}
+                style={{background:"none",border:"none",color:C.accent,fontSize:12,fontWeight:600,
+                  cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                Mark all read
+              </button>
+            )}
+          </div>
+
+          {loading ? (
+            <div style={{padding:"20px"}}><Spinner/></div>
+          ) : notifications.length === 0 ? (
+            <div style={{padding:"28px 16px",textAlign:"center",color:C.textSec,fontSize:13}}>
+              You're all caught up.
+            </div>
+          ) : (
+            notifications.map(n => {
+              const tone = notifTone(n.type);
+              const clickable = !!sectionForLink(n.link);
+              return (
+                <div key={n.id} onClick={()=>markRead(n)}
+                  style={{display:"flex",gap:11,padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
+                    cursor:(clickable||!n.read)?"pointer":"default",
+                    background:n.read?"transparent":`${C.accent}0C`}}>
+                  <span style={{fontSize:16,lineHeight:1.2}}>{tone.icon}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:12.5,fontWeight:600,color:C.text,flex:1}}>{n.title}</span>
+                      {!n.read && <span style={{width:7,height:7,borderRadius:"50%",background:C.accent,flexShrink:0}}/>}
+                    </div>
+                    {n.body && <div style={{fontSize:12,color:C.textSec,marginTop:3,lineHeight:1.5}}>{n.body}</div>}
+                    <div style={{fontSize:10.5,color:C.textMut,marginTop:4,display:"flex",gap:8}}>
+                      <span>{timeAgo(n.createdAt)}</span>
+                      {n.actorRole && n.actorRole !== "system" && <span>· {n.actorRole}</span>}
+                      {clickable && <span style={{color:C.accent}}>· view</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DomainMonitoringCard() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1581,9 +2534,10 @@ function ThreatIntelSection({ results }) {
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
           <SectionLabel text="Threat Intelligence"/>
         </div>
+        <CveExposureCard/>
         <DomainMonitoringCard/>
         <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
-          The threat-landscape briefing appears once your security program has been generated.
+          The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
         </div>
       </div>
     );
@@ -1599,10 +2553,16 @@ function ThreatIntelSection({ results }) {
           `darkWebMentions` banner, which was model-generated text rather than
           actual breach data — exactly the kind of thing that must never appear
           in a security product. */}
+      {/* Live, NVD-backed CVE exposure — real data, replaces the old
+          model-generated "recentCVEs" card that used to render here. */}
+      <CveExposureCard/>
       <DomainMonitoringCard/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      <div style={{marginBottom:14}}>
         <Card>
-          <SectionLabel text="Industry Threats"/>
+          <SectionLabel text="Industry Threat Landscape"/>
+          <div style={{fontSize:11,color:C.textMut,margin:"2px 0 12px"}}>
+            AI-generated briefing — context, not live detection.
+          </div>
           {(tl.industryThreats||[]).map((t,i)=>(
             <div key={i} style={{marginBottom:12,paddingBottom:12,
               borderBottom:i<(tl.industryThreats.length-1)?`1px solid ${C.border}`:"none"}}>
@@ -1614,21 +2574,6 @@ function ThreatIntelSection({ results }) {
               {(t.mitigations||[]).map((m,j)=>(
                 <div key={j} style={{color:C.green,fontSize:11}}>✓ {m}</div>
               ))}
-            </div>
-          ))}
-        </Card>
-        <Card>
-          <SectionLabel text="Recent CVEs & Vulnerabilities"/>
-          {(tl.recentCVEs||[]).map((c,i)=>(
-            <div key={i} style={{marginBottom:10,padding:"8px 12px",
-              background:C.surface,borderRadius:6}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                <span style={{color:C.accent,fontSize:12,fontWeight:700}}>{c.id}</span>
-                <Badge label={c.severity}/>
-              </div>
-              <div style={{color:C.textSec,fontSize:12,marginBottom:3}}>{c.description}</div>
-              <div style={{color:C.textMut,fontSize:11}}>Affected: {c.affected}</div>
-              {c.patch && <div style={{color:C.green,fontSize:11}}>Patch: {c.patch}</div>}
             </div>
           ))}
         </Card>
@@ -3050,6 +3995,8 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"policies",    icon:"📄", label:"Policies",          badge:policyCount || null },
     { id:"workflows",   icon:"🔄", label:"Workflows",         badge:results?.workflows?.workflows?.length },
     { id:"compliance",  icon:"✅", label:"Compliance",        badge:results?.compliance?.frameworks?.length },
+    { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
+    { id:"evidence",    icon:"📎", label:"Evidence",           badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:results?.tools?.toolStack?.length },
     { id:"training",    icon:"🎓", label:"Training",          badge:results?.training?.trainingProgram?.modules?.length },
@@ -3068,6 +4015,8 @@ function Dashboard({ assessment, results, onReset }) {
     // /api/compliance/* directly, so what a client sees is what the deterministic
     // engine actually concluded from their answers.
     compliance: <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
+    remediation: <RemediationSection/>,
+    evidence:    <EvidenceSection/>,
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
     training:   <TrainingSection results={results} assessment={assessment}/>,
@@ -3119,7 +4068,10 @@ function Dashboard({ assessment, results, onReset }) {
       </div>
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"24px"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"24px",display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",marginBottom:16}}>
+          <NotificationBell onNavigate={setSection}/>
+        </div>
         {sectionMap[section]}
       </div>
     </div>
@@ -3160,6 +4112,16 @@ function ShieldLogo({ size = 28, glow = false }) {
 
 // Wordmark: "Shield" in the current ink color + "AI" in brand cyan
 function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
+  const brand = useBranding();
+  // Custom brand: render the product name in one ink color (no "AI" accent
+  // split, which is ShieldAI-specific). Default brand keeps the Shield+AI look.
+  if (brand && !brand.isDefault && brand.productName && brand.productName !== "ShieldAI") {
+    return (
+      <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1, color: ink }}>
+        {brand.productName}
+      </span>
+    );
+  }
   return (
     <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
       <span style={{ color: ink }}>Shield</span>
@@ -3170,9 +4132,13 @@ function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
 
 // Logo + wordmark lockup
 function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
+  const brand = useBranding();
+  const customLogo = brand && !brand.isDefault && brand.logoUrl;
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap }}>
-      <ShieldLogo size={logoSize} glow={glow}/>
+      {customLogo
+        ? <img src={brand.logoUrl} alt="" style={{ height:logoSize, maxWidth:logoSize*4, objectFit:"contain" }}/>
+        : <ShieldLogo size={logoSize} glow={glow}/>}
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
   );
@@ -6834,6 +7800,510 @@ function TrendChart({ data, color, height = 120 }) {
   );
 }
 
+// ── Analyst drilldown: read a client's actual assessments, programs, policies ──
+// The portfolio gives posture/alerts/review-queue, but an analyst couldn't open
+// the underlying documents. These read /api/analyst/clients/:id/{assessments,
+// programs,policies} (list) and .../:docId (full detail), all assignment-scoped
+// server-side. Read-only: analysts review, they don't edit client content here.
+function ClientDocuments({ clientId }) {
+  const [tab, setTab] = useState("assessments"); // assessments | programs | policies
+  const [lists, setLists] = useState({ assessments: null, programs: null, policies: null });
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(null);   // { kind, id }
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const endpoints = {
+    assessments: `/api/analyst/clients/${clientId}/assessments`,
+    programs:    `/api/analyst/clients/${clientId}/programs`,
+    policies:    `/api/analyst/clients/${clientId}/policies`,
+  };
+
+  async function loadList(kind) {
+    if (lists[kind] != null) return;
+    try {
+      const res = await authFetch(`${API_BASE}${endpoints[kind]}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || `Could not load ${kind}.`);
+      setLists(prev => ({ ...prev, [kind]: Array.isArray(d) ? d : [] }));
+    } catch (e) { setError(e.message); setLists(prev => ({ ...prev, [kind]: [] })); }
+  }
+  useEffect(() => { loadList(tab); /* eslint-disable-next-line */ }, [tab, clientId]);
+
+  async function openDoc(kind, id) {
+    setOpen({ kind, id }); setDetail(null); setDetailLoading(true); setError(null);
+    const path = kind === "assessments" ? `${endpoints.assessments}/${id}`
+      : kind === "programs" ? `${endpoints.programs}/${id}`
+      : `${endpoints.policies}/${id}`;
+    try {
+      const res = await authFetch(`${API_BASE}${path}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load document.");
+      setDetail(d);
+    } catch (e) { setError(e.message); }
+    finally { setDetailLoading(false); }
+  }
+
+  const rows = lists[tab];
+  const tabs = [["assessments","Assessments"],["programs","Programs"],["policies","Policies"]];
+
+  function reviewChip(status) {
+    if (!status) return null;
+    const m = { approved:{c:SOC.green,l:"Approved"}, awaiting_review:{c:SOC.amber,l:"In Review"},
+      changes_requested:{c:SOC.red,l:"Changes Requested"}, draft:{c:SOC.textMut,l:"Draft"} }[status]
+      || { c:SOC.textMut, l:status };
+    return <span style={{fontSize:9,fontWeight:700,color:m.c,textTransform:"uppercase",
+      padding:"2px 8px",borderRadius:20,background:`${m.c}18`}}>{m.l}</span>;
+  }
+
+  return (
+    <SocPanel title="Client Documents" accent={SOC.purple}
+      action={<span style={{fontSize:9,color:SOC.textMut}}>READ-ONLY · ASSIGNMENT-SCOPED</span>}>
+      {/* tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        {tabs.map(([id,label]) => {
+          const n = lists[id]?.length;
+          return (
+            <button key={id} onClick={()=>{setTab(id);setOpen(null);setDetail(null);}}
+              style={{padding:"6px 14px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",
+                border:`1px solid ${tab===id?SOC.purple:SOC.border}`,
+                background:tab===id?`${SOC.purple}1A`:SOC.bg,
+                color:tab===id?SOC.purple:SOC.textSec}}>
+              {label}{n!=null?` (${n})`:""}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && (
+        <div style={{marginBottom:10,padding:"8px 11px",background:`${SOC.red}15`,
+          border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12}}>{error}</div>
+      )}
+
+      {/* list */}
+      {rows == null ? <Spinner/> : rows.length === 0 ? (
+        <div style={{color:SOC.textSec,fontSize:12,padding:"16px 0",textAlign:"center"}}>
+          No {tab} on file for this client.
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {rows.map(r => {
+            const isOpen = open?.kind === tab && open?.id === r.id;
+            const title = tab === "assessments" ? (r.company || "Security Assessment")
+              : tab === "programs" ? `Program · ${r.postureLevel || "generated"}`
+              : (r.policyName || r.policyId || "Policy");
+            const sub = tab === "assessments" ? (r.compliance || []).join(", ")
+              : tab === "programs" ? (r.postureScore != null ? `Posture ${r.postureScore}` : r.status)
+              : r.policyId;
+            return (
+              <div key={r.id}>
+                <div onClick={()=>isOpen?setOpen(null):openDoc(tab, r.id)}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",cursor:"pointer",
+                    background:isOpen?SOC.panelHi:SOC.bg,borderRadius:8,
+                    border:`1px solid ${isOpen?SOC.purple+"55":SOC.border}`}}>
+                  <span style={{fontSize:15}}>{tab==="assessments"?"📋":tab==="programs"?"🗂️":"📄"}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:SOC.text,fontSize:12.5,fontWeight:600}}>{title}</div>
+                    {sub && <div style={{color:SOC.textMut,fontSize:10,marginTop:1}}>{sub}</div>}
+                  </div>
+                  {reviewChip(r.reviewStatus)}
+                  <span style={{fontSize:10,color:SOC.textMut}}>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ""}</span>
+                  <span style={{color:SOC.textMut,fontSize:11}}>{isOpen?"▲":"▼"}</span>
+                </div>
+
+                {/* inline detail */}
+                {isOpen && (
+                  <div style={{padding:"12px 14px",background:SOC.bg,borderRadius:8,marginTop:4,
+                    border:`1px solid ${SOC.border}`}}>
+                    {detailLoading ? <Spinner/> : detail ? (
+                      <ClientDocDetail kind={tab} doc={detail}/>
+                    ) : (
+                      <div style={{color:SOC.textSec,fontSize:12}}>Nothing to display.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </SocPanel>
+  );
+}
+
+// Renders the full detail of an opened client document, shaped by kind.
+function ClientDocDetail({ kind, doc }) {
+  const label = { color:SOC.textMut, fontSize:10, letterSpacing:1, fontWeight:600, marginBottom:4 };
+  if (kind === "assessments") {
+    const data = doc.data || {};
+    const checklist = data.checklist || data.securityChecklist || {};
+    const entries = Object.entries(checklist);
+    return (
+      <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+        <div style={label}>COMPANY</div>
+        <div style={{color:SOC.text,marginBottom:10}}>{data.company || "—"}</div>
+        {(data.compliance || []).length > 0 && (
+          <>
+            <div style={label}>FRAMEWORKS</div>
+            <div style={{marginBottom:10,display:"flex",gap:6,flexWrap:"wrap"}}>
+              {data.compliance.map((f,i)=>(
+                <span key={i} style={{padding:"2px 9px",borderRadius:6,background:`${SOC.cyan}15`,
+                  border:`1px solid ${SOC.cyan}33`,color:SOC.cyan,fontSize:11}}>{f}</span>
+              ))}
+            </div>
+          </>
+        )}
+        <div style={label}>RESPONSES ({entries.length})</div>
+        {entries.length === 0 ? <div>No answers recorded.</div> : (
+          <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:4}}>
+            {entries.map(([k,v])=>(
+              <div key={k} style={{display:"flex",gap:8,paddingBottom:5,borderBottom:`1px solid ${SOC.border}`}}>
+                <span style={{color:SOC.textMut,minWidth:150,fontSize:11}}>{k}</span>
+                <span style={{color:SOC.text,fontSize:11.5}}>{String(v)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (kind === "programs") {
+    const sections = doc.sections || {};
+    const keys = Object.keys(sections);
+    return (
+      <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+        <div style={label}>PROGRAM SECTIONS ({keys.length})</div>
+        {keys.length === 0 ? <div>No sections generated.</div> : (
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
+            {keys.map(k => {
+              const sec = sections[k];
+              const preview = typeof sec === "string" ? sec
+                : sec?.summary || sec?.overview
+                || (Array.isArray(sec) ? `${sec.length} item(s)` : JSON.stringify(sec).slice(0,220));
+              return (
+                <div key={k} style={{padding:"8px 10px",background:SOC.panel,borderRadius:7}}>
+                  <div style={{color:SOC.text,fontSize:11.5,fontWeight:600,textTransform:"capitalize",marginBottom:3}}>
+                    {k.replace(/([A-Z])/g," $1").trim()}
+                  </div>
+                  <div style={{fontSize:11,color:SOC.textSec}}>{String(preview).slice(0,260)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+  // policies
+  const content = doc.content || doc.policyText || doc.body || "";
+  return (
+    <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+      <div style={label}>{doc.policyName || doc.policyId || "POLICY"}</div>
+      {doc.status && <div style={{fontSize:11,color:SOC.textMut,marginBottom:8}}>Status: {doc.status}</div>}
+      {content ? (
+        <div style={{whiteSpace:"pre-wrap",maxHeight:340,overflowY:"auto",padding:"10px 12px",
+          background:SOC.panel,borderRadius:7,color:SOC.text,fontSize:11.5,lineHeight:1.7}}>
+          {typeof content === "string" ? content : JSON.stringify(content, null, 2)}
+        </div>
+      ) : <div>No document content stored.</div>}
+    </div>
+  );
+}
+
+// ── White-label branding manager (analyst/admin) ──
+// Staff edit their own brand (clients inherit it); admins additionally set the
+// platform default and see white-label coverage. All writes go through
+// /api/branding/mine and /api/admin/branding/*; logos become base64 data URIs
+// capped at 512KB to match the backend validator.
+const BRANDING_LOGO_MAX = 512 * 1024;
+const BRAND_FIELDS = { productName: "", companyName: "", tagline: "", primaryColor: "#2E5EAA",
+  accentColor: "#22D3EE", supportEmail: "", supportUrl: "", footerNote: "", logoUrl: null };
+
+function brandInput(v) { return v == null ? "" : v; }
+
+function BrandLivePreview({ b }) {
+  return (
+    <div style={{border:`1px solid ${SOC.border}`,borderRadius:12,overflow:"hidden"}}>
+      <div style={{padding:"14px 18px",background:b.primaryColor||"#2E5EAA",
+        display:"flex",alignItems:"center",gap:12}}>
+        {b.logoUrl
+          ? <img src={b.logoUrl} alt="" style={{height:28,maxWidth:120,objectFit:"contain"}}/>
+          : <span style={{fontSize:17,fontWeight:800,color:"#fff"}}>{b.productName||"ShieldAI"}</span>}
+        <span style={{marginLeft:"auto",fontSize:11,color:"#ffffffcc"}}>{b.tagline||"Virtual CISO Platform"}</span>
+      </div>
+      <div style={{padding:"16px 18px",background:SOC.panel}}>
+        <div style={{fontSize:13,color:SOC.text,fontWeight:700,marginBottom:6}}>{b.companyName||"ShieldAI"}</div>
+        <button style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"default",
+          background:b.accentColor||"#22D3EE",color:"#04121F",fontSize:12,fontWeight:700}}>
+          Sample Action
+        </button>
+        <div style={{marginTop:12,fontSize:10,color:SOC.textMut}}>
+          {b.footerNote || "Powered by ShieldAI"}
+          {b.supportEmail && <> · {b.supportEmail}</>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrandingManager({ isAdmin }) {
+  const [form, setForm] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [scope, setScope] = useState("mine"); // mine | platform (admin only)
+  const logoRef = useRef(null);
+
+  async function loadMine() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load branding.");
+      setForm({ ...BRAND_FIELDS, ...d, logoUrl: d.logoUrl || null });
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  async function loadOverview() {
+    if (!isAdmin) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/branding`);
+      if (res.ok) setOverview(await res.json());
+    } catch { /* non-fatal */ }
+  }
+  useEffect(() => { loadMine(); loadOverview(); /* eslint-disable-next-line */ }, []);
+
+  function flash(msg, tone = SOC.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3000); }
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  async function onLogo(file) {
+    if (!file) return;
+    if (file.size > BRANDING_LOGO_MAX) { setError(`Logo is ${(file.size/1024).toFixed(0)}KB — the limit is 512KB.`); return; }
+    const okTypes = ["image/png","image/jpeg","image/jpg","image/svg+xml","image/webp"];
+    if (!okTypes.includes(file.type)) { setError("Logo must be PNG, JPEG, SVG, or WebP."); return; }
+    try {
+      const dataUri = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("Could not read the logo."));
+        r.readAsDataURL(file);
+      });
+      set("logoUrl", dataUri);
+      setError(null);
+    } catch (e) { setError(e.message); }
+  }
+
+  function buildPatch() {
+    // Only send the editable fields; empty strings become null server-side.
+    const p = {};
+    for (const k of Object.keys(BRAND_FIELDS)) {
+      let v = form[k];
+      if (typeof v === "string") v = v.trim();
+      p[k] = v === "" ? null : v;
+    }
+    // productName/companyName can't be null on the backend — fall back sensibly.
+    if (!p.productName) p.productName = "ShieldAI";
+    if (!p.companyName) p.companyName = p.productName;
+    return p;
+  }
+
+  async function save() {
+    setBusy(true); setError(null);
+    try {
+      const path = (isAdmin && scope === "platform")
+        ? `/api/admin/branding/platform` : `/api/branding/mine`;
+      const res = await authFetch(`${API_BASE}${path}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPatch()),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Save failed.");
+      setForm({ ...BRAND_FIELDS, ...d, logoUrl: d.logoUrl || null });
+      // Reflect a saved *own* brand in the live app chrome immediately.
+      if (scope !== "platform") setBrand(d);
+      flash(scope === "platform" ? "Platform default brand saved." : "Your brand was saved.");
+      loadOverview();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function reset() {
+    if (scope === "platform") { setError("Platform default can't be deleted — edit its fields instead."); return; }
+    if (!window.confirm("Reset your brand back to the platform/default? Clients will see the default brand.")) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Reset failed.");
+      await loadMine();
+      setBrand(DEFAULT_BRAND);
+      if (logoRef.current) logoRef.current.value = "";
+      flash("Brand reset to default.");
+      loadOverview();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  if (loading || !form) return <Spinner/>;
+
+  const lbl = { fontSize:10, color:SOC.textMut, letterSpacing:1, fontWeight:600, marginBottom:5, display:"block" };
+  const inp = { width:"100%", padding:"9px 12px", background:SOC.bg, border:`1px solid ${SOC.border}`,
+    borderRadius:8, color:SOC.text, fontSize:13, boxSizing:"border-box", fontFamily:"Inter,system-ui,sans-serif" };
+
+  return (
+    <div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${SOC.red}15`,
+          border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {isAdmin && (
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {[["mine","My Brand"],["platform","Platform Default"]].map(([id,label]) => (
+            <button key={id} onClick={()=>{setScope(id); if(id==="platform"){ /* keep current form as starting point */ }}}
+              style={{padding:"7px 16px",borderRadius:8,fontSize:12.5,fontWeight:700,cursor:"pointer",
+                border:`1px solid ${scope===id?SOC.cyan:SOC.border}`,
+                background:scope===id?`${SOC.cyan}1A`:SOC.bg,color:scope===id?SOC.cyan:SOC.textSec}}>{label}</button>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+        {/* form */}
+        <SocPanel title={scope==="platform"?"Platform Default Brand":"Your Brand"} accent={SOC.cyan}>
+          <div style={{display:"grid",gap:12}}>
+            <div>
+              <label style={lbl}>PRODUCT NAME</label>
+              <input style={inp} value={brandInput(form.productName)} maxLength={40}
+                onChange={e=>set("productName",e.target.value)} placeholder="ShieldAI"/>
+            </div>
+            <div>
+              <label style={lbl}>COMPANY NAME</label>
+              <input style={inp} value={brandInput(form.companyName)} maxLength={80}
+                onChange={e=>set("companyName",e.target.value)} placeholder="Your MSP, LLC"/>
+            </div>
+            <div>
+              <label style={lbl}>TAGLINE</label>
+              <input style={inp} value={brandInput(form.tagline)} maxLength={90}
+                onChange={e=>set("tagline",e.target.value)} placeholder="Virtual CISO Platform"/>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <label style={lbl}>PRIMARY COLOR</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.primaryColor)?form.primaryColor:"#2E5EAA"}
+                    onChange={e=>set("primaryColor",e.target.value)}
+                    style={{width:38,height:38,border:"none",borderRadius:8,background:"none",cursor:"pointer"}}/>
+                  <input style={{...inp,flex:1}} value={brandInput(form.primaryColor)} maxLength={7}
+                    onChange={e=>set("primaryColor",e.target.value)} placeholder="#2E5EAA"/>
+                </div>
+              </div>
+              <div style={{flex:1}}>
+                <label style={lbl}>ACCENT COLOR</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.accentColor)?form.accentColor:"#22D3EE"}
+                    onChange={e=>set("accentColor",e.target.value)}
+                    style={{width:38,height:38,border:"none",borderRadius:8,background:"none",cursor:"pointer"}}/>
+                  <input style={{...inp,flex:1}} value={brandInput(form.accentColor)} maxLength={7}
+                    onChange={e=>set("accentColor",e.target.value)} placeholder="#22D3EE"/>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>LOGO (PNG/JPEG/SVG/WebP · max 512KB)</label>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <input ref={logoRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={e=>onLogo(e.target.files?.[0])} style={{fontSize:12,color:SOC.textSec}}/>
+                {form.logoUrl && (
+                  <button onClick={()=>{set("logoUrl",null); if(logoRef.current) logoRef.current.value="";}}
+                    style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${SOC.border}`,
+                      background:SOC.bg,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>Remove</button>
+                )}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <label style={lbl}>SUPPORT EMAIL</label>
+                <input style={inp} value={brandInput(form.supportEmail)} maxLength={120}
+                  onChange={e=>set("supportEmail",e.target.value)} placeholder="support@yourmsp.com"/>
+              </div>
+              <div style={{flex:1}}>
+                <label style={lbl}>SUPPORT URL (https)</label>
+                <input style={inp} value={brandInput(form.supportUrl)} maxLength={200}
+                  onChange={e=>set("supportUrl",e.target.value)} placeholder="https://yourmsp.com/support"/>
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>FOOTER NOTE</label>
+              <input style={inp} value={brandInput(form.footerNote)} maxLength={200}
+                onChange={e=>set("footerNote",e.target.value)} placeholder="© Your MSP. All rights reserved."/>
+            </div>
+
+            <div style={{display:"flex",gap:10,marginTop:4}}>
+              <button onClick={save} disabled={busy}
+                style={{padding:"10px 20px",borderRadius:8,border:"none",background:SOC.cyan,color:SOC.bg,
+                  fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                {busy ? "Saving…" : (scope==="platform" ? "Save Platform Default" : "Save Brand")}
+              </button>
+              {scope !== "platform" && (
+                <button onClick={reset} disabled={busy}
+                  style={{padding:"10px 18px",borderRadius:8,border:`1px solid ${SOC.border}`,
+                    background:SOC.bg,color:SOC.textSec,fontSize:13,cursor:busy?"default":"pointer"}}>
+                  Reset to Default
+                </button>
+              )}
+            </div>
+          </div>
+        </SocPanel>
+
+        {/* preview + coverage */}
+        <div style={{display:"flex",flexDirection:"column",gap:18}}>
+          <SocPanel title="Live Preview" accent={SOC.purple}>
+            <BrandLivePreview b={form}/>
+            <div style={{marginTop:10,fontSize:11,color:SOC.textMut}}>
+              {scope==="platform"
+                ? "Clients with no assigned analyst brand see this."
+                : "Clients assigned to you see this brand instead of ShieldAI's default."}
+            </div>
+          </SocPanel>
+
+          {isAdmin && overview && (
+            <SocPanel title="White-Label Coverage" accent={SOC.green}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div style={{padding:"10px",background:SOC.bg,borderRadius:8,textAlign:"center"}}>
+                  <div style={{fontSize:22,fontWeight:800,color:SOC.cyan}}>{overview.clientsWhiteLabelled}</div>
+                  <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>WHITE-LABELLED</div>
+                </div>
+                <div style={{padding:"10px",background:SOC.bg,borderRadius:8,textAlign:"center"}}>
+                  <div style={{fontSize:22,fontWeight:800,color:SOC.textSec}}>{overview.clientsOnDefaultBrand}</div>
+                  <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>ON DEFAULT</div>
+                </div>
+              </div>
+              {(overview.brands||[]).map((b,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
+                  background:SOC.bg,borderRadius:7,marginBottom:6}}>
+                  <span style={{width:12,height:12,borderRadius:3,background:b.primaryColor,flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{b.productName}</div>
+                    <div style={{color:SOC.textMut,fontSize:10}}>{b.owner}</div>
+                  </div>
+                  <span style={{fontSize:11,color:SOC.textSec}}>{b.clientsBranded} client{b.clientsBranded!==1?"s":""}</span>
+                </div>
+              ))}
+            </SocPanel>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SocPanel({ title, action, children, accent }) {
   return (
     <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px 18px"}}>
@@ -7254,6 +8724,12 @@ function AnalystConsole({ user, onExit }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🖥️ Live Fleet
         </button>
+        <button onClick={()=>setView(view==="branding"?"portfolio":"branding")}
+          style={{padding:"6px 14px",background:view==="branding"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="branding"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          🎨 Branding
+        </button>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
             color:mmOpen?SOC.bg:SOC.purple,border:`1px solid ${SOC.purple}66`,borderRadius:6,
@@ -7438,6 +8914,18 @@ function AnalystConsole({ user, onExit }) {
               )}
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "branding") {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="White-Label Branding"/>
+        <Mastermind/>
+        <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
+          <BrandingManager isAdmin={!!user.isAdmin}/>
         </div>
       </div>
     );
@@ -7779,6 +9267,12 @@ function AnalystConsole({ user, onExit }) {
                 </div>
               )}
             </SocPanel>
+          </div>
+
+          {/* Client document drilldown — read the actual assessments,
+              programs, and policies behind the posture number. */}
+          <div style={{marginBottom:14}}>
+            <ClientDocuments clientId={c.id}/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
@@ -9110,6 +10604,10 @@ export default function ShieldAI() {
     setUpgradeHandler((data) => setUpgradePrompt(data || { error: "Upgrade required." }));
     return () => setUpgradeHandler(null);
   }, []);
+
+  // Resolve the white-label brand for the logged-in user (their MSP's brand,
+  // platform default, or ShieldAI). Re-runs on login/logout and role change.
+  useEffect(() => { refreshBrandForUser(user); }, [user?.id]);
 
   // Capability helper for gating UI (mirrors backend; backend remains the real gate).
   const can = (cap) => {
