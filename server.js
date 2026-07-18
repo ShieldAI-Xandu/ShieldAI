@@ -437,6 +437,13 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           functions: posture.functions,
           weakestAreas: posture.weakestAreas,
           complianceNote: posture.complianceNote,
+          // The chosen lens, so the dashboard labels the breakdown correctly —
+          // a CIS client should not see "NIST CSF Posture Breakdown" over their
+          // CIS hygiene groups. alternateView carries the other framework's view
+          // when the client picked "cis" or "both".
+          frameworkLens: posture.frameworkLens || "NIST CSF",
+          lens: posture.lens || "nist",
+          alternateView: posture.alternateView || null,
         };
 
         program.sections[step.key] = aiResult;

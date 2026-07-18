@@ -989,11 +989,11 @@ function OverviewSection({ assessment, results }) {
         </Card>
       </div>
 
-      {/* NIST CSF breakdown */}
+      {/* Posture breakdown — labelled by the client's chosen lens */}
       {breakdown?.functions && (
         <Card style={{marginBottom:16}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-            <SectionLabel text="NIST CSF Posture Breakdown"/>
+            <SectionLabel text={`${breakdown.frameworkLens || "NIST CSF"} Posture Breakdown`}/>
             <span style={{marginLeft:"auto",fontSize:10,color:C.textMut}}>
               Methodology: {breakdown.methodology}
             </span>
@@ -1021,6 +1021,36 @@ function OverviewSection({ assessment, results }) {
               borderRadius:6,color:C.textSec,fontSize:12}}>
               ⚖️ {breakdown.complianceNote}
             </div>
+          )}
+
+          {/* The other framework's view, for clients who chose CIS or both.
+              Same business, same answers — a second lens, not a second verdict.
+              Collapsed by default so the chosen lens stays the focus. */}
+          {breakdown.alternateView?.functions && (
+            <details style={{marginTop:14}}>
+              <summary style={{cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600}}>
+                Also view in {breakdown.alternateView.frameworkLens || (breakdown.lens === "cis" ? "NIST CSF" : "CIS Controls")} terms
+                {" · "}{breakdown.alternateView.postureScore}/100
+              </summary>
+              <div style={{marginTop:10,paddingLeft:2,display:"flex",flexDirection:"column",gap:10}}>
+                <div style={{fontSize:10,color:C.textMut}}>
+                  Same answers, grouped by {breakdown.alternateView.frameworkLens || "the other framework"}. The headline
+                  score above is your chosen lens — this is the same posture seen a different way.
+                </div>
+                {breakdown.alternateView.functions.map((fn,i)=>{
+                  const clr = fn.score>=80?C.green:fn.score>=60?"#7ED957":fn.score>=40?C.amber:C.red;
+                  return (
+                    <div key={i}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{color:C.textSec,fontSize:12}}>{fn.name}</span>
+                        <span style={{color:clr,fontSize:12,fontWeight:700}}>{fn.score}/100</span>
+                      </div>
+                      <ProgressBar value={fn.score} color={clr}/>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
           )}
         </Card>
       )}
@@ -3852,7 +3882,104 @@ function useFrameworkCatalog() {
   return list || COMPLIANCE_FRAMEWORKS_FALLBACK;
 }
 
-function ChecklistScreen({ onComplete, onBack }) {
+// ── Framework foundation: NIST, CIS, or both ──────────────────
+// Shown once, before the checklist. The client picks the lens their posture
+// score and program are framed in. This is a real choice with real
+// consequences (it changes how the score is grouped and labelled), so it gets
+// its own screen with an honest explanation rather than being buried as a
+// checkbox — most SMB owners have heard "NIST" and "CIS" and don't know the
+// difference, and guessing costs them nothing to fix but shapes everything that
+// follows.
+function FrameworkFoundationScreen({ onComplete, onBack, initial = "nist" }) {
+  const [choice, setChoice] = useState(initial);
+
+  const options = [
+    {
+      id: "nist",
+      name: "NIST Cybersecurity Framework",
+      tag: "Most widely recognized",
+      body: "The framework insurers, auditors, and government contracts ask about most often. Organizes security into five functions — Identify, Protect, Detect, Respond, Recover. A safe default if you're not sure.",
+      best: "Best if you want the most portable, widely-understood score.",
+    },
+    {
+      id: "cis",
+      name: "CIS Controls v8.1",
+      tag: "Most actionable for SMBs",
+      body: "A prioritized, practical checklist built from real attack data. Its Implementation Group 1 is designed specifically for small businesses with limited IT resources — it tells you what to do first.",
+      best: "Best if you want a concrete, do-this-next roadmap.",
+    },
+    {
+      id: "both",
+      name: "Both",
+      tag: "Most complete",
+      body: "Score and track against both. Your headline posture number stays in NIST terms (so it's comparable everywhere), with the full CIS view alongside. More to work through, but nothing left out.",
+      best: "Best if you're pursuing certification or answering to multiple parties.",
+    },
+  ];
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", background: C.bg, fontFamily: "Inter,system-ui,sans-serif", padding: "32px 24px" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <h2 style={{ color: C.text, fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Choose your framework foundation</h2>
+        <p style={{ color: C.textSec, fontSize: 13, lineHeight: 1.7, margin: "0 0 4px" }}>
+          Security frameworks are different lenses on the same question: is this business protected?
+          Your answers won't change — this decides how your posture score is grouped and which
+          standard your program is framed in. You can change it later; it isn't locked in.
+        </p>
+        <p style={{ color: C.textMut, fontSize: 12, lineHeight: 1.6, margin: "0 0 22px" }}>
+          Whatever you pick, all 12 compliance frameworks (HIPAA, PCI, SOC 2, and the rest) remain
+          available to assess against — this choice is only about your core posture score.
+        </p>
+
+        <div style={{ display: "grid", gap: 12 }}>
+          {options.map(o => {
+            const sel = choice === o.id;
+            return (
+              <button key={o.id} onClick={() => setChoice(o.id)}
+                style={{
+                  textAlign: "left", padding: "18px 20px", borderRadius: 12, cursor: "pointer",
+                  background: sel ? `${C.accent}14` : C.card,
+                  border: `1.5px solid ${sel ? C.accent : C.border}`,
+                  transition: "all .12s",
+                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: "50%", flexShrink: 0,
+                    border: `2px solid ${sel ? C.accent : C.borderHi}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    {sel && <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent }} />}
+                  </div>
+                  <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>{o.name}</span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: 0.4, padding: "2px 8px", borderRadius: 999,
+                    background: `${C.accent}1A`, color: C.accent, marginLeft: "auto",
+                  }}>{o.tag}</span>
+                </div>
+                <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 6px", paddingLeft: 28 }}>{o.body}</p>
+                <p style={{ color: sel ? C.accent : C.textMut, fontSize: 11.5, margin: 0, paddingLeft: 28, fontWeight: 500 }}>{o.best}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+          <button onClick={onBack} style={{
+            padding: "10px 18px", borderRadius: 8, cursor: "pointer",
+            background: "transparent", border: `1px solid ${C.border}`, color: C.textSec, fontSize: 13,
+          }}>← Back</button>
+          <button onClick={() => onComplete(choice)} style={{
+            padding: "10px 22px", borderRadius: 8, cursor: "pointer", border: "none",
+            background: `linear-gradient(135deg,${C.accent},${C.accentDm})`, color: C.bg, fontSize: 13, fontWeight: 700,
+            marginLeft: "auto",
+          }}>Continue →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
   // Live catalogue, not the stale 7-item constant.
   const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
   // All 35 questions, not the frozen 13. The 22 evidence questions are what
@@ -3860,8 +3987,16 @@ function ChecklistScreen({ onComplete, onBack }) {
   // scores what it can and reports "not yet assessed" for the rest.
   const SECURITY_CHECKLIST = useSecurityChecklist();
   const [answers, setAnswers] = useState({});
-  // Selected compliance frameworks (NIST CSF is always on). Stored as a set of ids.
-  const [frameworks, setFrameworks] = useState(["nist-csf"]);
+  // Foundation frameworks come from the lens the client chose on the previous
+  // screen: NIST → nist-csf, CIS → cis, both → both. These are the posture
+  // foundation and can't be toggled off here (that choice was already made);
+  // additional compliance frameworks stack on top.
+  const foundationIds =
+    frameworkLens === "cis" ? ["cis"]
+    : frameworkLens === "both" ? ["nist-csf", "cis"]
+    : ["nist-csf"];
+  const [frameworks, setFrameworks] = useState(foundationIds);
+  const isFoundation = (id) => foundationIds.includes(id);
   const [cisIG, setCisIG] = useState("IG1");
   // The gate is the 13 SCORING questions, not all 35.
   //
@@ -3888,8 +4023,10 @@ function ChecklistScreen({ onComplete, onBack }) {
   }
 
   function toggleFramework(id) {
-    const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id);
-    if (fw?.always) return; // NIST CSF can't be turned off
+    // Foundation frameworks (the lens the client picked) can't be toggled off
+    // here — that decision was made on the previous screen. Everything else
+    // stacks freely.
+    if (isFoundation(id)) return;
     setFrameworks(prev =>
       prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
     );
@@ -3943,19 +4080,21 @@ function ChecklistScreen({ onComplete, onBack }) {
               textTransform:"uppercase"}}>Compliance Frameworks</span>
           </div>
           <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 14px"}}>
-            Select the frameworks your business needs to map against. We'll generate a
-            tailored gap analysis for each. NIST CSF is always included as the scoring baseline.
+            Your posture foundation is locked in from your framework choice. Add any
+            compliance frameworks your business needs to map against — we'll generate a
+            tailored gap analysis for each.
           </p>
 
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {COMPLIANCE_FRAMEWORKS.map(fw => {
               const on = frameworks.includes(fw.id);
+              const locked = isFoundation(fw.id);
               return (
                 <button key={fw.id} onClick={() => toggleFramework(fw.id)}
-                  title={fw.desc}
-                  disabled={fw.always}
+                  title={locked ? "Your posture foundation — chosen on the previous screen" : fw.desc}
+                  disabled={locked}
                   style={{textAlign:"left",padding:"9px 13px",borderRadius:9,
-                    cursor: fw.always ? "default" : "pointer",
+                    cursor: locked ? "default" : "pointer",
                     background: on ? `${C.accent}18` : C.surface,
                     border:`1px solid ${on ? C.accent : C.border}`,
                     color: on ? C.text : C.textSec,
@@ -3973,8 +4112,8 @@ function ChecklistScreen({ onComplete, onBack }) {
                         a contextual gap analysis, not a control-by-control
                         walkthrough — they should know that before they pick it,
                         not discover it in the report. */}
-                    {fw.always ? (
-                      <span style={{fontSize:10,color:C.textSec}}>baseline</span>
+                    {locked ? (
+                      <span style={{fontSize:10,color:C.accent,fontWeight:600}}>your foundation</span>
                     ) : fw.depth === "ai-assisted" ? (
                       <span style={{fontSize:10,color:C.amber}}>AI gap analysis</span>
                     ) : typeof fw.requirementCount === "number" ? (
@@ -9237,8 +9376,31 @@ export default function ShieldAI() {
           </button>
         </div>
         <div style={{flex:1,overflow:"hidden"}}>
-          <IntakeChat onComplete={data => { setAssessment(data); setPhase("checklist"); }}/>
+          <IntakeChat onComplete={data => { setAssessment(data); setPhase("framework"); }}/>
         </div>
+      </div>
+    );
+  }
+
+  if (phase === "framework") {
+    return (
+      <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
+        <TopBar/>
+        <div style={{padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
+          display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontWeight:600,color:C.text}}>Security Assessment</span>
+          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 2 of 4 — Framework Foundation</span>
+        </div>
+        <FrameworkFoundationScreen
+          initial={assessment?.frameworkLens || "nist"}
+          onComplete={(frameworkLens) => {
+            // The lens rides on the assessment; riskEngine reads it when scoring,
+            // so every downstream consumer gets the chosen framing for free.
+            setAssessment(prev => ({ ...prev, frameworkLens }));
+            setPhase("checklist");
+          }}
+          onBack={() => setPhase("intake")}
+        />
       </div>
     );
   }
@@ -9250,14 +9412,15 @@ export default function ShieldAI() {
         <div style={{padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
           display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontWeight:600,color:C.text}}>Security Assessment</span>
-          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 2 of 3 — Security Checklist</span>
+          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 3 of 4 — Security Checklist</span>
         </div>
         <ChecklistScreen
+          frameworkLens={assessment?.frameworkLens || "nist"}
           onComplete={(checklist, selectedFrameworks) => {
             setAssessment(prev => ({ ...prev, checklist, selectedFrameworks }));
             setPhase("analysis");
           }}
-          onBack={() => setPhase("intake")}
+          onBack={() => setPhase("framework")}
         />
       </div>
     );

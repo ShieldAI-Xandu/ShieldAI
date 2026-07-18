@@ -47,6 +47,43 @@ const FACTOR_WEIGHTS = {
   backups: 0.55, disasterRecovery: 0.45,
 };
 
+// ──────────────────────────────────────────────────────────────
+//  CIS SCORING LENS
+// ──────────────────────────────────────────────────────────────
+// A client can now choose to be scored against CIS Controls instead of (or as
+// well as) NIST CSF. This is NOT a different score computed from different
+// data — that would let the two frameworks disagree about the same business,
+// which is exactly the kind of contradiction this codebase keeps having to fix.
+// It's the SAME 13 scoring factors, regrouped under the CIS lens.
+//
+// NIST CSF groups controls into five Functions (Identify/Protect/Detect/
+// Respond/Recover). CIS groups its IG1 baseline into practical hygiene areas.
+// We map our 13 factors onto four CIS-flavoured groups so a CIS-oriented client
+// reads their posture in the vocabulary they chose, while the arithmetic
+// underneath is identical. A business doesn't become more or less secure
+// because it picked a different framework on the intake screen.
+//
+// The group names and framing come from CIS's own "Basic Cyber Hygiene"
+// language (IG1). Weights sum to 1 within each group; group weights sum to 1.
+const CIS_GROUPS = {
+  "Identify & Protect Assets": {
+    weight: 0.30,
+    factors: { dataInventory: 0.30, documentedPolicies: 0.25, itManagement: 0.25, priorAudit: 0.20 },
+  },
+  "Secure Access & Data": {
+    weight: 0.35,
+    factors: { mfa: 0.55, endpoint: 0.45 },
+  },
+  "Detect & Defend": {
+    weight: 0.20,
+    factors: { monitoring: 0.40, emailSecurity: 0.35, training: 0.25 },
+  },
+  "Respond & Recover": {
+    weight: 0.15,
+    factors: { incidentResponse: 0.30, responseSupport: 0.20, backups: 0.30, disasterRecovery: 0.20 },
+  },
+};
+
 // Human-readable findings per factor based on the score achieved
 function findingFor(factorId, score, label) {
   const strong = score >= 75, weak = score <= 35;
@@ -178,6 +215,19 @@ function complianceAdjustment(assessment) {
 //  MAIN
 // ──────────────────────────────────────────────────────────────
 export function computePostureScore(assessment) {
+  // Which lens did the client choose at intake? Stored on the assessment as
+  // frameworkLens ("nist" | "cis" | "both"). Absent → "nist", so every existing
+  // assessment and every caller that doesn't know about lenses keeps its exact
+  // current behaviour. This is why the 15 call sites didn't need touching: the
+  // choice rides on the data, not the function signature.
+  const lens = assessment?.frameworkLens || assessment?.data?.frameworkLens || "nist";
+  if (lens === "cis" || lens === "both") {
+    return computePostureForLens(assessment, lens);
+  }
+  return computeNistPosture(assessment);
+}
+
+function computeNistPosture(assessment) {
   // Prefer structured checklist answers if present
   const checklist = assessment?.checklist || assessment?.securityChecklist || null;
   const usingChecklist = checklist && Object.keys(checklist).length > 0;
@@ -210,5 +260,106 @@ export function computePostureScore(assessment) {
     functions,
     weakestAreas,
     complianceNote: compAdj.finding,
+  };
+}
+
+// ──────────────────────────────────────────────────────────────
+//  CIS-LENS POSTURE
+// ──────────────────────────────────────────────────────────────
+// Scores the SAME checklist answers, regrouped under CIS's hygiene areas.
+// Returns the identical contract as computePostureScore (postureScore,
+// postureLevel, functions[], weakestAreas) so every consumer — the dashboard,
+// the analyst portfolio, the program generator — works unchanged regardless of
+// which lens the client chose. The only differences a client sees are the group
+// names and the methodology label.
+function scoreCisFromChecklist(checklist) {
+  const answerScore = (factorId) => {
+    const q = SCORING_CHECKLIST.find(x => x.factor === factorId);
+    if (!q) return 40;
+    const opt = q.options.find(o => o.label === checklist[q.id]);
+    return opt ? opt.score : 40;
+  };
+
+  return Object.entries(CIS_GROUPS).map(([name, group]) => {
+    const factors = Object.entries(group.factors).map(([factorId, weight]) => {
+      const q = SCORING_CHECKLIST.find(x => x.factor === factorId);
+      const score = answerScore(factorId);
+      return {
+        label: q ? q.question : factorId,
+        score: clamp(score),
+        weight,
+        finding: findingFor(factorId, score, q ? q.question : factorId),
+      };
+    });
+    const tw = factors.reduce((s, f) => s + f.weight, 0) || 1;
+    const weighted = factors.reduce((s, f) => s + f.score * f.weight, 0) / tw;
+    return { name, score: clamp(weighted), factors };
+  });
+}
+
+/**
+ * Posture through a chosen lens.
+ *
+ * lens="nist"  → the NIST CSF five functions (the default; unchanged behaviour).
+ * lens="cis"   → the same answers grouped under CIS Controls hygiene areas.
+ * lens="both"  → NIST is authoritative for the headline number (it's what
+ *                insurers and the rest of the product expect), with the CIS view
+ *                attached alongside so a "both" client sees both breakdowns
+ *                without the two ever disagreeing on the overall score.
+ *
+ * Every branch returns the same shape, so nothing downstream needs to know which
+ * lens was used. The keyword-inference fallback stays NIST-only — inferring a
+ * CIS-grouped score from free text would be guessing about guessing.
+ */
+export function computePostureForLens(assessment, lens = "nist") {
+  const base = computeNistPosture(assessment);
+  const checklist = assessment?.checklist || assessment?.securityChecklist || null;
+  const usingChecklist = checklist && Object.keys(checklist).length > 0;
+
+  // No structured answers, or plain NIST → the existing result, labelled.
+  if (lens === "nist" || !usingChecklist) {
+    return { ...base, lens: "nist", frameworkLens: "NIST CSF" };
+  }
+
+  const cisFunctions = scoreCisFromChecklist(checklist);
+  const cisOverall = clamp(
+    cisFunctions.reduce((s, fn) => s + fn.score * (CIS_GROUPS[fn.name]?.weight || 0), 0)
+    + complianceAdjustment(assessment).adjustment
+  );
+  const cisLevel = cisOverall >= 80 ? "Strong" : cisOverall >= 60 ? "Moderate" : cisOverall >= 40 ? "Developing" : "At Risk";
+  const cisWeakest = [...cisFunctions].sort((a, b) => a.score - b.score).slice(0, 2).map(f => f.name);
+
+  const cisView = {
+    postureScore: cisOverall,
+    postureLevel: cisLevel,
+    functions: cisFunctions,
+    weakestAreas: cisWeakest,
+    methodology: "CIS Controls v8.1 (IG1 hygiene areas, structured checklist)",
+  };
+
+  if (lens === "cis") {
+    // CIS is the client's chosen frame — it drives the headline number.
+    return {
+      ...base,
+      postureScore: cisView.postureScore,
+      postureLevel: cisView.postureLevel,
+      functions: cisView.functions,
+      weakestAreas: cisView.weakestAreas,
+      methodology: cisView.methodology,
+      lens: "cis",
+      frameworkLens: "CIS Controls v8.1",
+      // The NIST view is kept for anyone who needs the cross-framework number
+      // (insurers still ask in CSF terms), but it does not override the score.
+      alternateView: { lens: "nist", ...base },
+    };
+  }
+
+  // lens === "both": NIST stays authoritative for the headline; CIS rides along.
+  return {
+    ...base,
+    lens: "both",
+    frameworkLens: "NIST CSF + CIS Controls",
+    methodology: "NIST CSF (headline) with CIS Controls v8.1 view",
+    alternateView: { lens: "cis", ...cisView },
   };
 }

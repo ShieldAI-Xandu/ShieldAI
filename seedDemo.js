@@ -75,6 +75,8 @@ function extractJson(text) {
 const COMPANIES = [
   {
     company: { name: "Meridian Dental Group", industry: "Healthcare", employees: "45" },
+    // NIST lens — a dental practice's audience is insurers and HIPAA, who speak CSF.
+    frameworkLens: "nist",
     compliance: ["HIPAA"],
     summary: "A multi-location dental practice handling patient health records (PHI) and payment data. Growing fast, modest IT maturity.",
     // Mixed posture — some good controls, notable gaps → "Developing"
@@ -130,6 +132,8 @@ const COMPANIES = [
   },
   {
     company: { name: "Lakeside Financial Advisors", industry: "Financial Services", employees: "28" },
+    // Both — mature enough to pursue certification and answer to multiple parties.
+    frameworkLens: "both",
     compliance: ["SEC", "SOC 2"],
     summary: "A boutique wealth-management firm handling client PII and financial data. Security-conscious, well-resourced for its size.",
     // Strong posture → "Moderate"/"Strong"
@@ -180,6 +184,8 @@ const COMPANIES = [
   },
   {
     company: { name: "Apex Manufacturing", industry: "Manufacturing", employees: "120" },
+    // CIS lens — a manufacturer chasing contracts wants a concrete roadmap, not theory.
+    frameworkLens: "cis",
     compliance: ["CMMC"],
     summary: "A mid-size manufacturer pursuing defense contracts (CMMC required). Operational focus, security maturity lagging behind growth.",
     // Weak posture → "At Risk"

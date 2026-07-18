@@ -125,4 +125,43 @@ ok(secs.reduce((a, s) => a + s.questions.length, 0) === EVIDENCE_CHECKLIST.lengt
    "sections account for every evidence question");
 
 console.log(fail ? `\n${fail} FAILED` : "\nRisk engine verified — posture score is stable");
+
+// ── Framework lens (NIST / CIS / both) ────────────────────────
+// The client chooses their scoring lens at intake. The load-bearing guarantee
+// is that choosing a different lens does NOT change how secure the business is —
+// same answers, same underlying arithmetic, only the grouping and label differ.
+// A business that scored 65 in NIST terms cannot become "at risk" because it
+// clicked CIS.
+console.log("\nFramework lens — same answers, different frame, never a contradiction:");
+const { computePostureForLens } = await import("./riskEngine.js");
+const bestOpt = (q) => q.options.reduce((a, b) => (b.score > a.score ? b : a));
+const best = {}; for (const q of SCORING_CHECKLIST) best[q.id] = bestOpt(q).label;
+const lensMid = {}; for (const q of SCORING_CHECKLIST) lensMid[q.id] = q.options[Math.floor(q.options.length / 2)]?.label || q.options[0].label;
+
+const nist = computePostureForLens({ checklist: lensMid }, "nist");
+const cis = computePostureForLens({ checklist: lensMid }, "cis");
+const both = computePostureForLens({ checklist: lensMid }, "both");
+
+ok(nist.lens === "nist" && nist.functions.length === 5, "NIST lens -> 5 functions");
+ok(cis.lens === "cis" && cis.functions.length === 4, "CIS lens -> 4 hygiene groups");
+ok(cis.frameworkLens === "CIS Controls v8.1", "CIS lens is labelled as such");
+ok(both.postureScore === nist.postureScore, "'both' keeps the NIST number as the headline — no disagreement on the score");
+ok(both.alternateView && both.alternateView.postureScore === cis.postureScore, "'both' carries the CIS view alongside");
+ok(cis.alternateView && cis.alternateView.postureScore === nist.postureScore, "CIS lens keeps NIST available for cross-framework needs");
+ok(Math.abs(nist.postureScore - cis.postureScore) <= 12,
+   `NIST (${nist.postureScore}) and CIS (${cis.postureScore}) agree within a reasonable band — same business, not two verdicts`);
+ok(computePostureForLens({ checklist: lensMid }).lens === "nist", "no lens argument defaults to NIST");
+
+// The stored-field path the routes actually use.
+ok(computePostureScore({ checklist: lensMid }).postureScore === nist.postureScore, "no frameworkLens on data -> NIST (backwards compatible)");
+ok(computePostureScore({ checklist: lensMid, frameworkLens: "cis" }).frameworkLens === "CIS Controls v8.1",
+   "frameworkLens on the assessment data drives the lens — the 15 call sites need no changes");
+
+// Sanity: an all-best assessment is Strong under either lens. A framework
+// choice can't turn an excellent program into a failing one.
+ok(computePostureForLens({ checklist: best }, "nist").postureLevel === "Strong", "all-best -> Strong under NIST");
+ok(["Strong", "Moderate"].includes(computePostureForLens({ checklist: best }, "cis").postureLevel),
+   "all-best -> Strong/Moderate under CIS — never worse than Developing");
+
+console.log(fail ? `\n${fail} FAILED (lens)` : "\nFramework lens verified");
 process.exit(fail ? 1 : 0);
