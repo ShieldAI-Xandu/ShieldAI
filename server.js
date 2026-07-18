@@ -15,6 +15,7 @@ import {
   registerDemoRoutes,
   demoGuard,
   assertStoreSeparation,
+  createAccessCode,
   DEMO_PATH_PREFIX,
 } from "./demoGateway.js";
 import { PIPELINE } from "./generators.js";
@@ -245,6 +246,59 @@ app.delete("/api/admin/leads/:id", requireAdmin, async (req, res) => {
   if (db.data.leads.length === before) return res.status(404).json({ error: "Lead not found." });
   await db.write();
   res.json({ deleted: req.params.id });
+});
+
+// ── Access codes (admin) ──────────────────────────────────────
+// Admin mints a code (optionally tied to a lead) to grant demo access; the
+// visitor redeems it at /api/demo/redeem-code. See demoGateway.js.
+app.get("/api/admin/access-codes", requireAdmin, (req, res) => {
+  const codes = [...(db.data.accessCodes || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json(codes);
+});
+
+app.post("/api/admin/access-codes", requireAdmin, async (req, res) => {
+  try {
+    const { type, leadId, note } = req.body || {};
+    const record = await createAccessCode(db, { type, leadId: leadId || null, note: note || "", createdBy: req.userId });
+    res.json(record);
+  } catch (err) {
+    if (err.code === "BAD_TYPE") return res.status(400).json({ error: err.message });
+    console.error("Access-code create error:", err.message);
+    res.status(500).json({ error: "Could not create the access code." });
+  }
+});
+
+// Approve a lead AND mint a code in one step. Sets the lead status to
+// "qualified", stamps it with the issued code, and returns both.
+app.post("/api/admin/leads/:id/approve", requireAdmin, async (req, res) => {
+  try {
+    const lead = (db.data.leads || []).find(l => l.id === req.params.id);
+    if (!lead) return res.status(404).json({ error: "Lead not found." });
+    const type = req.body?.type === "investor" ? "investor" : "client";
+    const record = await createAccessCode(db, {
+      type, leadId: lead.id, note: `Approved for ${lead.name || lead.email}`, createdBy: req.userId,
+    });
+    lead.status = "qualified";
+    lead.accessCode = record.code;
+    lead.accessType = type;
+    lead.approvedAt = new Date().toISOString();
+    await db.write();
+    res.json({ lead, accessCode: record });
+  } catch (err) {
+    if (err.code === "BAD_TYPE") return res.status(400).json({ error: err.message });
+    console.error("Lead approve error:", err.message);
+    res.status(500).json({ error: "Could not approve the lead." });
+  }
+});
+
+// Activate/deactivate a code (reversible; we never hard-delete for audit trail).
+app.patch("/api/admin/access-codes/:id", requireAdmin, async (req, res) => {
+  const record = (db.data.accessCodes || []).find(c => c.id === req.params.id);
+  if (!record) return res.status(404).json({ error: "Access code not found." });
+  if (typeof req.body?.active === "boolean") record.active = req.body.active;
+  if (typeof req.body?.note === "string") record.note = req.body.note.slice(0, 300);
+  await db.write();
+  res.json(record);
 });
 
 // How many registration slots remain (used by the UI)

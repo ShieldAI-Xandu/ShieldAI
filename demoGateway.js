@@ -124,8 +124,113 @@ export function demoGuard(req, res, next) {
   next();
 }
 
+// ── Access codes ──────────────────────────────────────────────
+// Codes gate demo entry. An admin mints one when approving a lead; the visitor
+// redeems it to enter the sandbox. Two types:
+//   · "investor" → client + analyst views (the full product tour)
+//   · "client"   → client views only (a prospect evaluating the service)
+// Codes live in the PRODUCTION store (admin manages them against real leads),
+// but redeeming one issues a DEMO-signed token so the visitor still lands in
+// the isolated sandbox and can never touch real data.
+// (getStore/PROD_STORE are already imported at the top of this file.)
+
+export const ACCESS_CODE_TYPES = ["investor", "client"];
+
+// Human-friendly, unambiguous code: SHLD-XXXX-XXXX (no 0/O/1/I).
+function generateAccessCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const block = () => Array.from({ length: 4 }, () =>
+    alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  return `SHLD-${block()}-${block()}`;
+}
+
+function prodDb() { return getStore(PROD_STORE); }
+
+// Mint and persist a new access code (admin, production store).
+export async function createAccessCode(db, { type, leadId = null, note = "", createdBy = null }) {
+  if (!ACCESS_CODE_TYPES.includes(type)) {
+    throw Object.assign(new Error("type must be 'investor' or 'client'."), { code: "BAD_TYPE" });
+  }
+  db.data.accessCodes ||= [];
+  let code;
+  do { code = generateAccessCode(); } while (db.data.accessCodes.some(c => c.code === code));
+  const record = {
+    id: randomUUID(),
+    code,
+    type,
+    leadId,
+    note: String(note || "").slice(0, 300),
+    createdBy,
+    active: true,
+    redeemedCount: 0,
+    lastRedeemedAt: null,
+    createdAt: new Date().toISOString(),
+  };
+  db.data.accessCodes.push(record);
+  await db.write();
+  return record;
+}
+
+function findActiveCode(prod, raw) {
+  const norm = String(raw || "").trim().toUpperCase();
+  if (!norm) return null;
+  return (prod.data.accessCodes || []).find(c => c.active && c.code.toUpperCase() === norm) || null;
+}
+
 // ── Public routes ─────────────────────────────────────────────
 export function registerDemoRoutes(app, db) {
+
+  // Redeem an access code → a scoped demo session. This is the ONLY demo entry
+  // point exposed publicly once codes are enforced. Reads codes from prod,
+  // issues a demo token whose persona matches the code type.
+  app.post(`${DEMO_PATH_PREFIX}/redeem-code`, async (req, res) => {
+    try {
+      const prod = prodDb();
+      const record = findActiveCode(prod, req.body?.code);
+      if (!record) {
+        return res.status(403).json({ error: "That access code isn't valid or has been deactivated.", code: "BAD_CODE" });
+      }
+
+      // investor → analyst persona (can see the analyst console); the frontend
+      // additionally grants the client views. client → client persona only.
+      const personaKey = record.type === "investor" ? "analyst" : "client";
+      const persona = DEMO_PERSONAS[personaKey];
+      const user = (db.data.users || []).find(u => u.email === persona.email);
+      if (!user) {
+        return res.status(503).json({ error: "The demo environment isn't seeded yet. Run: node seedDemo.js", code: "DEMO_NOT_SEEDED" });
+      }
+
+      // Record redemption on the prod code record.
+      record.redeemedCount = (record.redeemedCount || 0) + 1;
+      record.lastRedeemedAt = new Date().toISOString();
+      await prod.write();
+
+      const sessionId = randomUUID();
+      res.json({
+        token: signDemoToken(user, sessionId),
+        persona: personaKey,
+        accessType: record.type,   // "investor" | "client" — drives which views the UI shows
+        sessionId,
+        expiresIn: DEMO_TOKEN_EXPIRY,
+        readOnly: false,
+        sandbox: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          companyName: user.companyName,
+          isAdmin: false,
+          isAnalyst: record.type === "investor",
+          isDemo: true,
+          accessType: record.type,
+          tier: user.tier || "enterprise",
+        },
+      });
+    } catch (err) {
+      console.error("Access-code redeem error:", err.message);
+      res.status(500).json({ error: "Could not redeem that code. Please try again." });
+    }
+  });
+
   // Start a demo session — no credentials, one click from the marketing page.
   // Runs inside the demo store because of the /api/demo prefix.
   app.post(`${DEMO_PATH_PREFIX}/session`, async (req, res) => {

@@ -567,6 +567,12 @@ function setAuthToken(token) {
 let IS_DEMO_SESSION = false;
 function isDemoSession() { return IS_DEMO_SESSION; }
 
+// The access-code type for the current demo session: "investor" | "client" |
+// null. Drives whether the analyst console is reachable and whether the client
+// dashboard shows the "Your vCISO" explainer instead.
+let DEMO_ACCESS_TYPE = null;
+function demoAccessType() { return DEMO_ACCESS_TYPE; }
+
 async function startDemoSession(persona = "client") {
   const res = await fetch(`${API_BASE}/api/demo/session`, {
     method: "POST",
@@ -580,6 +586,24 @@ async function startDemoSession(persona = "client") {
   return { ...data.user, isDemo: true, readOnly: false };
 }
 
+// Redeem an admin-issued access code → a scoped demo session. Investor codes
+// return accessType "investor" (client + analyst views); client codes return
+// "client" (client views only). The code is the only credential the visitor
+// needs — no password, no account.
+async function redeemAccessCode(code) {
+  const res = await fetch(`${API_BASE}/api/demo/redeem-code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Could not redeem that access code.");
+  IS_DEMO_SESSION = true;
+  DEMO_ACCESS_TYPE = data.accessType || "client";
+  setAuthToken(data.token);
+  return { ...data.user, isDemo: true, readOnly: false, accessType: data.accessType };
+}
+
 // Tell the server to destroy this visitor's sandbox now rather than waiting for
 // it to expire. Everything they created in the demo disappears with it.
 async function endDemoSession() {
@@ -590,6 +614,7 @@ async function endDemoSession() {
     });
   } catch { /* best-effort: the sandbox expires on its own regardless */ }
   IS_DEMO_SESSION = false;
+  DEMO_ACCESS_TYPE = null;
 }
 
 function getAuthToken() {
@@ -2346,6 +2371,81 @@ function NotificationBell({ onNavigate }) {
   );
 }
 
+// ── "Your vCISO" — shown to client-access demo visitors in place of the analyst
+// console. It explains what a human security analyst does for them at each stage
+// of the engagement. The platform's boundary holds: AI advises, humans act — and
+// this is where a prospect sees the "humans act" half made concrete.
+const VCISO_STAGES = [
+  { icon:"🧭", stage:"Onboarding", title:"Scoping your program",
+    analyst:"A dedicated analyst reviews your assessment answers, confirms which compliance frameworks actually apply to you, and sets a realistic posture target — so you're not chasing controls that don't fit your business." },
+  { icon:"📊", stage:"Assessment review", title:"Validating the baseline",
+    analyst:"They sanity-check the AI's findings against how your business really runs, correct anything the questionnaire couldn't capture, and flag the risks that matter most for your size and industry." },
+  { icon:"🛠️", stage:"Remediation", title:"Driving the work forward",
+    analyst:"Your analyst turns the prioritized gaps into a plan, helps your team action the highest-impact fixes first, and keeps the posture score moving — reviewing evidence as work gets completed." },
+  { icon:"✅", stage:"Compliance", title:"Getting you audit-ready",
+    analyst:"They map your controls to each framework, make sure the evidence would satisfy an auditor or insurer, and prepare the documentation you'd need when someone asks you to prove it." },
+  { icon:"🔍", stage:"Ongoing monitoring", title:"Watching your back",
+    analyst:"As new CVEs and breaches surface, your analyst interprets what's actually relevant to your stack, cuts the noise, and tells you what to do — not just that something happened." },
+  { icon:"📈", stage:"Reviews", title:"Reporting to your stakeholders",
+    analyst:"On a regular cadence they produce the board- and client-ready posture reports that show progress over time, so leadership can see security improving in terms they trust." },
+];
+
+function VirtualCISOSection() {
+  return (
+    <div>
+      <div style={{marginBottom:16}}>
+        <SectionLabel text="Your Virtual CISO"/>
+      </div>
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+          <div style={{fontSize:30}}>🤝</div>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>
+              The platform does the heavy lifting. A human makes the calls.
+            </div>
+            <p style={{fontSize:13.5,color:C.textSec,lineHeight:1.65,margin:0}}>
+              Everything you see in this dashboard is generated and tracked automatically — but ShieldAI's
+              core principle is <strong style={{color:C.text}}>“AI advises, humans act.”</strong> On a
+              Guided or Managed plan, a dedicated security analyst works alongside you at every stage below.
+              This is what that looks like.
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      <div style={{position:"relative"}}>
+        {VCISO_STAGES.map((s,i) => (
+          <div key={i} style={{display:"flex",gap:16,marginBottom:14}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+              <div style={{width:44,height:44,borderRadius:12,background:`${C.accent}18`,
+                border:`1px solid ${C.accent}44`,display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:20,flexShrink:0}}>{s.icon}</div>
+              {i < VCISO_STAGES.length-1 && (
+                <div style={{width:2,flex:1,minHeight:20,background:C.border,marginTop:4}}/>
+              )}
+            </div>
+            <Card style={{flex:1,marginBottom:0}}>
+              <div style={{fontSize:10,color:C.accent,letterSpacing:1.5,fontWeight:700,marginBottom:4}}>
+                {s.stage.toUpperCase()}
+              </div>
+              <div style={{fontSize:14.5,fontWeight:700,color:C.text,marginBottom:6}}>{s.title}</div>
+              <p style={{fontSize:13,color:C.textSec,lineHeight:1.6,margin:0}}>{s.analyst}</p>
+            </Card>
+          </div>
+        ))}
+      </div>
+
+      <Card style={{marginTop:6,background:`${C.accent}0C`,border:`1px solid ${C.accent}33`}}>
+        <div style={{fontSize:13.5,color:C.text,lineHeight:1.6}}>
+          Want to see how an analyst manages this behind the scenes? The full analyst console is part of the
+          investor tour. Talk to us about a Guided or Managed plan to have a real vCISO assigned to your business.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function DomainMonitoringCard() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3989,6 +4089,11 @@ function Dashboard({ assessment, results, onReset }) {
     (results?.policiesCore?.policies?.length || 0) +
     (results?.policiesOps?.policies?.length || 0);
 
+  // A client-access demo (prospect) can't open the analyst console, so we give
+  // them a "Your vCISO" explainer showing what a human analyst does for them at
+  // each stage. Investor demos and normal accounts don't need it.
+  const showVciso = isDemoSession() && demoAccessType() === "client";
+
   const nav = [
     { id:"overview",    icon:"🎯", label:"Overview",          badge:null },
     { id:"priorities",  icon:"📊", label:"Priorities",        badge:results?.priorities?.priorities?.length },
@@ -3998,6 +4103,7 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
     { id:"evidence",    icon:"📎", label:"Evidence",           badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
+    ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:results?.tools?.toolStack?.length },
     { id:"training",    icon:"🎓", label:"Training",          badge:results?.training?.trainingProgram?.modules?.length },
     { id:"report",      icon:"📋", label:"Exec Report",       badge:null },
@@ -4017,6 +4123,7 @@ function Dashboard({ assessment, results, onReset }) {
     compliance: <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
     remediation: <RemediationSection/>,
     evidence:    <EvidenceSection/>,
+    vciso:       <VirtualCISOSection/>,
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
     training:   <TrainingSection results={results} assessment={assessment}/>,
@@ -4180,7 +4287,250 @@ function DemoBanner({ onExit }) {
   );
 }
 
-function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
+// ── Investor landing page ──
+// A tailored entry point for investors: the diligence materials (pitch deck,
+// business plan, market analysis, executive summary, demo video) plus a request
+// form that lands in leads tagged as an investor request. On approval the admin
+// issues an investor access code, which unlocks the full product tour (client +
+// analyst views). Documents are served from Vite's /public dir; a doc that
+// hasn't been published yet shows as "available on request" rather than a dead
+// link.
+const INVESTOR_DOCS = [
+  { key:"pitch",   icon:"📊", title:"Pitch Deck",         desc:"The 12-slide investor deck — problem, product, market, traction, ask.", href:"/investor/ShieldAI_Pitch_Deck.pdf" },
+  { key:"plan",    icon:"📈", title:"Business Plan",       desc:"Full 2026 business plan: strategy, go-to-market, financial model, milestones.", href:"/investor/ShieldAI_Business_Plan.pdf" },
+  { key:"market",  icon:"🌐", title:"Market Analysis",     desc:"TAM/SAM/SOM for the SMB vCISO market and competitive landscape.", href:"/investor/ShieldAI_Market_Analysis.pdf" },
+  { key:"summary", icon:"📄", title:"Executive Summary",   desc:"A two-page overview of the company, product, and opportunity.", href:"/investor/ShieldAI_Executive_Summary.pdf" },
+];
+
+function InvestorPage({ onBack, onOpenCode }) {
+  const [form, setForm] = useState({ name:"", email:"", company:"", role:"", message:"" });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function submit() {
+    if (!form.name.trim() || !form.email.includes("@")) {
+      setErr("Please enter your name and a valid email."); return;
+    }
+    setSubmitting(true); setErr(null);
+    try {
+      // Reuse the public leads endpoint; tag the request as investor so it's
+      // triaged correctly in the admin leads view.
+      const res = await fetch(`${API_BASE}/api/leads`, {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          name: form.name, email: form.email, company: form.company,
+          employees: "", // n/a for investors
+          message: `[INVESTOR ACCESS REQUEST]${form.role?` Role: ${form.role}.`:""} ${form.message}`.trim(),
+        }),
+      });
+      if (!res.ok) throw new Error("Submission failed");
+      setSubmitted(true);
+    } catch { setErr("Something went wrong. Please try again."); }
+    finally { setSubmitting(false); }
+  }
+
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const field = { width:"100%", padding:"11px 13px", background:C.bg, border:`1px solid ${line}`,
+    borderRadius:9, color:ink, fontSize:14, boxSizing:"border-box", marginBottom:11,
+    fontFamily:"inherit" };
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      {/* Nav */}
+      <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
+        background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
+        <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+          <span style={{fontSize:11,color:cyan,marginLeft:4,letterSpacing:1,fontWeight:700}}>INVESTORS</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
+            <button onClick={onBack} style={{background:"none",border:"none",color:dim,fontSize:13,
+              cursor:"pointer",fontFamily:"inherit"}}>← Back to site</button>
+            <button onClick={onOpenCode} style={{padding:"8px 16px",background:"none",
+              border:`1px solid ${cyan}66`,borderRadius:8,color:cyan,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+              I have an access code
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:1080,margin:"0 auto",padding:"48px 24px 80px"}}>
+        {/* Hero */}
+        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
+          fontSize:12,fontWeight:600,marginBottom:22}}>
+          <LivePulse/> Live in production · real customers, real data
+        </div>
+        <h1 style={{fontSize:44,fontWeight:800,lineHeight:1.1,letterSpacing:-1.2,margin:"0 0 18px",maxWidth:760}}>
+          The vCISO platform, built and running — not a pitch for one.
+        </h1>
+        <p style={{fontSize:17,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 0 30px"}}>
+          ShieldAI delivers full security-program management, AI-assisted advisory, real threat
+          intelligence, and compliance tracking to the SMB market that can't afford a $200k CISO.
+          Review the materials below, then request access to explore the live product yourself.
+        </p>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:8}}>
+          <button onClick={()=>document.getElementById("inv-request")?.scrollIntoView({behavior:"smooth"})}
+            style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+              fontSize:15,fontWeight:700,cursor:"pointer",boxShadow:`0 0 40px ${cyan}44`}}>
+            Request demo access
+          </button>
+          <button onClick={onOpenCode}
+            style={{padding:"13px 26px",background:"none",border:`1px solid ${line}`,borderRadius:10,
+              color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+            Enter with a code →
+          </button>
+        </div>
+
+        {/* Traction strip */}
+        <div style={{display:"flex",gap:28,flexWrap:"wrap",margin:"40px 0 12px",
+          padding:"22px 28px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
+          {[["$200k","Cost of the CISO we replace"],["6","Compliance frameworks live"],
+            ["100%","Real threat data — zero fabrication"],["2","Hard product boundaries by design"]].map(([n,l],i)=>(
+            <div key={i} style={{flex:"1 1 160px"}}>
+              <div style={{fontSize:30,fontWeight:800,color:cyan,lineHeight:1}}>{n}</div>
+              <div style={{fontSize:12,color:dim,marginTop:5,lineHeight:1.4}}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Documents */}
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 6px"}}>Diligence materials</h2>
+        <p style={{fontSize:14,color:dim,margin:"0 0 22px"}}>
+          Open a document to view it. Anything not yet published here is available on request with your access approval.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14,marginBottom:14}}>
+          {INVESTOR_DOCS.map(d => (
+            <a key={d.key} href={d.href} target="_blank" rel="noreferrer"
+              style={{display:"block",padding:"18px 20px",background:C.card,border:`1px solid ${line}`,
+                borderRadius:14,textDecoration:"none",color:ink,transition:"border-color .2s"}}>
+              <div style={{fontSize:26,marginBottom:10}}>{d.icon}</div>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:5}}>{d.title}</div>
+              <div style={{fontSize:12.5,color:dim,lineHeight:1.5}}>{d.desc}</div>
+              <div style={{fontSize:12,color:cyan,fontWeight:600,marginTop:12}}>Open →</div>
+            </a>
+          ))}
+        </div>
+
+        {/* Demo video */}
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 18px"}}>Product walkthrough</h2>
+        <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
+          <div style={{position:"relative",width:"100%",paddingTop:"56.25%",background:"#000"}}>
+            <video controls preload="metadata" poster="/investor/demo-poster.jpg"
+              style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",background:"#000"}}>
+              <source src="/investor/ShieldAI_Demo.mp4" type="video/mp4"/>
+            </video>
+          </div>
+          <div style={{padding:"14px 20px",fontSize:12.5,color:dim}}>
+            A guided tour of the live platform. Prefer to drive it yourself? Request access below for a
+            hands-on sandbox with both the client and analyst consoles.
+          </div>
+        </div>
+
+        {/* Request form */}
+        <div id="inv-request" style={{position:"relative",top:-70}}/>
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 6px"}}>Request demo access</h2>
+        <p style={{fontSize:14,color:dim,margin:"0 0 22px",maxWidth:640}}>
+          Tell us who you are. On approval you'll receive an access code that opens the full product —
+          both the client experience and the analyst console — no account or password required.
+        </p>
+
+        {submitted ? (
+          <div style={{padding:"26px",background:`${C.green}12`,border:`1px solid ${C.green}44`,
+            borderRadius:14,maxWidth:560}}>
+            <div style={{fontSize:17,fontWeight:700,color:C.green,marginBottom:8}}>Request received</div>
+            <p style={{fontSize:14,color:dim,lineHeight:1.6,margin:0}}>
+              Thanks — your request is in our queue. Once approved, we'll email you an access code you can
+              enter from the button in the top bar. It's the only credential you'll need.
+            </p>
+          </div>
+        ) : (
+          <div style={{maxWidth:560,background:C.card,border:`1px solid ${line}`,borderRadius:14,padding:"24px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <input style={field} placeholder="Full name *" value={form.name}
+                onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
+              <input style={field} placeholder="Work email *" value={form.email}
+                onChange={e=>setForm(f=>({...f,email:e.target.value}))}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <input style={field} placeholder="Firm / fund" value={form.company}
+                onChange={e=>setForm(f=>({...f,company:e.target.value}))}/>
+              <input style={field} placeholder="Role (e.g. Partner)" value={form.role}
+                onChange={e=>setForm(f=>({...f,role:e.target.value}))}/>
+            </div>
+            <textarea style={{...field,minHeight:84,resize:"vertical"}} placeholder="Anything you'd like us to know (optional)"
+              value={form.message} onChange={e=>setForm(f=>({...f,message:e.target.value}))}/>
+            {err && <p style={{fontSize:13,color:"#F87171",margin:"0 0 10px"}}>{err}</p>}
+            <button onClick={submit} disabled={submitting}
+              style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+                fontSize:15,fontWeight:700,cursor:submitting?"default":"pointer",opacity:submitting?0.6:1}}>
+              {submitting ? "Submitting…" : "Request access"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Access-code entry. The code is the only credential a demo visitor needs;
+// redeeming it drops them into the correct scoped sandbox (investor vs client).
+function AccessCodeModal({ onClose, onRedeem }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function submit() {
+    const c = code.trim();
+    if (!c) { setErr("Enter your access code."); return; }
+    setBusy(true); setErr(null);
+    try { await onRedeem(c); }              // on success the app navigates away
+    catch (e) { setErr(e.message || "That code isn't valid."); setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(4,10,20,0.72)",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:420,background:C.card,
+        border:`1px solid ${C.borderHi}`,borderRadius:16,padding:"28px 26px",
+        boxShadow:"0 24px 70px rgba(0,0,0,0.55)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+          <ShieldLogo size={26}/>
+          <span style={{fontSize:17,fontWeight:800,color:C.text}}>Enter the demo</span>
+        </div>
+        <p style={{fontSize:13,color:C.textSec,lineHeight:1.6,margin:"0 0 18px"}}>
+          Paste the access code from your approval email. It's the only credential you need —
+          no account, no password.
+        </p>
+        <input autoFocus value={code} onChange={e=>setCode(e.target.value.toUpperCase())}
+          onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+          placeholder="SHLD-XXXX-XXXX"
+          style={{width:"100%",padding:"12px 14px",background:C.bg,border:`1px solid ${C.border}`,
+            borderRadius:10,color:C.text,fontSize:16,letterSpacing:1.5,textAlign:"center",
+            boxSizing:"border-box",fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace"}}/>
+        {err && <p style={{fontSize:12.5,color:"#F87171",margin:"10px 0 0"}}>{err}</p>}
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button onClick={submit} disabled={busy}
+            style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:C.accent,
+              color:C.bg,fontSize:14,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+            {busy ? "Verifying…" : "Enter demo"}
+          </button>
+          <button onClick={onClose} disabled={busy}
+            style={{padding:"12px 18px",borderRadius:10,border:`1px solid ${C.border}`,
+              background:"none",color:C.textSec,fontSize:14,cursor:"pointer"}}>
+            Cancel
+          </button>
+        </div>
+        <p style={{fontSize:11.5,color:C.textMut,margin:"16px 0 0",lineHeight:1.6,textAlign:"center"}}>
+          Don't have a code? Request access from the Investors page or the contact form below.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenInvestor,
+                        openCodeEntry, onCodeEntryOpened }) {
   const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -4188,6 +4538,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
   const [demoState, setDemoState] = useState({ seeded: null, personas: [] });
   const [demoBusy, setDemoBusy] = useState(null);
   const [demoErr, setDemoErr] = useState(null);
+  const [showCodeEntry, setShowCodeEntry] = useState(false);
+
+  // Returning from the investor page's "I have a code" button opens the modal.
+  useEffect(() => {
+    if (openCodeEntry) { setShowCodeEntry(true); onCodeEntryOpened && onCodeEntryOpened(); }
+  }, [openCodeEntry]);
 
   // Ask the backend whether the sandbox is seeded before offering the button —
   // better to hide the entry point than to hand someone a broken demo.
@@ -4264,6 +4620,11 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
           <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}}>
             <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
+            <button onClick={onOpenInvestor}
+              style={{background:"none",border:"none",padding:0,color:cyan,fontSize:13,fontWeight:600,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              Investors
+            </button>
             <a href="#contact" style={{color:dim,fontSize:13,textDecoration:"none"}}>Contact</a>
             <button onClick={onLogin} style={{padding:"8px 16px",background:"none",
               border:`1px solid ${line}`,borderRadius:8,color:ink,fontSize:13,fontWeight:600,cursor:"pointer"}}>
@@ -4288,9 +4649,10 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
           maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
           The cybersecurity expert<br/>your business is required to have.
         </h1>
-        <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 auto 36px"}}>
-          A full-time CISO costs $200,000 a year. ShieldAI gives you the same protection —
-          AI-powered, expert-reviewed — for the price of a subscription.
+        <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 auto 36px"}}>
+          A full-time CISO costs $200,000 a year. ShieldAI delivers the same protection —
+          real threat intelligence, prioritized remediation, audit-ready evidence, and compliance
+          tracking, with a human analyst in the loop — for the price of a subscription.
         </p>
         <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
           <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
@@ -4304,14 +4666,13 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
               borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
             Try the assessment →
           </button>
-          {demoState.seeded && demoState.personas.map(p => (
-            <button key={p.id} onClick={()=>enterDemo(p.id)} disabled={!!demoBusy}
+          {demoState.seeded && (
+            <button onClick={()=>setShowCodeEntry(true)}
               style={{padding:"14px 28px",background:"none",border:`1px solid ${cyan}66`,
-                borderRadius:10,color:cyan,fontSize:15,fontWeight:600,
-                cursor:demoBusy?"wait":"pointer",opacity:demoBusy&&demoBusy!==p.id?0.5:1}}>
-              {demoBusy===p.id ? "Opening…" : `Try the demo · ${p.label}`}
+                borderRadius:10,color:cyan,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+              Enter demo with access code →
             </button>
-          ))}
+          )}
         </div>
         {demoState.seeded && (
           <div style={{display:"inline-flex",alignItems:"center",gap:10,marginTop:18,padding:"9px 16px",
@@ -4319,14 +4680,19 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
             maxWidth:600,textAlign:"left"}}>
             <LivePulse color={C.purple} size={6}/>
             <span style={{fontSize:12.5,color:dim,lineHeight:1.5}}>
-              <strong style={{color:C.text,fontWeight:600}}>No signup, no credentials.</strong>{" "}
-              A private, fully working sandbox with sample companies — isolated from live
-              client data and discarded when you leave.
+              <strong style={{color:C.text,fontWeight:600}}>The demo is access-controlled.</strong>{" "}
+              Investors and prospective clients receive a code after requesting access. Your code is
+              the only credential you need — it opens a private, isolated sandbox with sample data.
             </span>
           </div>
         )}
         {demoErr && (
           <p style={{fontSize:13,color:"#F87171",marginTop:10}}>{demoErr}</p>
+        )}
+        {showCodeEntry && (
+          <AccessCodeModal
+            onClose={()=>setShowCodeEntry(false)}
+            onRedeem={onRedeemCode}/>
         )}
 
         {/* Signature: posture score motif */}
@@ -4399,7 +4765,52 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo }) {
         </div>
       </Section>
 
-      {/* AI ENGINE STRIP */}
+      {/* PLATFORM CAPABILITIES — the working feature set, kept honest: these are
+          all live in the product, not roadmap. Mirrors what a demo visitor
+          actually sees inside the client dashboard. */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"56px 0"}}>
+        <Section>
+          <Eyebrow>Inside the platform</Eyebrow>
+          <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 10px",maxWidth:640}}>
+            A complete security program, not a report you file and forget.
+          </h2>
+          <p style={{fontSize:15,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 0 34px"}}>
+            Every capability below is live in the product today — the same views a client or investor
+            sees when they enter the demo.
+          </p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}>
+            {[
+              { icon:"🔍", t:"Real threat intelligence",
+                d:"Live CVE matching against your actual software via the NVD feed, plus breach exposure from Have I Been Pwned. Real data — nothing fabricated." },
+              { icon:"🛠️", t:"Prioritized remediation",
+                d:"Gaps ranked by how much each fix moves your NIST posture score. Turn any gap into a tracked task; completing it re-scores you automatically." },
+              { icon:"📎", t:"Evidence & audit readiness",
+                d:"Attach proof to completed work and see a live audit-coverage score — the evidence insurers and auditors ask for, ready when they do." },
+              { icon:"✅", t:"Compliance tracking",
+                d:"Six real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace." },
+              { icon:"🔔", t:"Notifications & review",
+                d:"When your analyst approves a policy or requests changes, you know immediately — with a direct link to what changed." },
+              { icon:"🤝", t:"A human vCISO in the loop",
+                d:"AI drafts and monitors; a dedicated analyst reviews and advises at every stage. AI advises, humans act — by design." },
+            ].map((f,i)=>(
+              <div key={i} style={{padding:"20px 22px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+                <div style={{fontSize:26,marginBottom:11}}>{f.icon}</div>
+                <div style={{fontSize:15.5,fontWeight:700,marginBottom:7}}>{f.t}</div>
+                <div style={{fontSize:13,color:dim,lineHeight:1.6}}>{f.d}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:26,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontSize:13,color:dim}}>Also available for MSPs:</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>White-label branding</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Analyst console with client isolation</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Read-only endpoint monitoring</span>
+          </div>
+        </Section>
+      </div>
       {/* Deliberately does not name model vendors. Naming them invites the
           "you're just a wrapper" objection, and would tie the pitch to
           providers we may swap. The differentiator is the boundary, not the
@@ -5870,6 +6281,30 @@ function AdminPanel({ onClose }) {
     }
   }
 
+  // Approve a lead → mint an access code (investor or client) and mark the lead
+  // qualified. Returns the generated code so the admin can send it to the person.
+  async function approveLead(id, type) {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/leads/${id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not approve.");
+      const code = data.accessCode?.code;
+      setLeads(prev => prev.map(l => l.id === id
+        ? { ...l, status: "qualified", accessCode: code, accessType: type } : l));
+      setNotice(`Approved · ${type} access code: ${code}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function deleteLead(id, email) {
     if (!window.confirm(`Delete the lead from ${email}? This cannot be undone.`)) return;
     setBusy(id);
@@ -6586,6 +7021,7 @@ function AdminPanel({ onClose }) {
             busy={busy}
             onRefresh={loadLeads}
             onSetStatus={setLeadStatus}
+            onApprove={approveLead}
             onDelete={deleteLead}
           />
         )}
@@ -6808,7 +7244,7 @@ const LEAD_STATUSES = [
   { id:"closed",    label:"Closed",    color:C.textMut },
 ];
 
-function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) {
+function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, onDelete }) {
   const [filter, setFilter] = useState("all");
 
   const counts = leads.reduce((acc,l)=>{ const s=l.status||"new"; acc[s]=(acc[s]||0)+1; return acc; }, {});
@@ -6911,6 +7347,24 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) 
                         );
                       })}
                     </div>
+                    {/* Approve → mint access code. Investor = client+analyst
+                        tour; Client = client views only. */}
+                    <div style={{display:"flex",gap:5,justifyContent:"flex-end"}}>
+                      <button onClick={()=>onApprove(l.id, "investor")} disabled={busy===l.id}
+                        title="Approve as investor (client + analyst views)"
+                        style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:600,
+                          background:`${C.purple}18`,border:`1px solid ${C.purple}55`,color:C.purple,
+                          cursor:busy===l.id?"wait":"pointer"}}>
+                        ✓ Investor
+                      </button>
+                      <button onClick={()=>onApprove(l.id, "client")} disabled={busy===l.id}
+                        title="Approve as client demo (client views only)"
+                        style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:600,
+                          background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent,
+                          cursor:busy===l.id?"wait":"pointer"}}>
+                        ✓ Client
+                      </button>
+                    </div>
                     <button onClick={()=>onDelete(l.id, l.email)} disabled={busy===l.id}
                       style={{padding:"5px 12px",background:`${C.red}12`,border:`1px solid ${C.red}33`,
                         borderRadius:6,color:C.red,fontSize:11,fontWeight:600,
@@ -6919,6 +7373,25 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) 
                     </button>
                   </div>
                 </div>
+
+                {/* Issued access code (after approval) */}
+                {l.accessCode && (
+                  <div style={{marginTop:12,padding:"10px 14px",background:`${C.green}10`,
+                    border:`1px solid ${C.green}33`,borderRadius:8,display:"flex",
+                    alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <span style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600}}>
+                      {(l.accessType||"").toUpperCase()} ACCESS CODE
+                    </span>
+                    <code style={{fontSize:15,fontWeight:700,color:C.green,letterSpacing:1.5,
+                      fontFamily:"ui-monospace,Menlo,monospace"}}>{l.accessCode}</code>
+                    <button onClick={()=>{ try { navigator.clipboard.writeText(l.accessCode); } catch { /* ignore */ } }}
+                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,
+                        background:C.surface,color:C.textSec,fontSize:11,cursor:"pointer"}}>
+                      Copy
+                    </button>
+                    <span style={{fontSize:11,color:C.textMut}}>Send this to {l.email} — it's their only credential.</span>
+                  </div>
+                )}
               </Card>
             );
           })}
@@ -10585,7 +11058,8 @@ export default function ShieldAI() {
   const [assessment, setAssessment] = useState(null);
   const [results, setResults] = useState(null);
   const [consoleTarget, setConsoleTarget] = useState(null); // {assessmentId, programId}
-  const [publicView, setPublicView] = useState("marketing"); // marketing | auth (when logged out)
+  const [publicView, setPublicView] = useState("marketing"); // marketing | investor | auth (when logged out)
+  const [pendingCodeEntry, setPendingCodeEntry] = useState(false); // open the code modal on marketing mount
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
@@ -10596,7 +11070,14 @@ export default function ShieldAI() {
 
   // Frontend analyst detection for the mockup (matches the analyst email).
   // Later this becomes a real role flag from the backend.
-  const isAnalyst = user && (user.isAnalyst || user.email === ANALYST_EMAIL);
+  // Analyst-console access. For a demo session, this is governed strictly by the
+  // access-code type: only an "investor" code unlocks the analyst console. A
+  // "client" code never does — those visitors see a "Your vCISO" panel instead.
+  const isAnalyst = user && (
+    user.isDemo
+      ? user.accessType === "investor"
+      : (user.isAnalyst || user.email === ANALYST_EMAIL)
+  );
 
   // Tier-gate upgrade prompt (fired by authFetch on any HTTP 402).
   const [upgradePrompt, setUpgradePrompt] = useState(null);
@@ -10623,8 +11104,11 @@ export default function ShieldAI() {
       // Force a password change before granting access to anything else.
       return;
     }
-    // Analysts land directly in their console
-    if (userObj && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
+    // Real analysts land directly in their console. An investor-code demo
+    // session is different: it should start in the CLIENT experience (that's
+    // what a prospect sees) with the analyst console one click away, so the
+    // investor sees both sides. So we skip the auto-jump for demo sessions.
+    if (userObj && !userObj.isDemo && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
       setShowAnalyst(true);
     }
   }
@@ -10633,6 +11117,13 @@ export default function ShieldAI() {
   // demo token simply binds every request to the demo store on the backend.
   async function handleStartDemo(persona) {
     const demoUser = await startDemoSession(persona);
+    handleAuthenticated(demoUser);
+  }
+
+  // Redeem an access code → scoped demo session. accessType ("investor" |
+  // "client") rides on the user object and gates which consoles are reachable.
+  async function handleRedeemCode(code) {
+    const demoUser = await redeemAccessCode(code);
     handleAuthenticated(demoUser);
   }
 
@@ -10684,15 +11175,24 @@ export default function ShieldAI() {
     setPhase("analysis");
   }
 
-  // Not logged in → marketing front page, then auth
+  // Not logged in → marketing front page, investor page, or auth
   if (!user) {
     if (publicView === "auth") {
       return <AuthScreen onAuthenticated={handleAuthenticated} onBack={() => setPublicView("marketing")}/>;
     }
+    if (publicView === "investor") {
+      return <InvestorPage
+        onBack={() => setPublicView("marketing")}
+        onOpenCode={() => { setPublicView("marketing"); setTimeout(() => setPendingCodeEntry(true), 0); }}/>;
+    }
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
       onLogin={() => setPublicView("auth")}
-      onStartDemo={handleStartDemo}/>;
+      onStartDemo={handleStartDemo}
+      onRedeemCode={handleRedeemCode}
+      onOpenInvestor={() => setPublicView("investor")}
+      openCodeEntry={pendingCodeEntry}
+      onCodeEntryOpened={() => setPendingCodeEntry(false)}/>;
   }
 
   // Forced first-login password change — blocks everything until done.
