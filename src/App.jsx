@@ -4295,6 +4295,11 @@ function DemoBanner({ onExit }) {
 // analyst views). Documents are served from Vite's /public dir; a doc that
 // hasn't been published yet shows as "available on request" rather than a dead
 // link.
+
+// Flip to true once /investor/ShieldAI_Demo.mp4 and /investor/demo-poster.jpg
+// exist in the public folder. Keeps the page from rendering a broken player.
+const DEMO_VIDEO_READY = false;
+
 const INVESTOR_DOCS = [
   { key:"pitch",   icon:"📊", title:"Pitch Deck",         desc:"The 12-slide investor deck — problem, product, market, traction, ask.", href:"/investor/ShieldAI_Pitch_Deck.pdf" },
   { key:"plan",    icon:"📈", title:"Business Plan",       desc:"Full 2026 business plan: strategy, go-to-market, financial model, milestones.", href:"/investor/ShieldAI_Business_Plan.pdf" },
@@ -4413,20 +4418,41 @@ function InvestorPage({ onBack, onOpenCode }) {
           ))}
         </div>
 
-        {/* Demo video */}
+        {/* Demo video — flip DEMO_VIDEO_READY to true once the mp4 + poster are
+            in public/investor/. Until then we show a placeholder that routes to
+            the live hands-on demo instead of a broken player. */}
         <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 18px"}}>Product walkthrough</h2>
-        <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
-          <div style={{position:"relative",width:"100%",paddingTop:"56.25%",background:"#000"}}>
-            <video controls preload="metadata" poster="/investor/demo-poster.jpg"
-              style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",background:"#000"}}>
-              <source src="/investor/ShieldAI_Demo.mp4" type="video/mp4"/>
-            </video>
+        {DEMO_VIDEO_READY ? (
+          <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
+            <div style={{position:"relative",width:"100%",paddingTop:"56.25%",background:"#000"}}>
+              <video controls preload="metadata" poster="/investor/demo-poster.jpg"
+                style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",background:"#000"}}>
+                <source src="/investor/ShieldAI_Demo.mp4" type="video/mp4"/>
+              </video>
+            </div>
+            <div style={{padding:"14px 20px",fontSize:12.5,color:dim}}>
+              A guided tour of the live platform. Prefer to drive it yourself? Request access below for a
+              hands-on sandbox with both the client and analyst consoles.
+            </div>
           </div>
-          <div style={{padding:"14px 20px",fontSize:12.5,color:dim}}>
-            A guided tour of the live platform. Prefer to drive it yourself? Request access below for a
-            hands-on sandbox with both the client and analyst consoles.
+        ) : (
+          <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"40px 32px",
+            textAlign:"center"}}>
+            <div style={{fontSize:34,marginBottom:12}}>🎥</div>
+            <div style={{fontSize:17,fontWeight:700,color:ink,marginBottom:8}}>
+              A recorded walkthrough is on the way.
+            </div>
+            <p style={{fontSize:14,color:dim,lineHeight:1.6,maxWidth:520,margin:"0 auto 20px"}}>
+              In the meantime, the best walkthrough is the product itself. Request access below and
+              you'll get a hands-on sandbox with both the client and analyst consoles.
+            </p>
+            <button onClick={()=>document.getElementById("inv-request")?.scrollIntoView({behavior:"smooth"})}
+              style={{padding:"11px 22px",background:cyan,color:deep,border:"none",borderRadius:9,
+                fontSize:14,fontWeight:700,cursor:"pointer"}}>
+              Request demo access
+            </button>
           </div>
-        </div>
+        )}
 
         {/* Request form */}
         <div id="inv-request" style={{position:"relative",top:-70}}/>
