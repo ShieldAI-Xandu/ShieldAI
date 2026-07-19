@@ -4309,7 +4309,8 @@ function InvestorPage({ onBack, onOpenCode }) {
   const [err, setErr] = useState(null);
 
   async function submit() {
-    if (!form.name.trim() || !form.email.includes("@")) {
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
+    if (!form.name.trim() || !emailOk) {
       setErr("Please enter your name and a valid email."); return;
     }
     setSubmitting(true); setErr(null);
@@ -4441,7 +4442,8 @@ function InvestorPage({ onBack, onOpenCode }) {
             <div style={{fontSize:17,fontWeight:700,color:C.green,marginBottom:8}}>Request received</div>
             <p style={{fontSize:14,color:dim,lineHeight:1.6,margin:0}}>
               Thanks — your request is in our queue. Once approved, we'll email you an access code you can
-              enter from the button in the top bar. It's the only credential you'll need.
+              enter from the button in the top bar. It's the only credential you'll need, and it stays valid
+              for 96 hours so you can explore at your own pace.
             </p>
           </div>
         ) : (
@@ -4539,6 +4541,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   const [demoBusy, setDemoBusy] = useState(null);
   const [demoErr, setDemoErr] = useState(null);
   const [showCodeEntry, setShowCodeEntry] = useState(false);
+  const [mobileMenu, setMobileMenu] = useState(false);
 
   // Returning from the investor page's "I have a code" button opens the modal.
   useEffect(() => {
@@ -4564,7 +4567,9 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   }
 
   async function submitLead() {
-    if (!form.email.includes("@")) { setFormErr("Please enter a valid email address."); return; }
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
+    if (!form.name.trim()) { setFormErr("Please enter your name."); return; }
+    if (!emailOk) { setFormErr("Please enter a valid work email address."); return; }
     setSubmitting(true); setFormErr(null);
     try {
       const res = await fetch(`${API_BASE}/api/leads`, {
@@ -4602,22 +4607,48 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
 
   return (
-    <div style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
+    <div className="mkt-root" style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
+      {/* Responsive rules — this page is otherwise all inline styles, so a small
+          scoped stylesheet handles the breakpoints inline styles can't. */}
+      <style>{`
+        .mkt-nav-links { display:flex; gap:14px; align-items:center; margin-left:auto; }
+        .mkt-nav-toggle { display:none; margin-left:auto; background:none; border:1px solid ${line};
+          border-radius:8px; color:${ink}; width:38px; height:38px; cursor:pointer; font-size:16px; }
+        .mkt-mobile-menu { display:none; }
+        .mkt-hero-h1 { font-size:52px; }
+        .mkt-hero-sub { font-size:18px; }
+        @media (max-width: 720px) {
+          .mkt-nav-links { display:none; }
+          .mkt-nav-links.open { display:flex; }
+          .mkt-nav-toggle { display:inline-flex; align-items:center; justify-content:center; }
+          .mkt-mobile-menu.open { display:flex; flex-direction:column; gap:4px; padding:8px 24px 16px; }
+          .mkt-hero-h1 { font-size:34px; }
+          .mkt-hero-sub { font-size:16px; }
+          .mkt-cta-row { flex-direction:column; align-items:stretch; }
+          .mkt-cta-row > button { width:100%; }
+        }
+        .mkt-root button:focus-visible, .mkt-root a:focus-visible,
+        .mkt-root input:focus-visible, .mkt-root select:focus-visible,
+        .mkt-root textarea:focus-visible {
+          outline: 2px solid ${cyan}; outline-offset: 2px; border-radius: 6px;
+        }
+      `}</style>
+
       {/* NAV */}
       <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
         background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
         <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
           <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
           <span style={{fontSize:11,color:dim,marginLeft:4}}>Virtual CISO</span>
-          <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}}>
+          <div className="mkt-nav-links">
             <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
             <button onClick={onOpenInvestor}
@@ -4631,6 +4662,21 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               Client Login
             </button>
           </div>
+          <button className="mkt-nav-toggle" aria-label="Menu" onClick={()=>setMobileMenu(o=>!o)}>
+            {mobileMenu ? "✕" : "☰"}
+          </button>
+        </div>
+        {/* Mobile dropdown */}
+        <div className={`mkt-mobile-menu${mobileMenu?" open":""}`}
+          style={{borderTop:`1px solid ${line}`,background:deep}}>
+          <a href="#how" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>How it works</a>
+          <a href="#pricing" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Pricing</a>
+          <button onClick={()=>{setMobileMenu(false);onOpenInvestor();}}
+            style={{background:"none",border:"none",padding:"10px 0",color:cyan,fontSize:15,fontWeight:600,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
+          <a href="#contact" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Contact</a>
+          <button onClick={()=>{setMobileMenu(false);onLogin();}}
+            style={{marginTop:8,padding:"11px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+              color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>Client Login</button>
         </div>
       </div>
 
@@ -4645,26 +4691,28 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           <LivePulse/>
           Built and running in production today
         </div>
-        <h1 style={{fontSize:52,fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
+        <h1 className="mkt-hero-h1" style={{fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
           maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
           The cybersecurity expert<br/>your business is required to have.
         </h1>
-        <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 auto 36px"}}>
+        <p className="mkt-hero-sub" style={{color:dim,lineHeight:1.6,maxWidth:640,margin:"0 auto 36px"}}>
           A full-time CISO costs $200,000 a year. ShieldAI delivers the same protection —
           real threat intelligence, prioritized remediation, audit-ready evidence, and compliance
           tracking, with a human analyst in the loop — for the price of a subscription.
         </p>
-        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+        <div className="mkt-cta-row" style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          {/* One primary action — starting the assessment is the strongest
+              self-serve hook. Everything else is visually secondary. */}
+          <button onClick={onEnterApp}
             style={{padding:"14px 28px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
               color:deep,border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:"pointer",
               boxShadow:`0 0 40px ${cyan}44`}}>
-            Request information
+            Try the assessment →
           </button>
-          <button onClick={onEnterApp}
+          <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
             style={{padding:"14px 28px",background:"none",border:`1px solid ${line}`,
               borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
-            Try the assessment →
+            Request information
           </button>
           {demoState.seeded && (
             <button onClick={()=>setShowCodeEntry(true)}
@@ -4695,19 +4743,70 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             onRedeem={onRedeemCode}/>
         )}
 
-        {/* Signature: posture score motif */}
-        <div style={{marginTop:60,display:"inline-flex",alignItems:"center",gap:28,
-          padding:"24px 36px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
-          <div style={{textAlign:"center"}}>
-            <div style={{fontSize:46,fontWeight:800,color:C.green,lineHeight:1}}>91</div>
-            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE</div>
+        {/* Signature: an inline product preview. Self-contained (no image asset)
+            so it can't 404, and it shows the actual dashboard motifs a visitor
+            sees inside — posture score, live CVE exposure, remediation gain. */}
+        <div style={{marginTop:56,maxWidth:720,marginLeft:"auto",marginRight:"auto",
+          background:C.card,border:`1px solid ${line}`,borderRadius:18,overflow:"hidden",
+          boxShadow:`0 30px 80px rgba(0,0,0,0.4)`,textAlign:"left"}}>
+          {/* Window chrome */}
+          <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
+            borderBottom:`1px solid ${line}`,background:navy}}>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#FF5F57"}}/>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#FEBC2E"}}/>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#28C840"}}/>
+            <span style={{marginLeft:10,fontSize:11,color:dim}}>ShieldAI · Security Dashboard</span>
+            <span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,
+              fontSize:10,color:C.green,fontWeight:600}}><LivePulse size={5}/> LIVE</span>
           </div>
-          <div style={{width:1,height:48,background:line}}/>
-          <div style={{textAlign:"left",maxWidth:280}}>
-            <div style={{fontSize:13,color:ink,fontWeight:600,marginBottom:3}}>A score you can prove</div>
-            <div style={{fontSize:12,color:dim,lineHeight:1.5}}>
-              Every point traces to a specific control — the kind of evidence insurers and auditors trust.
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,padding:"22px 24px"}}>
+            {/* Posture ring */}
+            <div style={{textAlign:"center"}}>
+              <div style={{position:"relative",width:104,height:104}}>
+                <svg viewBox="0 0 100 100" width="104" height="104">
+                  <circle cx="50" cy="50" r="42" fill="none" stroke={line} strokeWidth="8"/>
+                  <circle cx="50" cy="50" r="42" fill="none" stroke={C.green} strokeWidth="8"
+                    strokeLinecap="round" strokeDasharray={`${2*Math.PI*42*0.91} ${2*Math.PI*42}`}
+                    transform="rotate(-90 50 50)"/>
+                </svg>
+                <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",
+                  alignItems:"center",justifyContent:"center"}}>
+                  <span style={{fontSize:30,fontWeight:800,color:C.green,lineHeight:1}}>91</span>
+                  <span style={{fontSize:8,color:dim,letterSpacing:1}}>POSTURE</span>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:C.green,fontWeight:600,marginTop:8}}>Strong</div>
             </div>
+            {/* Live tiles */}
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{display:"flex",gap:10}}>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`}}>
+                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>CVE EXPOSURE · NVD</div>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <span style={{fontSize:18,fontWeight:800,color:C.red}}>3</span>
+                    <span style={{fontSize:11,color:dim}}>High</span>
+                    <span style={{fontSize:18,fontWeight:800,color:C.amber,marginLeft:6}}>7</span>
+                    <span style={{fontSize:11,color:dim}}>Medium</span>
+                  </div>
+                </div>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`}}>
+                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>AUDIT COVERAGE</div>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <span style={{fontSize:18,fontWeight:800,color:C.green}}>86%</span>
+                    <span style={{fontSize:11,color:dim}}>evidence on file</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`,
+                display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:9,color:dim,letterSpacing:1}}>TOP FIX</span>
+                <span style={{fontSize:12,color:ink,flex:1}}>Enable MFA on remote access</span>
+                <span style={{fontSize:12,fontWeight:700,color:C.green}}>+6 posture</span>
+              </div>
+            </div>
+          </div>
+          <div style={{padding:"12px 24px",borderTop:`1px solid ${line}`,fontSize:12,color:dim}}>
+            Every point traces to a specific control — the evidence insurers and auditors trust.
           </div>
         </div>
       </Section>
@@ -4721,14 +4820,15 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           </h2>
           <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
             {[
-              { stat:"47%", label:"of small businesses have no cybersecurity budget at all." },
-              { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most." },
-              { stat:"43%", label:"of all cyberattacks target small businesses." },
+              { stat:"47%", label:"of businesses under 50 employees have no cybersecurity budget at all.", src:"StrongDM, 2025" },
+              { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most.", src:"Industry salary benchmarks" },
+              { stat:"43%", label:"of all cyberattacks target small businesses.", src:"Verizon DBIR" },
             ].map((b,i)=>(
               <div key={i} style={{flex:"1 1 240px",background:C.card,border:`1px solid ${line}`,
                 borderRadius:14,padding:"26px 24px"}}>
                 <div style={{fontSize:40,fontWeight:800,color:cyan,lineHeight:1,marginBottom:10}}>{b.stat}</div>
-                <div style={{fontSize:14,color:dim,lineHeight:1.5}}>{b.label}</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.5,marginBottom:10}}>{b.label}</div>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:0.3}}>Source: {b.src}</div>
               </div>
             ))}
           </div>
@@ -4900,7 +5000,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
               )}
               <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
-              <div style={{fontSize:22,fontWeight:800,marginBottom:18}}>{t.name}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:4}}>{t.name}</div>
+              <div style={{fontSize:14,color:t.featured?cyan:C.green,fontWeight:600,marginBottom:16}}>{t.price}</div>
               <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
                 {t.points.map((p,j)=>(
                   <div key={j} style={{display:"flex",gap:9,fontSize:14,color:dim,lineHeight:1.4}}>
@@ -5020,8 +5121,13 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         <Section style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
           <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
           <span style={{fontSize:12,color:dim}}>Virtual CISO for small business</span>
-          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center"}}>
-            <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Client Login</button>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+            <a href="/legal/privacy.pdf" target="_blank" rel="noreferrer"
+              style={{color:dim,fontSize:13,textDecoration:"none"}}>Privacy</a>
+            <a href="/legal/terms.pdf" target="_blank" rel="noreferrer"
+              style={{color:dim,fontSize:13,textDecoration:"none"}}>Terms</a>
+            <button onClick={onOpenInvestor} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
+            <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Client Login</button>
             <span style={{fontSize:12,color:dim}}>© 2026 Xandu Ltd</span>
           </div>
         </Section>
@@ -6295,9 +6401,11 @@ function AdminPanel({ onClose }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not approve.");
       const code = data.accessCode?.code;
+      const expiresAt = data.accessCode?.expiresAt;
+      const ttlHours = data.accessCode?.ttlHours;
       setLeads(prev => prev.map(l => l.id === id
-        ? { ...l, status: "qualified", accessCode: code, accessType: type } : l));
-      setNotice(`Approved · ${type} access code: ${code}`);
+        ? { ...l, status: "qualified", accessCode: code, accessType: type, accessExpiresAt: expiresAt, accessTtlHours: ttlHours } : l));
+      setNotice(`Approved · ${type} code ${code} (valid ${ttlHours||""}h)`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -7390,6 +7498,11 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
                       Copy
                     </button>
                     <span style={{fontSize:11,color:C.textMut}}>Send this to {l.email} — it's their only credential.</span>
+                    {l.accessExpiresAt && (
+                      <span style={{fontSize:11,color:C.amber,fontWeight:600,width:"100%"}}>
+                        Expires {new Date(l.accessExpiresAt).toLocaleString()} ({l.accessTtlHours||( l.accessType==="investor"?96:48)}h window)
+                      </span>
+                    )}
                   </div>
                 )}
               </Card>

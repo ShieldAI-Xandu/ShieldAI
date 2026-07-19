@@ -136,6 +136,10 @@ export function demoGuard(req, res, next) {
 
 export const ACCESS_CODE_TYPES = ["investor", "client"];
 
+// How long a code stays valid after it's created. Investors get a longer window
+// than prospective clients so diligence can happen at their pace.
+const ACCESS_CODE_TTL_HOURS = { client: 48, investor: 96 };
+
 // Human-friendly, unambiguous code: SHLD-XXXX-XXXX (no 0/O/1/I).
 function generateAccessCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -154,6 +158,9 @@ export async function createAccessCode(db, { type, leadId = null, note = "", cre
   db.data.accessCodes ||= [];
   let code;
   do { code = generateAccessCode(); } while (db.data.accessCodes.some(c => c.code === code));
+  const createdAt = new Date();
+  const ttlHours = ACCESS_CODE_TTL_HOURS[type] ?? 48;
+  const expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000);
   const record = {
     id: randomUUID(),
     code,
@@ -164,17 +171,25 @@ export async function createAccessCode(db, { type, leadId = null, note = "", cre
     active: true,
     redeemedCount: 0,
     lastRedeemedAt: null,
-    createdAt: new Date().toISOString(),
+    ttlHours,
+    createdAt: createdAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
   };
   db.data.accessCodes.push(record);
   await db.write();
   return record;
 }
 
-function findActiveCode(prod, raw) {
+function isExpired(record) {
+  return !!record?.expiresAt && new Date(record.expiresAt).getTime() <= Date.now();
+}
+
+// Find a code by its raw value, regardless of active/expired state, so callers
+// can give a precise reason (deactivated vs expired vs unknown).
+function findCode(prod, raw) {
   const norm = String(raw || "").trim().toUpperCase();
   if (!norm) return null;
-  return (prod.data.accessCodes || []).find(c => c.active && c.code.toUpperCase() === norm) || null;
+  return (prod.data.accessCodes || []).find(c => c.code.toUpperCase() === norm) || null;
 }
 
 // ── Public routes ─────────────────────────────────────────────
@@ -186,9 +201,18 @@ export function registerDemoRoutes(app, db) {
   app.post(`${DEMO_PATH_PREFIX}/redeem-code`, async (req, res) => {
     try {
       const prod = prodDb();
-      const record = findActiveCode(prod, req.body?.code);
+      const record = findCode(prod, req.body?.code);
       if (!record) {
-        return res.status(403).json({ error: "That access code isn't valid or has been deactivated.", code: "BAD_CODE" });
+        return res.status(403).json({ error: "That access code isn't recognized.", code: "BAD_CODE" });
+      }
+      if (!record.active) {
+        return res.status(403).json({ error: "That access code has been deactivated.", code: "CODE_DEACTIVATED" });
+      }
+      if (isExpired(record)) {
+        return res.status(403).json({
+          error: "That access code has expired. Please request a new one.",
+          code: "CODE_EXPIRED",
+        });
       }
 
       // investor → analyst persona (can see the analyst console); the frontend
