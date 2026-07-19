@@ -15,7 +15,7 @@
 //   registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
 
 import { randomUUID } from "crypto";
-import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
+import { getTier, hasCapability, hasTrainingDelivery, featureAccess, DEFAULT_TIER } from "./tiers.js";
 import { cachedExposure } from "./cveService.js";
 import { cachedDarkweb } from "./darkwebService.js";
 import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
@@ -792,48 +792,149 @@ Limit findings to 6 and recommendations to 5.`;
   //  no platform totals, no other accounts. Advisory only.
   // ════════════════════════════════════════════════════════════
 
-  // Build a snapshot containing ONLY this user's own data.
+  // Build a snapshot containing ONLY this user's own data, and ONLY the data
+  // sections their tier includes. Sections above their tier are omitted from the
+  // data entirely (so Mastermind physically cannot leak feature data they lack)
+  // and surfaced instead via `featureAccess.missing` so it can explain upgrades.
   function clientSnapshot(db, userId) {
-    const agents = (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked");
-    const reports = db.data.agentReports || [];
-    const latestByAgent = {};
-    for (const r of reports) {
-      if (r.ownerUserId !== userId) continue;            // isolation: only own reports
-      const cur = latestByAgent[r.agentId];
-      if (!cur || new Date(r.receivedAt) > new Date(cur.receivedAt)) latestByAgent[r.agentId] = r;
-    }
-    const endpoints = agents.map(a => {
-      const rep = latestByAgent[a.id];
-      const checks = rep?.report?.checks || [];
-      const fails = checks.filter(c => c.status === "fail").length;
-      const warns = checks.filter(c => c.status === "warn").length;
-      return {
-        hostname: a.hostname, os: a.os, agentVersion: a.agentVersion || rep?.report?.agentVersion || "unknown",
-        posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
-        checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
-        recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
-      };
-    });
-    // Only recommendations that have reached this client (not internal drafts).
-    const recs = (db.data.recommendations || [])
+    const user = (db.data.users || []).find(u => u.id === userId);
+    const tier = user?.tier && getTier(user.tier).id === user.tier ? user.tier : DEFAULT_TIER;
+    const sub = (db.data.subscriptions || []).find(s => s.userId === userId);
+    const userAddons = [
+      ...(Array.isArray(user?.addons) ? user.addons : []),
+      ...(Array.isArray(sub?.addons) ? sub.addons : []),
+    ];
+    const has = (cap) => hasCapability(tier, cap);
+    const access = featureAccess(tier, userAddons);
+    const tierObj = getTier(tier);
+
+    const snap = {
+      you: {
+        tier,
+        tierName: tierObj.name,
+        // What this client can and cannot use — Mastermind uses this to answer
+        // feature questions and to nudge upgrades. Never contains other tiers' data.
+        featuresIncluded: access.has,
+        featuresNotIncluded: access.missing,
+      },
+      assessments: (db.data.assessments || [])
+        .filter(a => a.userId === userId)
+        .map(a => ({ id: a.id, createdAt: a.createdAt, company: a.company?.name || null })),
+    };
+
+    // Recommendations that have reached this client (not internal drafts). These
+    // exist for any tier that has a program.
+    snap.recommendations = (db.data.recommendations || [])
       .filter(r => r.ownerUserId === userId && !["suggested"].includes(r.status))
       .map(r => ({ title: r.title, detail: r.detail, severity: r.severity, status: r.status }));
-    const assessments = (db.data.assessments || [])
-      .filter(a => a.userId === userId)
-      .map(a => ({ id: a.id, createdAt: a.createdAt, company: a.company?.name || null }));
-    const exp = cachedExposure(db, userId);
-    const dw = cachedDarkweb(db, userId);
-    return { endpoints, recommendations: recs, assessments,
-             cveExposure: exp ? { counts: exp.counts, top: exp.top, software: exp.software, refreshedAt: exp.refreshedAt, degraded: exp.degraded }
-                              : { counts: {}, note: "No CVE exposure computed yet." },
-             darkWebExposure: dw ? { statusLevel: dw.statusLevel, monitored: dw.monitored, domain: dw.domain,
-                                     breachedAccounts: dw.breachedAccounts ?? null, distinctBreaches: dw.distinctBreaches ?? null,
-                                     breaches: dw.breaches || [], reason: dw.reason || null, refreshedAt: dw.refreshedAt }
-                                 : { statusLevel: "Not checked", note: "No breach exposure computed yet." },
-             totals: { endpoints: endpoints.length, atRisk: endpoints.filter(e => e.posture === "at_risk").length } };
+
+    // ── Endpoint monitoring (Starter+) ──────────────────────────
+    if (has("endpoints")) {
+      const agents = (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked");
+      const reports = db.data.agentReports || [];
+      const latestByAgent = {};
+      for (const r of reports) {
+        if (r.ownerUserId !== userId) continue;
+        const cur = latestByAgent[r.agentId];
+        if (!cur || new Date(r.receivedAt) > new Date(cur.receivedAt)) latestByAgent[r.agentId] = r;
+      }
+      const endpoints = agents.map(a => {
+        const rep = latestByAgent[a.id];
+        const checks = rep?.report?.checks || [];
+        const fails = checks.filter(c => c.status === "fail").length;
+        const warns = checks.filter(c => c.status === "warn").length;
+        return {
+          hostname: a.hostname, os: a.os, agentVersion: a.agentVersion || rep?.report?.agentVersion || "unknown",
+          posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
+          checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
+          recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
+        };
+      });
+      snap.endpoints = endpoints;
+      snap.totals = { endpoints: endpoints.length, atRisk: endpoints.filter(e => e.posture === "at_risk").length };
+    }
+
+    // ── Threat intelligence: CVE + dark-web (Growth+) ───────────
+    if (has("threatIntel")) {
+      const exp = cachedExposure(db, userId);
+      const dw = cachedDarkweb(db, userId);
+      snap.cveExposure = exp
+        ? { counts: exp.counts, top: exp.top, software: exp.software, refreshedAt: exp.refreshedAt, degraded: exp.degraded }
+        : { counts: {}, note: "No CVE exposure computed yet." };
+      snap.darkWebExposure = dw
+        ? { statusLevel: dw.statusLevel, monitored: dw.monitored, domain: dw.domain,
+            breachedAccounts: dw.breachedAccounts ?? null, distinctBreaches: dw.distinctBreaches ?? null,
+            breaches: dw.breaches || [], reason: dw.reason || null, refreshedAt: dw.refreshedAt }
+        : { statusLevel: "Not checked", note: "No breach exposure computed yet." };
+    }
+
+    // ── Compliance / framework control status (any tier with a program) ──
+    // controlStatus is keyed `${userId}:${frameworkId}:${controlId}`.
+    {
+      const cs = db.data.controlStatus || {};
+      const byFramework = {};
+      for (const key of Object.keys(cs)) {
+        if (!key.startsWith(userId + ":")) continue;
+        const [, frameworkId] = key.split(":");
+        (byFramework[frameworkId] ||= { met: 0, partial: 0, unmet: 0, unknown: 0, total: 0 });
+        const st = (cs[key]?.status || "unknown").toLowerCase();
+        byFramework[frameworkId].total++;
+        if (st in byFramework[frameworkId]) byFramework[frameworkId][st]++;
+        else byFramework[frameworkId].unknown++;
+      }
+      if (Object.keys(byFramework).length) snap.complianceByFramework = byFramework;
+    }
+
+    // ── Remediation tasks (any tier with a program) ─────────────
+    {
+      const tasks = (db.data.tasks || []).filter(t => t.ownerUserId === userId);
+      if (tasks.length) {
+        const open = tasks.filter(t => !["done", "cancelled"].includes(t.status));
+        snap.tasks = {
+          total: tasks.length,
+          open: open.length,
+          overdue: open.filter(t => t.dueDate && new Date(t.dueDate) < new Date()).length,
+          done: tasks.filter(t => t.status === "done").length,
+          topOpen: open.slice(0, 8).map(t => ({ title: t.title, priority: t.priority, status: t.status, dueDate: t.dueDate, controlId: t.controlId })),
+        };
+      }
+    }
+
+    // ── Training PLAN status (Starter+) ─────────────────────────
+    if (has("trainingPlan")) {
+      const plans = (db.data.trainingPrograms || []).filter(t => t.userId === userId);
+      snap.trainingPlan = { generated: plans.length, latest: plans.length ? (plans[plans.length - 1].createdAt || null) : null };
+    }
+
+    // ── Training DELIVERY status (Growth+ or Starter w/ add-on) ─
+    if (hasTrainingDelivery(tier, userAddons)) {
+      const learners = (db.data.learners || []).filter(l => l.clientUserId === userId);
+      const assigns = (db.data.trainingAssignments || []).filter(a => a.clientUserId === userId);
+      snap.trainingDelivery = {
+        learners: learners.length,
+        assignments: assigns.length,
+        completed: assigns.filter(a => a.status === "completed").length,
+        quartersScheduled: (db.data.trainingQuarters || []).filter(q => q.clientUserId === userId).length,
+      };
+    }
+
+    // ── Analyst support (Guided+) ───────────────────────────────
+    if (has("analystSupport")) {
+      const assignedAnalysts = (db.data.assignments || [])
+        .filter(a => a.clientUserId === userId)
+        .map(a => {
+          const an = (db.data.users || []).find(u => u.id === a.analystUserId);
+          return an ? (an.companyName || an.email) : null;
+        })
+        .filter(Boolean);
+      snap.analystSupport = { level: tierObj.limits?.analystSupport || "none", assignedAnalysts };
+    }
+
+    return snap;
   }
 
-  // Capability + auth gate for the client Mastermind.
+  // Capability + auth gate for the client Mastermind. Starter and up can chat;
+  // Free is upgrade-gated (a 402 the UI turns into an upgrade prompt).
   function requireClientMastermind(req, res, next) {
     requireAuth(req, res, () => {
       // Staff use the admin console, not this one.
@@ -842,10 +943,10 @@ Limit findings to 6 and recommendations to 5.`;
       }
       const user = (db.data.users || []).find(u => u.id === req.userId);
       const tier = user?.tier && getTier(user.tier).id === user.tier ? user.tier : DEFAULT_TIER;
-      if (!hasCapability(tier, "mastermind")) {
+      if (!hasCapability(tier, "mastermindChat")) {
         return res.status(402).json({
-          error: "Mastermind assistant is available on the Enterprise plan.",
-          code: "UPGRADE_REQUIRED", capability: "mastermind", currentTier: tier,
+          error: "Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.",
+          code: "UPGRADE_REQUIRED", capability: "mastermindChat", currentTier: tier, requiresTier: "starter",
         });
       }
       next();
@@ -863,15 +964,26 @@ Limit findings to 6 and recommendations to 5.`;
       content: String(m.content || "").slice(0, 6000),
     }));
 
-    // ISOLATION: only this client's own data is ever placed in context.
+    // ISOLATION: only this client's own data is ever placed in context, and only
+    // for the features their tier includes (see clientSnapshot).
     const snap = clientSnapshot(db, req.userId);
     const system = `You are ShieldAI Mastermind, a virtual-CISO assistant helping ONE client understand and improve THEIR OWN security posture.
 
-You can see only this client's own endpoints, posture checks, security events, recommendations, and assessments — provided below. You have NO knowledge of any other client, the platform as a whole, billing, or other accounts, and you must never speculate about them. If asked about anything outside this client's own data, say you can only help with their own security posture.
+ISOLATION — non-negotiable:
+- You can see ONLY this client's own data, provided below. You have NO knowledge of any other client, the platform as a whole, or other accounts, and must never speculate about them. If asked about anything outside this client's own security program, say you can only help with their own.
 
-You are ADVISORY ONLY: explain issues and recommend concrete steps the client can take or ask their ShieldAI analyst about. Never claim to perform actions. Be clear, practical, and encouraging.
+TIER SCOPING — this is critical:
+- This client is on the "${snap.you.tierName}" plan. The snapshot's "you.featuresIncluded" lists the features they HAVE; "you.featuresNotIncluded" lists features they do NOT have yet, each with the tier (and price) that unlocks it.
+- You may ONLY use and discuss data for features the client HAS. Data for features they lack is deliberately NOT in your context — never invent it, never estimate it, never imply you can see it.
+- If the client asks about a feature they do NOT have (it appears in featuresNotIncluded), do this: (1) clearly tell them that feature isn't included in their current ${snap.you.tierName} plan, (2) briefly describe what the feature does and the value it would give them, and (3) tell them exactly how to get it — the plan name and price from featuresNotIncluded (e.g. "upgrading to Growth ($349/mo)"), or the add-on if one is listed. Be encouraging and specific, never pushy. Do NOT reveal or fabricate any data from that feature — you're describing the capability, not showing results.
+- Example: a Starter client asks about dark-web breach monitoring → "Breach monitoring isn't part of your Starter plan yet. It scans known data breaches for your company's exposed credentials and alerts you. It's included when you upgrade to Growth ($349/mo) — I'd be glad to explain what it covers."
 
-This client's data (the only data you have):
+ADVISORY ONLY:
+- You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
+
+Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
+
+This client's data and feature access (the only data you have):
 ${JSON.stringify(snap)}`;
 
     try {

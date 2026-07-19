@@ -45,6 +45,7 @@ export const TIERS = {
       threatIntel: false,           // CVE/breach exposure views
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
+      mastermindChat: false,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -75,6 +76,7 @@ export const TIERS = {
       threatIntel: false,
       analystSupport: false,
       mastermind: false,
+      mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
@@ -107,6 +109,7 @@ export const TIERS = {
       threatIntel: true,            // CVE/breach exposure
       analystSupport: false,
       mastermind: false,
+      mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
     },
     features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
@@ -137,6 +140,7 @@ export const TIERS = {
       threatIntel: true,
       analystSupport: true,         // limited — periodic engineer review
       mastermind: false,
+      mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
     },
     features: ["Everything in Growth", "Periodic engineer review", "Compliance tracking", "Scheduled check-ins", "Up to 100 endpoints"],
   },
@@ -167,6 +171,7 @@ export const TIERS = {
       threatIntel: true,
       analystSupport: true,         // full — engineer runs the program
       mastermind: true,             // client-facing Q&A
+      mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
     },
     features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
@@ -194,6 +199,45 @@ export const ADDONS = {
 export const TIER_ORDER = ["free", "starter", "growth", "guided", "managed"];
 
 export const DEFAULT_TIER = "free";
+
+// Client-facing feature catalog: maps a program feature to the capability that
+// unlocks it, a human name, and the LOWEST tier that includes it. Mastermind
+// uses this to tell a client which features they have vs. which need an upgrade
+// (and to which tier), without ever exposing data from a feature they lack.
+export const FEATURE_CATALOG = [
+  { key: "buildPrograms",    capability: "buildPrograms",    name: "Security program builder",        minTier: "starter" },
+  { key: "policies",         capability: "createPolicies",   name: "Policy generation & library",     minTier: "starter" },
+  { key: "trainingPlan",     capability: "trainingPlan",     name: "AI-recommended training plan",     minTier: "starter" },
+  { key: "endpoints",        capability: "endpoints",        name: "Endpoint monitoring agents",       minTier: "starter" },
+  { key: "threatIntel",      capability: "threatIntel",      name: "Threat intelligence (CVE exposure & dark-web breach monitoring)", minTier: "growth" },
+  { key: "trainingDelivery", capability: "trainingDelivery", name: "Employee training delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
+  { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
+  { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
+];
+
+// Split the catalog into what a given tier HAS vs. what it's MISSING (with the
+// tier/add-on needed to unlock each missing one). Pure data — safe to expose.
+export function featureAccess(tierId, userAddons = []) {
+  const has = [], missing = [];
+  for (const f of FEATURE_CATALOG) {
+    let unlocked = hasCapability(tierId, f.capability);
+    // training delivery can also be unlocked by the add-on at Starter
+    if (!unlocked && f.addon && Array.isArray(userAddons) && userAddons.includes(f.addon)) unlocked = true;
+    if (unlocked) {
+      has.push({ key: f.key, name: f.name });
+    } else {
+      const t = TIERS[f.minTier];
+      missing.push({
+        key: f.key, name: f.name, requiresTier: f.minTier,
+        requiresTierName: t ? t.name : f.minTier,
+        requiresPrice: t ? (t.priceCents === 0 ? "Free" : `$${(t.priceCents/100).toFixed(0)}/mo`) : null,
+        addon: f.addon || null,
+        addonPrice: f.addon && ADDONS[f.addon] ? `$${(ADDONS[f.addon].priceCents/100).toFixed(0)}/mo` : null,
+      });
+    }
+  }
+  return { has, missing };
+}
 
 // Self-serve, self-checkout paid tiers (Managed is contact-sales / engineer-onboarded).
 export const SELF_SERVE_PAID_TIERS = ["starter", "growth", "guided"];
