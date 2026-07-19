@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "start": "node server.js",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "start": "node server.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -33,8 +33,5 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
     "vite": "^8.0.12"
-      },
-     "engines": {
-    "node": ">=20.0.0"
-  }  
+  }
 }

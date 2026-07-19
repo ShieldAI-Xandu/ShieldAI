@@ -539,7 +539,13 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-const API_BASE = "http://localhost:3001";
+// API base:
+//  - Dev (Vite on :5173): talk to the local backend on :3001.
+//  - Prod (Express serves the built frontend from ./dist): same-origin, so an
+//    empty base makes requests hit /api/... on whatever host served the page.
+// This replaces a previously hardcoded "http://localhost:3001", which broke
+// the live site (the browser was trying to reach the visitor's own machine).
+const API_BASE = import.meta.env.DEV ? "http://localhost:3001" : "";
 
 // ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS

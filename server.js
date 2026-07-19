@@ -5,6 +5,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 import db from "./db.js";
 import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
@@ -40,6 +43,10 @@ const gate = makeTierGate(db);
 // their healthcheck against it. Hardcoding a port makes the healthcheck fail —
 // the app must listen on the assigned port. Falls back to 3001 for local dev.
 const PORT = process.env.PORT || 3001;
+
+// ESM has no __dirname; derive it so we can locate the built frontend (./dist).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DIST_DIR = path.join(__dirname, "dist");
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -1091,6 +1098,28 @@ await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
+
+// ─────────────────────────────────────────────────────────────
+//  STATIC FRONTEND (single-service deploy)
+//  Serve the built Vite app from ./dist and fall back to index.html for
+//  client-side routes. This MUST come AFTER every API route so it never
+//  shadows /api or /health. In local dev the frontend runs on the Vite dev
+//  server instead, so dist may not exist — guard for that.
+// ─────────────────────────────────────────────────────────────
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+  // SPA fallback: any GET that isn't an API/health route returns index.html.
+  // Express 5 requires a named-regex or middleware form for catch-alls
+  // (bare "*" throws), so we use a middleware that filters method + path.
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (req.path.startsWith("/api") || req.path === "/health") return next();
+    res.sendFile(path.join(DIST_DIR, "index.html"));
+  });
+  console.log(`ShieldAI serving frontend from ${DIST_DIR}`);
+} else {
+  console.log(`ShieldAI: no ./dist found — frontend expected on the Vite dev server (dev mode).`);
+}
 
 // ─────────────────────────────────────────────────────────────
 const server = app.listen(PORT, "0.0.0.0", () => {
