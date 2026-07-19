@@ -36,7 +36,10 @@ dotenv.config();
 
 const app = express();
 const gate = makeTierGate(db);
-const PORT = 3001;
+// Railway (and most hosts) inject the port to bind via process.env.PORT and run
+// their healthcheck against it. Hardcoding a port makes the healthcheck fail —
+// the app must listen on the assigned port. Falls back to 3001 for local dev.
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -44,6 +47,14 @@ app.use(cors());
 app.use((req, res, next) => {
   if (req.originalUrl === "/api/billing/webhook") return next();
   return express.json({ limit: "5mb" })(req, res, next);
+});
+
+// ── Health check ─────────────────────────────────────────────
+// Railway's deploy healthcheck (healthcheckPath: "/health") hits this and
+// expects a 200. Keep it dependency-free and unauthenticated so it responds
+// instantly and never blocks a deploy from going healthy.
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", service: "shieldai", ts: new Date().toISOString() });
 });
 
 const progressStore = {};
@@ -1082,8 +1093,8 @@ registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
-const server = app.listen(PORT, () => {
-  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ ShieldAI backend running on port ${PORT} (0.0.0.0)`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
 });
