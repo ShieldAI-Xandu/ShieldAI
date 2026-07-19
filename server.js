@@ -42,6 +42,7 @@ import { registerPortfolioRoutes } from "./portfolioRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
+import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -1134,6 +1135,7 @@ registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsCli
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
+registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

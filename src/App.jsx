@@ -2446,6 +2446,448 @@ function VirtualCISOSection() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  TRAINING PROGRAM — standalone product management dashboard.
+//  Manage learners, assign catalog topics, schedule quarterly training, and
+//  track completion. Reads/writes /api/training-program/*. Fully separate from
+//  the endpoint monitoring agent — no overlap by design.
+// ─────────────────────────────────────────────────────────────
+const TP_STATUS_TONE = {
+  assigned:    { c: C.textSec, l: "Assigned" },
+  in_progress: { c: C.accent,  l: "In Progress" },
+  completed:   { c: C.green,   l: "Completed" },
+  overdue:     { c: C.red,     l: "Overdue" },
+  waived:      { c: C.textMut, l: "Waived" },
+};
+function tpTone(s) { return TP_STATUS_TONE[s] || TP_STATUS_TONE.assigned; }
+
+function TrainingProgramSection() {
+  const [tab, setTab] = useState("overview"); // overview | learners | assign | quarterly | reports
+  const [catalog, setCatalog] = useState([]);
+  const [learners, setLearners] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  // Add-learner form
+  const [nl, setNl] = useState({ name: "", email: "", department: "" });
+  // Assign form
+  const [pickLearners, setPickLearners] = useState([]);
+  const [pickTopics, setPickTopics] = useState([]);
+  const [assignDue, setAssignDue] = useState("");
+  // Quarterly form
+  const now = new Date();
+  const [qForm, setQForm] = useState({
+    year: now.getFullYear(), quarter: Math.floor(now.getMonth() / 3) + 1, topicIds: [], dueDate: "", label: "",
+  });
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [c, l, a, o] = await Promise.all([
+        authFetch(`${API_BASE}/api/training-program/catalog`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/learners`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/assignments`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/overview`).then(r => r.json()),
+      ]);
+      setCatalog(Array.isArray(c) ? c : []);
+      setLearners(Array.isArray(l) ? l : []);
+      setAssignments(Array.isArray(a) ? a : []);
+      setOverview(o && !o.error ? o : null);
+    } catch (e) { setError("Could not load training data."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function addLearner() {
+    if (!nl.name.trim() || !nl.email.trim()) { setError("Name and email are required."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nl),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not add learner.");
+      setNl({ name: "", email: "", department: "" });
+      flash(`Added ${d.name}.`);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeLearner(l) {
+    if (!window.confirm(`Remove ${l.name} and their assignments? This can't be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).error || "Delete failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function copyLink(l) {
+    const url = `${window.location.origin}${l.link}`;
+    try { navigator.clipboard.writeText(url); flash("Training link copied."); }
+    catch { flash("Copy failed — link: " + url, C.amber); }
+  }
+
+  async function submitAssign() {
+    if (!pickLearners.length || !pickTopics.length) { setError("Pick at least one learner and one topic."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ learnerIds: pickLearners, topicIds: pickTopics, dueDate: assignDue || null }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Assign failed.");
+      flash(`Assigned to ${d.created} learner(s).`);
+      setPickLearners([]); setPickTopics([]); setAssignDue("");
+      await loadAll();
+      setTab("overview");
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function scheduleQuarter() {
+    if (!qForm.topicIds.length) { setError("Pick at least one topic for the quarter."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/quarters`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(qForm),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not schedule.");
+      flash(`Scheduled "${d.quarter.label}" for ${d.assigned} learner(s).`);
+      setQForm(f => ({ ...f, topicIds: [], label: "" }));
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remind(a) {
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}/remind`, { method: "POST", body: "{}" });
+      if (!res.ok) throw new Error((await res.json()).error || "Reminder failed.");
+      flash("Reminder logged.");
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function waive(a) {
+    if (!window.confirm(`Waive "${a.title}" for ${a.learnerName}?`)) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "waived" }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Waive failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function toggle(list, setList, id) {
+    setList(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
+  }
+  function toggleQTopic(id) {
+    setQForm(f => ({ ...f, topicIds: f.topicIds.includes(id) ? f.topicIds.filter(x => x !== id) : [...f.topicIds, id] }));
+  }
+
+  const tabs = [["overview","Overview"],["learners",`Learners (${learners.length})`],
+    ["assign","Assign"],["quarterly","Quarterly"],["reports","Reports"]];
+  const inp = { padding:"9px 12px", background:C.surface, border:`1px solid ${C.border}`,
+    borderRadius:8, color:C.text, fontSize:13, boxSizing:"border-box", fontFamily:"inherit" };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Training Program"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>ASSIGN · TRACK · REPORT</span>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(([id,label]) => (
+          <button key={id} onClick={()=>setTab(id)}
+            style={{padding:"7px 15px",borderRadius:8,fontSize:12.5,fontWeight:600,cursor:"pointer",
+              border:`1px solid ${tab===id?C.accent:C.border}`,
+              background:tab===id?`${C.accent}18`:C.surface,color:tab===id?C.accent:C.textSec}}>{label}</button>
+        ))}
+      </div>
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* OVERVIEW */}
+          {tab === "overview" && (
+            <>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+                {[
+                  ["Learners", overview?.learnerCount ?? 0, C.accent],
+                  ["Completion", `${overview?.completionRate ?? 0}%`, C.green],
+                  ["Overdue", overview?.overdue ?? 0, (overview?.overdue ? C.red : C.textSec)],
+                  ["Avg Score", overview?.avgScore != null ? `${overview.avgScore}` : "—", C.amber],
+                ].map(([label,val,tone],i)=>(
+                  <div key={i} style={{flex:"1 1 140px",padding:"16px 18px",background:C.card,
+                    border:`1px solid ${C.border}`,borderRadius:12}}>
+                    <div style={{fontSize:28,fontWeight:800,color:tone,lineHeight:1}}>{val}</div>
+                    <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginTop:5}}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <SectionLabel text="Recent Assignments"/>
+              <div style={{marginTop:10}}>
+                {assignments.length === 0 ? (
+                  <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>
+                    No assignments yet. Add learners, then use the Assign tab.
+                  </div>
+                ) : assignments.slice(0,12).map(a => {
+                  const tone = tpTone(a.status);
+                  return (
+                    <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+                      background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:6}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.text}}>{a.learnerName}</div>
+                        <div style={{fontSize:11,color:C.textMut}}>{a.title}</div>
+                      </div>
+                      <div style={{width:90,height:6,borderRadius:6,background:C.surface,overflow:"hidden"}}>
+                        <div style={{width:`${a.progress}%`,height:"100%",background:tone.c}}/>
+                      </div>
+                      <span style={{fontSize:11,fontWeight:700,color:tone.c,padding:"2px 9px",
+                        borderRadius:20,background:`${tone.c}18`,minWidth:78,textAlign:"center"}}>{tone.l}</span>
+                      {a.status !== "completed" && a.status !== "waived" && (
+                        <>
+                          <button onClick={()=>remind(a)} disabled={busy} style={miniBtn(C.accent,busy)}>Remind</button>
+                          <button onClick={()=>waive(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* LEARNERS */}
+          {tab === "learners" && (
+            <>
+              <Card style={{marginBottom:14}}>
+                <SectionLabel text="Add Learner"/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:10,marginTop:12,alignItems:"center"}}>
+                  <input style={inp} placeholder="Full name" value={nl.name} onChange={e=>setNl({...nl,name:e.target.value})}/>
+                  <input style={inp} placeholder="Email" value={nl.email} onChange={e=>setNl({...nl,email:e.target.value})}/>
+                  <input style={inp} placeholder="Department (optional)" value={nl.department} onChange={e=>setNl({...nl,department:e.target.value})}/>
+                  <button onClick={addLearner} disabled={busy}
+                    style={{padding:"9px 18px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+                      fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>Add</button>
+                </div>
+              </Card>
+              {learners.length === 0 ? (
+                <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No learners yet.</div>
+              ) : learners.map(l => (
+                <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+                  background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{l.name}
+                      {l.department && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}> · {l.department}</span>}
+                    </div>
+                    <div style={{fontSize:11,color:C.textMut}}>{l.email}</div>
+                  </div>
+                  <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
+                  <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
+                  <button onClick={()=>removeLearner(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ASSIGN */}
+          {tab === "assign" && (
+            <>
+              {learners.length === 0 ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>Add learners first, then assign training.</div></Card>
+              ) : (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                  <Card>
+                    <SectionLabel text={`Learners (${pickLearners.length} selected)`}/>
+                    <div style={{marginTop:10,maxHeight:320,overflowY:"auto"}}>
+                      {learners.map(l => (
+                        <label key={l.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 6px",cursor:"pointer"}}>
+                          <input type="checkbox" checked={pickLearners.includes(l.id)}
+                            onChange={()=>toggle(pickLearners,setPickLearners,l.id)}/>
+                          <span style={{fontSize:12.5,color:C.text}}>{l.name}</span>
+                          <span style={{fontSize:11,color:C.textMut,marginLeft:"auto"}}>{l.email}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button onClick={()=>setPickLearners(pickLearners.length===learners.length?[]:learners.map(l=>l.id))}
+                      style={{...miniBtn(C.accent,false),marginTop:8}}>
+                      {pickLearners.length===learners.length?"Clear all":"Select all"}
+                    </button>
+                  </Card>
+                  <Card>
+                    <SectionLabel text={`Topics (${pickTopics.length} selected)`}/>
+                    <div style={{marginTop:10,maxHeight:320,overflowY:"auto"}}>
+                      {catalog.map(t => (
+                        <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:9,padding:"7px 6px",cursor:"pointer"}}>
+                          <input type="checkbox" checked={pickTopics.includes(t.id)}
+                            onChange={()=>toggle(pickTopics,setPickTopics,t.id)} style={{marginTop:3}}/>
+                          <div>
+                            <div style={{fontSize:12.5,color:C.text,fontWeight:600}}>{t.title}</div>
+                            <div style={{fontSize:11,color:C.textMut}}>{t.audience} · {t.duration}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{marginTop:12,display:"flex",gap:10,alignItems:"center"}}>
+                      <span style={{fontSize:11,color:C.textMut}}>Due:</span>
+                      <input type="date" value={assignDue} onChange={e=>setAssignDue(e.target.value)} style={inp}/>
+                    </div>
+                    <button onClick={submitAssign} disabled={busy}
+                      style={{marginTop:12,width:"100%",padding:"11px",borderRadius:8,border:"none",
+                        background:C.accent,color:C.bg,fontSize:13.5,fontWeight:700,
+                        cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                      {busy ? "Assigning…" : `Assign to ${pickLearners.length} learner(s)`}
+                    </button>
+                  </Card>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* QUARTERLY */}
+          {tab === "quarterly" && (
+            <Card>
+              <SectionLabel text="Schedule Quarterly Training"/>
+              <p style={{fontSize:12.5,color:C.textSec,margin:"6px 0 14px",lineHeight:1.6}}>
+                Pick a quarter and the topics to cover. On scheduling, an assignment is created for every active learner.
+              </p>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:14}}>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>YEAR</label>
+                  <input type="number" value={qForm.year} onChange={e=>setQForm({...qForm,year:+e.target.value})} style={{...inp,width:100}}/></div>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>QUARTER</label>
+                  <select value={qForm.quarter} onChange={e=>setQForm({...qForm,quarter:+e.target.value})} style={{...inp,width:100}}>
+                    {[1,2,3,4].map(q=><option key={q} value={q}>Q{q}</option>)}
+                  </select></div>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>DUE DATE</label>
+                  <input type="date" value={qForm.dueDate} onChange={e=>setQForm({...qForm,dueDate:e.target.value})} style={inp}/></div>
+                <div style={{flex:1,minWidth:180}}><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>LABEL (optional)</label>
+                  <input value={qForm.label} onChange={e=>setQForm({...qForm,label:e.target.value})} placeholder={`Q${qForm.quarter} ${qForm.year} Training`} style={{...inp,width:"100%"}}/></div>
+              </div>
+              <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>TOPICS</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:6,marginBottom:14}}>
+                {catalog.map(t => (
+                  <label key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",
+                    background:qForm.topicIds.includes(t.id)?`${C.accent}12`:C.surface,
+                    border:`1px solid ${qForm.topicIds.includes(t.id)?C.accent+"44":C.border}`,borderRadius:7,cursor:"pointer"}}>
+                    <input type="checkbox" checked={qForm.topicIds.includes(t.id)} onChange={()=>toggleQTopic(t.id)}/>
+                    <span style={{fontSize:12,color:C.text}}>{t.title}</span>
+                  </label>
+                ))}
+              </div>
+              <button onClick={scheduleQuarter} disabled={busy}
+                style={{padding:"11px 22px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+                  fontSize:13.5,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                {busy ? "Scheduling…" : "Schedule Quarter"}
+              </button>
+            </Card>
+          )}
+
+          {/* REPORTS */}
+          {tab === "reports" && (
+            <TrainingReportView/>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Per-learner completion report with CSV export.
+function TrainingReportView() {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/training-program/report`)
+      .then(r => r.json()).then(d => setReport(d)).catch(() => setReport({ rows: [] }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  function exportCsv() {
+    const rows = report?.rows || [];
+    const header = ["Learner","Email","Department","Assigned","Completed","Completion %","Avg Score","Overdue","Last Completed"];
+    const lines = [header.join(",")].concat(rows.map(r =>
+      [r.learner, r.email, r.department, r.assigned, r.completed, r.completionRate,
+       r.avgScore ?? "", r.overdue, r.lastCompletedAt ? new Date(r.lastCompletedAt).toLocaleDateString() : ""]
+      .map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `training-report-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+
+  if (loading) return <Spinner/>;
+  const rows = report?.rows || [];
+  return (
+    <Card>
+      <div style={{display:"flex",alignItems:"center",marginBottom:14}}>
+        <SectionLabel text="Completion Report"/>
+        <button onClick={exportCsv} disabled={!rows.length}
+          style={{marginLeft:"auto",padding:"7px 14px",borderRadius:7,border:`1px solid ${C.border}`,
+            background:C.surface,color:C.accent,fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"default",opacity:rows.length?1:0.5}}>
+          Export CSV
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{color:C.textSec,fontSize:13}}>No learners to report on yet.</div>
+      ) : (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5}}>
+            <thead>
+              <tr style={{textAlign:"left",color:C.textMut,fontSize:11,letterSpacing:0.5}}>
+                <th style={{padding:"8px 10px"}}>LEARNER</th><th style={{padding:"8px 10px"}}>DEPT</th>
+                <th style={{padding:"8px 10px"}}>DONE</th><th style={{padding:"8px 10px"}}>RATE</th>
+                <th style={{padding:"8px 10px"}}>SCORE</th><th style={{padding:"8px 10px"}}>OVERDUE</th>
+                <th style={{padding:"8px 10px"}}>LAST</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r,i)=>(
+                <tr key={i} style={{borderTop:`1px solid ${C.border}`,color:C.textSec}}>
+                  <td style={{padding:"9px 10px",color:C.text,fontWeight:600}}>{r.learner}</td>
+                  <td style={{padding:"9px 10px"}}>{r.department||"—"}</td>
+                  <td style={{padding:"9px 10px"}}>{r.completed}/{r.assigned}</td>
+                  <td style={{padding:"9px 10px",color:r.completionRate>=80?C.green:r.completionRate>=50?C.amber:C.red,fontWeight:600}}>{r.completionRate}%</td>
+                  <td style={{padding:"9px 10px"}}>{r.avgScore!=null?r.avgScore:"—"}</td>
+                  <td style={{padding:"9px 10px",color:r.overdue?C.red:C.textSec}}>{r.overdue}</td>
+                  <td style={{padding:"9px 10px"}}>{r.lastCompletedAt?new Date(r.lastCompletedAt).toLocaleDateString():"—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function DomainMonitoringCard() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -4106,6 +4548,7 @@ function Dashboard({ assessment, results, onReset }) {
     ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:results?.tools?.toolStack?.length },
     { id:"training",    icon:"🎓", label:"Training",          badge:results?.training?.trainingProgram?.modules?.length },
+    { id:"trainingmgr", icon:"👥", label:"Training Program",  badge:null },
     { id:"report",      icon:"📋", label:"Exec Report",       badge:null },
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
   ];
@@ -4127,6 +4570,7 @@ function Dashboard({ assessment, results, onReset }) {
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
     training:   <TrainingSection results={results} assessment={assessment}/>,
+    trainingmgr: <TrainingProgramSection/>,
     report:     <ExecReportSection assessment={assessment} results={results}/>,
     library:    <PolicyLibrarySection assessment={assessment}/>,
   };
@@ -4497,6 +4941,180 @@ function InvestorPage({ onBack, onOpenCode }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  LEARNER PAGE — the public, token-gated employee training experience.
+//  No login: the employee opens /train/<token>. They see assigned training,
+//  work through each module's objectives, and mark it complete (with a short
+//  self-check). Talks only to the public /api/train/:token endpoints.
+// ─────────────────────────────────────────────────────────────
+function LearnerPage({ token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [openMod, setOpenMod] = useState(null); // { assignmentId, topicId }
+  const [busy, setBusy] = useState(false);
+
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "This training link isn't valid.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [token]);
+
+  async function complete(assignmentId, topicId, score) {
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentId, topicId, score }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save your progress.");
+      setOpenMod(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <div style={{borderBottom:`1px solid ${line}`,padding:"16px 24px"}}>
+        <div style={{maxWidth:760,margin:"0 auto",display:"flex",alignItems:"center",gap:12}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+          <span style={{fontSize:11,color:dim,marginLeft:4,letterSpacing:1,fontWeight:600}}>SECURITY TRAINING</span>
+        </div>
+      </div>
+
+      <div style={{maxWidth:760,margin:"0 auto",padding:"36px 24px 80px"}}>
+        {loading ? <Spinner/> : error ? (
+          <div style={{padding:"26px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+            borderRadius:14,color:C.red,fontSize:14}}>{error}</div>
+        ) : (
+          <>
+            <h1 style={{fontSize:26,fontWeight:800,margin:"0 0 6px"}}>
+              Welcome{data?.learner?.name ? `, ${data.learner.name.split(" ")[0]}` : ""}.
+            </h1>
+            <p style={{fontSize:14.5,color:dim,lineHeight:1.6,margin:"0 0 28px"}}>
+              Here's your assigned security training. Work through each module and mark it complete.
+              Your progress is saved automatically.
+            </p>
+
+            {(data?.assignments || []).length === 0 ? (
+              <div style={{padding:"24px",background:C.card,border:`1px solid ${line}`,borderRadius:14,
+                color:dim,fontSize:14}}>You have no training assigned right now. Nice — you're all caught up.</div>
+            ) : (data.assignments || []).map(a => (
+              <div key={a.assignmentId} style={{marginBottom:20,background:C.card,
+                border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
+                <div style={{padding:"16px 20px",borderBottom:`1px solid ${line}`,
+                  display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:700}}>{a.title}</div>
+                    {a.dueDate && <div style={{fontSize:12,color:dim,marginTop:2}}>Due {new Date(a.dueDate).toLocaleDateString()}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:80,height:7,borderRadius:6,background:deep,overflow:"hidden"}}>
+                      <div style={{width:`${a.progress}%`,height:"100%",
+                        background:a.status==="completed"?C.green:cyan}}/>
+                    </div>
+                    <span style={{fontSize:12,fontWeight:700,
+                      color:a.status==="completed"?C.green:cyan}}>{a.progress}%</span>
+                  </div>
+                </div>
+                <div style={{padding:"8px 12px"}}>
+                  {a.modules.map(m => {
+                    const isOpen = openMod?.assignmentId === a.assignmentId && openMod?.topicId === m.topicId;
+                    return (
+                      <div key={m.topicId} style={{margin:"6px 0"}}>
+                        <div onClick={()=>setOpenMod(isOpen?null:{assignmentId:a.assignmentId,topicId:m.topicId})}
+                          style={{display:"flex",alignItems:"center",gap:12,padding:"12px 12px",cursor:"pointer",
+                            background:isOpen?deep:"transparent",borderRadius:10}}>
+                          <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
+                            alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
+                            background:m.completed?C.green:`${cyan}22`,color:m.completed?"#04121F":cyan}}>
+                            {m.completed ? "✓" : ""}
+                          </span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{m.title}</div>
+                            <div style={{fontSize:11,color:dim}}>{m.audience} · {m.duration}</div>
+                          </div>
+                          {m.completed && m.score != null && (
+                            <span style={{fontSize:11,color:C.green,fontWeight:600}}>Score {m.score}%</span>
+                          )}
+                          <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                        </div>
+                        {isOpen && (
+                          <LearnerModule module={m} busy={busy}
+                            onComplete={(score)=>complete(a.assignmentId, m.topicId, score)}/>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+        <div style={{marginTop:30,textAlign:"center",fontSize:11,color:C.textMut}}>
+          Powered by ShieldAI · Your progress is private to your organization.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A single module: objectives + a one-question knowledge check → mark complete.
+function LearnerModule({ module, onComplete, busy }) {
+  const [answered, setAnswered] = useState(module.completed);
+  const line = C.border, dim = C.textSec, cyan = C.accent, deep = C.bg;
+
+  return (
+    <div style={{padding:"6px 12px 16px 48px"}}>
+      {module.source && (
+        <div style={{fontSize:11,color:C.textMut,marginBottom:10}}>Source: {module.source}</div>
+      )}
+      <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>
+        WHAT YOU'LL LEARN
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {(module.objectives || []).map((o,i)=>(
+          <div key={i} style={{display:"flex",gap:9,fontSize:13,color:C.text,lineHeight:1.5}}>
+            <span style={{color:cyan,flexShrink:0}}>›</span>{o}
+          </div>
+        ))}
+        {(!module.objectives || module.objectives.length === 0) && (
+          <div style={{fontSize:13,color:dim}}>Review this topic and confirm you understand the key practices.</div>
+        )}
+      </div>
+
+      {module.completed ? (
+        <div style={{fontSize:12.5,color:C.green,fontWeight:600}}>
+          ✓ Completed{module.completedAt ? ` on ${new Date(module.completedAt).toLocaleDateString()}` : ""}
+        </div>
+      ) : (
+        <div style={{padding:"14px 16px",background:deep,borderRadius:10,border:`1px solid ${line}`}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:10}}>
+            Knowledge check: Confirm you've reviewed and understand the objectives above.
+          </div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <button onClick={()=>onComplete(100)} disabled={busy}
+              style={{padding:"10px 18px",borderRadius:8,border:"none",background:cyan,color:deep,
+                fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+              {busy ? "Saving…" : "I understand — mark complete"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -11312,6 +11930,14 @@ export default function ShieldAI() {
     setRegenAssessmentId({ assessmentId, replaceOld });
     setEditingId(null);
     setPhase("analysis");
+  }
+
+  // Standalone learner training page — token in the URL, no login. This is the
+  // public face of the Training product; it renders on its own with no app
+  // chrome and never requires an account.
+  const trainMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/train\/([^/?#]+)/);
+  if (trainMatch) {
+    return <LearnerPage token={decodeURIComponent(trainMatch[1])}/>;
   }
 
   // Not logged in → marketing front page, investor page, or auth
