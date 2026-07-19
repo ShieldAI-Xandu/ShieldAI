@@ -19,7 +19,7 @@
 // path, so it must be registered BEFORE any global express.json() — see the
 // server.js mounting note.
 
-import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER } from "./tiers.js";
+import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER, SELF_SERVE_PAID_TIERS, getAddon, canPurchaseAddon } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -182,15 +182,15 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
   // ════════════════════════════════════════════════════════════
 
   // Start a Checkout Session to subscribe to a paid tier.
-  // body: { tier: "starter"|"pro" }  (free is set directly; enterprise = contact sales)
+  // body: { tier: "starter"|"growth"|"guided" }  (free is set directly; managed = contact sales)
   app.post("/api/billing/checkout", requireAuth, async (req, res) => {
     if (!needStripe(res)) return;
     const user = findUser(req.userId);
     if (!user) return res.status(404).json({ error: "User not found." });
     const { tier } = req.body || {};
     const t = getTier(tier);
-    if (!t || !["starter", "pro"].includes(t.id)) {
-      return res.status(400).json({ error: "Choose a self-serve paid tier (starter or pro). Enterprise is contact-sales." });
+    if (!t || !SELF_SERVE_PAID_TIERS.includes(t.id)) {
+      return res.status(400).json({ error: "Choose a self-serve paid tier (Starter, Growth, or Guided). Managed vCISO is contact-sales." });
     }
     if (!t.stripePriceId) {
       return res.status(503).json({ error: `Tier "${t.id}" has no Stripe price configured yet. Set stripePriceId in tiers.js.` });
@@ -209,6 +209,46 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
     } catch (err) {
       console.error("Checkout error:", err.message);
       res.status(500).json({ error: "Could not start checkout." });
+    }
+  });
+
+  // Purchase an add-on (e.g. the $40/mo training delivery add-on for Starter).
+  // body: { addon: "training_delivery" }
+  // The add-on is a separate recurring line item; on success the webhook/portal
+  // records it on the user's sub.addons array (see webhook handler).
+  app.post("/api/billing/checkout-addon", requireAuth, async (req, res) => {
+    if (!needStripe(res)) return;
+    const user = findUser(req.userId);
+    if (!user) return res.status(404).json({ error: "User not found." });
+    const { addon } = req.body || {};
+    const a = getAddon(addon);
+    if (!a) return res.status(400).json({ error: "Unknown add-on." });
+    const userTier = user.tier || DEFAULT_TIER;
+    // Growth+ already bundle training delivery, so there's nothing to buy.
+    if (!canPurchaseAddon(userTier, a.id)) {
+      return res.status(400).json({
+        error: `The ${a.name} add-on isn't available on your plan — it's either already included or not offered at this tier.`,
+        code: "ADDON_NOT_AVAILABLE",
+        currentTier: userTier,
+      });
+    }
+    if (!a.stripePriceId) {
+      return res.status(503).json({ error: `Add-on "${a.id}" has no Stripe price configured yet. Set stripePriceId in tiers.js (ADDONS).` });
+    }
+    try {
+      const customerId = await ensureCustomer(user);
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        customer: customerId,
+        line_items: [{ price: a.stripePriceId, quantity: 1 }],
+        success_url: `${APP_URL}/?billing=addon-success`,
+        cancel_url: `${APP_URL}/?billing=cancelled`,
+        metadata: { shieldaiUserId: user.id, addon: a.id },
+      });
+      res.json({ url: session.url });
+    } catch (err) {
+      console.error("Add-on checkout error:", err.message);
+      res.status(500).json({ error: "Could not start add-on checkout." });
     }
   });
 

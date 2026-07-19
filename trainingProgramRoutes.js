@@ -168,9 +168,16 @@ export function trainingSummary(db, depth = "summary") {
 
 // ──────────────────────────────────────────────────────────────
 export function registerTrainingProgramRoutes(app, {
-  db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds,
+  db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds,
 }) {
   ensureCollections(db);
+
+  // Client-facing training DELIVERY gate: passes for Growth+ (bundled) or a
+  // Starter who bought the $40 add-on; staff (admin/analyst) always bypass.
+  // Falls back to a no-op if gate isn't provided (keeps route registration safe).
+  const gateDelivery = (gate && gate.trainingDelivery)
+    ? gate.trainingDelivery()
+    : (req, res, next) => next();
 
   // === CATALOG (topics available to assign) ===================
   app.get("/api/training-program/catalog", requireAuth, (req, res) => {
@@ -199,7 +206,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json(list);
   });
 
-  app.post("/api/training-program/learners", requireAuth, async (req, res) => {
+  app.post("/api/training-program/learners", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { name, email, department } = req.body || {};
@@ -223,7 +230,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json({ ...learner, link: `/train/${learner.token}` });
   });
 
-  app.patch("/api/training-program/learners/:id", requireAuth, async (req, res) => {
+  app.patch("/api/training-program/learners/:id", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === scope.clientUserId);
@@ -234,7 +241,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json(learner);
   });
 
-  app.delete("/api/training-program/learners/:id", requireAuth, async (req, res) => {
+  app.delete("/api/training-program/learners/:id", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const before = (db.data.learners || []).length;
@@ -265,7 +272,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // Create assignment(s): assign a set of catalog topics to one or more learners.
-  app.post("/api/training-program/assignments", requireAuth, async (req, res) => {
+  app.post("/api/training-program/assignments", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { learnerIds, topicIds, title, dueDate } = req.body || {};
@@ -296,7 +303,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // Update an assignment (due date, waive, cancel).
-  app.patch("/api/training-program/assignments/:id", requireAuth, async (req, res) => {
+  app.patch("/api/training-program/assignments/:id", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
@@ -310,7 +317,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json(a);
   });
 
-  app.delete("/api/training-program/assignments/:id", requireAuth, async (req, res) => {
+  app.delete("/api/training-program/assignments/:id", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const before = (db.data.trainingAssignments || []).length;
@@ -322,7 +329,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // Staff can send a reminder (records an action; email delivery is out of scope here).
-  app.post("/api/training-program/assignments/:id/remind", requireAuth, async (req, res) => {
+  app.post("/api/training-program/assignments/:id/remind", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
@@ -345,7 +352,7 @@ export function registerTrainingProgramRoutes(app, {
 
   // Schedule a quarter: fan out an assignment of the chosen topics to every
   // active learner. Admin-scheduled, manual (confirmed cadence choice).
-  app.post("/api/training-program/quarters", requireAuth, async (req, res) => {
+  app.post("/api/training-program/quarters", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { year, quarter, topicIds, dueDate, label } = req.body || {};

@@ -167,7 +167,7 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
   });
 
   // ── Tier change (internal override; Stripe sync comes in Stage 4) ──
-  // body: { tier: "free"|"starter"|"pro"|"enterprise", note?: string }
+  // body: { tier: "free"|"starter"|"growth"|"guided"|"managed", note?: string }
   app.post("/api/admin/accounts/:id/tier", requireAdmin, async (req, res) => {
     const u = findUser(req.params.id);
     if (!u) return res.status(404).json({ error: "Account not found." });

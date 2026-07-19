@@ -7,6 +7,16 @@
 // (Stage 4). Until then it's null and tier changes are internal-only.
 //
 // Limits use `null` to mean "unlimited".
+//
+// TRAINING MODEL (two distinct things — do not conflate):
+//   1. Training PLAN (the "recommendation version"): the AI-generated, CISA/NIST-
+//      aligned recommended curriculum + schedule from trainingCatalog.js. This is
+//      a recommendation deliverable, not a delivery system. Included from Starter up.
+//      Capability flag: `trainingPlan`.
+//   2. Training PRODUCT (standalone delivery): tokenized learner links, assignments,
+//      quarterly scheduling, completion tracking, and fleet reporting. This is the
+//      thing employees actually complete. BUNDLED at Growth and above. On Starter it
+//      is a paid ADD-ON (see ADDONS.training_delivery). Capability flag: `trainingDelivery`.
 
 export const TIERS = {
   free: {
@@ -16,7 +26,7 @@ export const TIERS = {
     priceCents: 0,
     interval: "month",
     stripePriceId: null,
-    description: "Run a baseline security assessment. Upgrade to build programs, policies, and monitor endpoints.",
+    description: "Run a baseline security assessment and see your NIST/CIS posture score. Upgrade to build programs, policies, and monitor endpoints.",
     limits: {
       endpoints: 0,
       policies: 0,
@@ -28,71 +38,90 @@ export const TIERS = {
       assessments: true,            // can run/view assessments
       buildPrograms: false,
       createPolicies: false,
-      trainingPrograms: false,
+      trainingPlan: false,          // AI-recommended training plan (recommendation version)
+      trainingDelivery: false,      // standalone training delivery product
       downloadExports: false,
       endpoints: false,             // can't enroll agents (feature shown locked)
+      threatIntel: false,           // CVE/breach exposure views
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
     },
-    // What the client-facing Mastermind may see/answer about at this tier.
-    // Mirrors the services the tier unlocks — the assistant's knowledge is
-    // scoped to features the client actually has. null = no Mastermind.
-    mastermindScope: null,
-    features: ["Security assessment only", "Upgrade to unlock programs, policies & monitoring"],
+    features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
+
   starter: {
     id: "starter",
     name: "Starter",
     rank: 1,
-    priceCents: 9900,               // $99/mo  (your "Tier 1")
+    priceCents: 15900,              // $159/mo
     interval: "month",
     stripePriceId: null,
-    description: "Multiple assessments, programs, up to 6 policies, and a training program. Monitor up to 15 endpoints.",
+    description: "Multiple assessments, programs, up to 6 policies, and the AI-recommended training plan. Monitor up to 5 endpoints. Employee training delivery available as an add-on.",
     limits: {
-      endpoints: 15,
+      endpoints: 5,
       policies: 6,
       programs: null,               // multiple
-      trainingPrograms: 1,
+      trainingPrograms: 1,          // 1 recommended training plan
       analystSupport: "none",
     },
     capabilities: {
       assessments: true,
       buildPrograms: true,
       createPolicies: true,         // capped at 6 via limits
-      trainingPrograms: true,
+      trainingPlan: true,           // includes the recommendation-version training plan
+      trainingDelivery: false,      // OFF by default — unlocked via the paid add-on
       downloadExports: false,       // no downloads at this tier
-      endpoints: true,              // up to 15
+      endpoints: true,              // up to 5
+      threatIntel: false,
       analystSupport: false,
-      mastermind: true,             // basic Q&A, scoped to Starter services
+      mastermind: false,
     },
-    // Starter Mastermind: help with the things Starter unlocks — assessments,
-    // programs, policies, training — plus a light view of their few endpoints.
-    // No recommendation-lifecycle or analyst context (those are higher tiers).
-    mastermindScope: {
-      level: "basic",
-      assessments: true,
-      programs: true,
-      policies: true,
-      training: true,
-      endpoints: "summary",         // posture summary only, no per-check detail
-      events: false,
-      recommendations: false,
-      historyTurns: 8,
-      maxTokens: 900,
-    },
-    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Training program", "15 endpoints", "Basic Mastermind Q&A", "No downloads"],
+    // Add-ons this tier can purchase on top of the base subscription.
+    addons: ["training_delivery"],
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "AI-recommended training plan", "5 endpoints", "Employee training delivery add-on ($40/mo)", "No downloads"],
   },
-  pro: {
-    id: "pro",
-    name: "Pro",
+
+  growth: {
+    id: "growth",
+    name: "Growth",
     rank: 2,
-    priceCents: 29900,              // $299/mo  (your "Tier 2")
+    priceCents: 34900,             // $349/mo
     interval: "month",
     stripePriceId: null,
-    description: "All functions with downloads, up to 50 endpoints, and limited engineer support.",
+    description: "Everything in Starter plus real threat intelligence, the full employee training delivery product, expanded policies and endpoints, and downloads.",
     limits: {
-      endpoints: 50,
+      endpoints: 25,
       policies: 10,
+      programs: null,
+      trainingPrograms: null,
+      analystSupport: "none",
+    },
+    capabilities: {
+      assessments: true,
+      buildPrograms: true,
+      createPolicies: true,
+      trainingPlan: true,
+      trainingDelivery: true,       // BUNDLED from Growth up
+      downloadExports: true,        // full downloads/exports
+      endpoints: true,              // up to 25
+      threatIntel: true,            // CVE/breach exposure
+      analystSupport: false,
+      mastermind: false,
+    },
+    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
+  },
+
+  guided: {
+    id: "guided",
+    name: "Guided",
+    rank: 3,
+    priceCents: 69900,             // $699/mo
+    interval: "month",
+    stripePriceId: null,
+    description: "Everything in Growth plus periodic engineer review, compliance tracking, and scheduled check-ins for SMBs with light compliance needs.",
+    limits: {
+      endpoints: 100,
+      policies: null,
       programs: null,
       trainingPrograms: null,
       analystSupport: "limited",
@@ -101,37 +130,25 @@ export const TIERS = {
       assessments: true,
       buildPrograms: true,
       createPolicies: true,
-      trainingPrograms: true,
-      downloadExports: true,        // full downloads/exports
-      endpoints: true,              // up to 50
-      analystSupport: true,         // limited
-      mastermind: true,             // fuller Q&A, scoped to Pro services
+      trainingPlan: true,
+      trainingDelivery: true,
+      downloadExports: true,
+      endpoints: true,              // up to 100
+      threatIntel: true,
+      analystSupport: true,         // limited — periodic engineer review
+      mastermind: false,
     },
-    // Pro Mastermind: everything Starter sees, plus full per-endpoint posture
-    // detail, security events, and the recommendation lifecycle (since Pro has
-    // downloads, more endpoints, and limited analyst support to act on advice).
-    mastermindScope: {
-      level: "standard",
-      assessments: true,
-      programs: true,
-      policies: true,
-      training: true,
-      endpoints: "detailed",        // per-check detail
-      events: true,
-      recommendations: true,
-      historyTurns: 12,
-      maxTokens: 1200,
-    },
-    features: ["All functions", "Up to 10 policies", "Downloads & exports", "Up to 50 endpoints", "Standard Mastermind Q&A", "Limited engineer support"],
+    features: ["Everything in Growth", "Periodic engineer review", "Compliance tracking", "Scheduled check-ins", "Up to 100 endpoints"],
   },
-  enterprise: {
-    id: "enterprise",
-    name: "Enterprise",
-    rank: 3,
-    priceCents: null,              // custom / contact sales  (your "Tier 3")
+
+  managed: {
+    id: "managed",
+    name: "Managed vCISO",
+    rank: 4,
+    priceCents: 195000,            // $1,950/mo
     interval: "month",
     stripePriceId: null,
-    description: "Everything, unlimited endpoints, full agent access, limited Mastermind Q&A, and full engineer support.",
+    description: "A ShieldAI engineer runs the security program end-to-end — unlimited endpoints, full agent access, client-facing Mastermind Q&A, and full engineer support. Still below human-only vCISO retainers.",
     limits: {
       endpoints: null,
       policies: null,
@@ -143,35 +160,43 @@ export const TIERS = {
       assessments: true,
       buildPrograms: true,
       createPolicies: true,
-      trainingPrograms: true,
+      trainingPlan: true,
+      trainingDelivery: true,
       downloadExports: true,
       endpoints: true,              // unlimited
-      analystSupport: true,         // full
-      mastermind: true,             // full client-facing Q&A
+      threatIntel: true,
+      analystSupport: true,         // full — engineer runs the program
+      mastermind: true,             // client-facing Q&A
     },
-    // Enterprise Mastermind: full scope over all of the client's own data,
-    // including endpoint detail, events, recommendations, and the longest
-    // conversation memory. Still strictly isolated to this client.
-    mastermindScope: {
-      level: "full",
-      assessments: true,
-      programs: true,
-      policies: true,
-      training: true,
-      endpoints: "detailed",
-      events: true,
-      recommendations: true,
-      historyTurns: 16,
-      maxTokens: 1500,
-    },
-    features: ["Everything in Pro", "Unlimited endpoints", "Full agent access", "Full Mastermind Q&A", "Full engineer support"],
+    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Add-ons: purchasable line items layered on top of a base subscription.
+// Enforced separately from tier capabilities (see hasTrainingDelivery below).
+// -----------------------------------------------------------------------------
+export const ADDONS = {
+  training_delivery: {
+    id: "training_delivery",
+    name: "Employee Training Delivery",
+    priceCents: 4000,              // $40/mo
+    interval: "month",
+    stripePriceId: null,
+    // Which tiers may buy it. Growth+ already bundle it, so it's only sold to Starter.
+    availableFor: ["starter"],
+    unlocksCapability: "trainingDelivery",
+    description: "Unlocks the standalone employee training delivery product — tokenized learner links, assignments, quarterly scheduling, completion tracking, and reports — for Starter customers. Bundled free at Growth and above.",
   },
 };
 
 // Ordered list (low → high) for UI dropdowns and up/downgrade logic.
-export const TIER_ORDER = ["free", "starter", "pro", "enterprise"];
+export const TIER_ORDER = ["free", "starter", "growth", "guided", "managed"];
 
 export const DEFAULT_TIER = "free";
+
+// Self-serve, self-checkout paid tiers (Managed is contact-sales / engineer-onboarded).
+export const SELF_SERVE_PAID_TIERS = ["starter", "growth", "guided"];
 
 export function getTier(tierId) {
   return TIERS[tierId] || TIERS[DEFAULT_TIER];
@@ -182,10 +207,22 @@ export function hasCapability(tierId, capability) {
   return !!getTier(tierId).capabilities?.[capability];
 }
 
-// The client-facing Mastermind scope for a tier, or null if it has none.
-// Controls what data the assistant may see and how much it can answer about.
-export function mastermindScope(tierId) {
-  return getTier(tierId).mastermindScope || null;
+// Does this user have training DELIVERY? True if their tier bundles it OR they hold
+// the training_delivery add-on. `userAddons` is an array of addon ids on the user/sub.
+export function hasTrainingDelivery(tierId, userAddons = []) {
+  if (hasCapability(tierId, "trainingDelivery")) return true;
+  return Array.isArray(userAddons) && userAddons.includes("training_delivery");
+}
+
+// Is a given add-on purchasable by this tier? (Bundled tiers can't "buy" it again.)
+export function canPurchaseAddon(tierId, addonId) {
+  const a = ADDONS[addonId];
+  if (!a) return false;
+  return a.availableFor.includes(tierId);
+}
+
+export function getAddon(addonId) {
+  return ADDONS[addonId] || null;
 }
 
 // Is a given count within the tier's limit for a resource? null limit = unlimited.
@@ -208,6 +245,12 @@ export function priceLabel(tierId) {
   if (t.priceCents == null) return "Custom";
   if (t.priceCents === 0) return "Free";
   return `$${(t.priceCents / 100).toFixed(0)}/${t.interval}`;
+}
+
+export function addonPriceLabel(addonId) {
+  const a = getAddon(addonId);
+  if (!a) return "";
+  return `$${(a.priceCents / 100).toFixed(0)}/${a.interval}`;
 }
 
 export default TIERS;

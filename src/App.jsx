@@ -6959,9 +6959,10 @@ function AdminPanel({ onClose }) {
 
   const TIER_LIST = [
     { id:"free", name:"Free", price:"$0" },
-    { id:"starter", name:"Starter", price:"$99/mo" },
-    { id:"pro", name:"Pro", price:"$299/mo" },
-    { id:"enterprise", name:"Enterprise", price:"Custom" },
+    { id:"starter", name:"Starter", price:"$159/mo" },
+    { id:"growth", name:"Growth", price:"$349/mo" },
+    { id:"guided", name:"Guided", price:"$699/mo" },
+    { id:"managed", name:"Managed vCISO", price:"$1,950/mo" },
   ];
 
   // Load the rich account-control record for a user.
@@ -7941,8 +7942,8 @@ function AdminPanel({ onClose }) {
                 <SectionLabel text="Per-Client Billing"/>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {billing.rows.sort((a,b)=>b.priceCents-a.priceCents).map(r=>{
-                    const tierColor = r.tier==="enterprise"?C.purple:r.tier==="pro"?C.accent
-                      :r.tier==="starter"?C.green:C.textMut;
+                    const tierColor = r.tier==="managed"?C.purple:r.tier==="guided"?C.purple
+                      :r.tier==="growth"?C.accent:r.tier==="starter"?C.green:C.textMut;
                     const stColor = ["active","manual","trialing"].includes(r.status)?C.green
                       :r.status==="past_due"?C.amber:r.status==="free"?C.textMut:C.red;
                     return (
@@ -11962,33 +11963,80 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 //  UPGRADE PROMPT (shown when a tier gate blocks an action)
 // ─────────────────────────────────────────────────────────────
 function UpgradeModal({ info, onClose }) {
+  const [addonBusy, setAddonBusy] = useState(false);
+  const [addonMsg, setAddonMsg] = useState(null);
   if (!info) return null;
   const isLimit = info.code === "LIMIT_REACHED";
+  const isTrainingAddon = info.addon === "training_delivery";
+
+  async function buyTrainingAddon() {
+    setAddonBusy(true); setAddonMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/checkout-addon`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addon: "training_delivery" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      // Billing not yet live (Stripe price unset) or add-on unavailable — explain gracefully.
+      setAddonMsg(data.error || "Training add-on checkout isn't available yet. Contact your ShieldAI admin to enable it.");
+    } catch {
+      setAddonMsg("Couldn't start checkout. Contact your ShieldAI admin to add training delivery.");
+    } finally { setAddonBusy(false); }
+  }
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
       display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.accent}55`,
-        borderRadius:14,maxWidth:420,width:"100%",padding:"26px 28px",textAlign:"center"}}>
-        <div style={{fontSize:30,marginBottom:10}}>{isLimit ? "📦" : "🔒"}</div>
+        borderRadius:14,maxWidth:440,width:"100%",padding:"26px 28px",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:10}}>{isTrainingAddon ? "🎓" : isLimit ? "📦" : "🔒"}</div>
         <h2 style={{color:C.text,fontSize:19,margin:"0 0 8px"}}>
-          {isLimit ? "Plan limit reached" : "Upgrade to unlock"}
+          {isTrainingAddon ? "Add employee training delivery" : isLimit ? "Plan limit reached" : "Upgrade to unlock"}
         </h2>
         <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 18px"}}>
           {info.error || "This feature isn't included in your current plan."}
           {info.currentTier && <><br/><span style={{color:C.textMut,fontSize:12}}>Current plan: {info.currentTier}</span></>}
         </p>
+
+        {isTrainingAddon && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:14}}>Training Delivery add-on</span>
+              <span style={{color:C.green,fontWeight:800,fontSize:15}}>$40<span style={{fontSize:11,color:C.textMut}}>/mo</span></span>
+            </div>
+            <div style={{color:C.textMut,fontSize:12,lineHeight:1.5}}>
+              Tokenized learner links, assignments, quarterly scheduling, completion tracking, and reports.
+              Bundled free on Growth and higher.
+            </div>
+          </div>
+        )}
+        {addonMsg && <div style={{color:C.amber,fontSize:12,marginBottom:12,lineHeight:1.5}}>{addonMsg}</div>}
+
         <div style={{display:"flex",gap:8,justifyContent:"center"}}>
           <button onClick={onClose}
             style={{padding:"9px 18px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>Maybe later</button>
-          <button onClick={onClose}
-            style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-            View plans
-          </button>
+          {isTrainingAddon ? (
+            <button onClick={buyTrainingAddon} disabled={addonBusy}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.green},${C.accent})`,
+                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                cursor:addonBusy?"default":"pointer",opacity:addonBusy?0.7:1}}>
+              {addonBusy ? "Starting…" : "Add for $40/mo"}
+            </button>
+          ) : (
+            <button onClick={onClose}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              View plans
+            </button>
+          )}
         </div>
         <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
-          Contact your ShieldAI admin to change your subscription tier.
+          {isTrainingAddon
+            ? "Or upgrade to Growth or higher, where training delivery is included."
+            : "Contact your ShieldAI admin to change your subscription tier."}
         </div>
       </div>
     </div>
@@ -12281,8 +12329,8 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermind")
               ? setShowClientMastermind(true)
-              : setUpgradePrompt({ error:"Mastermind assistant is available on the Enterprise plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
-            title={can("mastermind") ? "" : "Enterprise plan feature"}
+              : setUpgradePrompt({ error:"Mastermind assistant is available on the Managed vCISO plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
+            title={can("mastermind") ? "" : "Managed vCISO plan feature"}
             style={{padding:"5px 12px",
               background: can("mastermind") ? `${C.purple}22` : C.surface,
               border:`1px solid ${can("mastermind") ? C.purple+"55" : C.border}`,borderRadius:6,

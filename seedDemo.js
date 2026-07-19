@@ -450,7 +450,7 @@ async function main() {
     analyst = {
       id: randomUUID(), email: DEMO_ANALYST_EMAIL, companyName: "ShieldAI Demo Analyst",
       passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
-      isAdmin: false, isAnalyst: true, isDemo: true, tier: "enterprise",
+      isAdmin: false, isAnalyst: true, isDemo: true, tier: "managed",
       createdAt: new Date().toISOString(),
     };
     db.data.users.push(analyst);
@@ -468,7 +468,7 @@ async function main() {
     user = {
       id: randomUUID(), email: DEMO_EMAIL, companyName: DEMO_COMPANY,
       passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
-      isAdmin: false, isAnalyst: false, isDemo: true, tier: "enterprise",
+      isAdmin: false, isAnalyst: false, isDemo: true, tier: "managed",
       createdAt: new Date().toISOString(),
     };
     db.data.users.push(user);

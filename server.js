@@ -770,7 +770,7 @@ app.get("/api/training/catalog", requireAuth, (req, res) => {
 });
 
 // Generate a full, company-tailored curriculum (hybrid: fixed backbone + AI detail)
-app.post("/api/training/generate", requireAuth, gate.capability("trainingPrograms"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
+app.post("/api/training/generate", requireAuth, gate.capability("trainingPlan"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
   try {
     const { companyContext, includeManagerTrack } = req.body || {};
     const company = companyContext || {};
@@ -1135,7 +1135,7 @@ registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsCli
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
-registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND
