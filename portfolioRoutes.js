@@ -502,7 +502,43 @@ export function registerPortfolioRoutes(
     });
   });
 
-  // ── Phase 3a: per-client alerts (from agentEvents) ─────────
+  // ── Client-facing posture history (the authenticated user's OWN real data) ──
+  // Same real sources as the analyst view (generated programs + recorded
+  // snapshots), scoped to req.userId. Never fabricates points: a brand-new
+  // client with one program gets a single real point, not an invented trend.
+  app.get("/api/client/posture-history", requireAuth, (req, res) => {
+    const clientId = req.userId;
+    const points = [];
+    for (const p of db.data.programs || []) {
+      if (p.userId !== clientId) continue;
+      const ro = p.sections?.riskOverview;
+      if (ro && typeof ro.postureScore === "number") {
+        points.push({
+          at: p.meta?.generatedAt || p.createdAt,
+          score: Math.round(ro.postureScore),
+          level: ro.postureLevel || null,
+          source: "program",
+        });
+      }
+    }
+    for (const s of db.data.postureSnapshots || []) {
+      if (s.userId !== clientId) continue;
+      points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot" });
+    }
+    points.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const byDay = new Map();
+    for (const pt of points) {
+      const day = new Date(pt.at).toISOString().slice(0, 10);
+      byDay.set(day, pt);
+    }
+    const series = [...byDay.values()]
+      .sort((a, b) => new Date(a.at) - new Date(b.at))
+      .slice(-12);
+    res.json({
+      current: series.length ? series[series.length - 1].score : null,
+      points: series,
+    });
+  });
   app.get("/api/analyst/clients/:id/alerts", requireAnalyst, (req, res) => {
     const clientId = req.params.id;
     if (!canSee(req, clientId)) {

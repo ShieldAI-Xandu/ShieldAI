@@ -5251,9 +5251,9 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents","Training available as an add-on"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins","Security awareness training included"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Training assigned & tracked for you","Below the cost of human-only firms"], cta:"Contact us" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
@@ -5534,6 +5534,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                 d:"Six real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace." },
               { icon:"🔔", t:"Notifications & review",
                 d:"When your analyst approves a policy or requests changes, you know immediately — with a direct link to what changed." },
+              { icon:"🎓", t:"Security awareness training",
+                d:"Assign training to every employee, track completion in real time, and export audit-ready reports. Standalone or bundled." },
               { icon:"🤝", t:"A human vCISO in the loop",
                 d:"AI drafts and monitors; a dedicated analyst reviews and advises at every stage. AI advises, humans act — by design." },
             ].map((f,i)=>(
@@ -5663,6 +5665,58 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           ))}
         </div>
       </Section>
+
+      {/* TRAINING ADD-ON — standalone product, sold on its own or bundled at
+          higher tiers. Advertised as a distinct benefit per the packaging
+          decision (both add-on and included). */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+        <Section>
+          <div style={{display:"flex",gap:44,flexWrap:"wrap",alignItems:"flex-start"}}>
+            <div style={{flex:"1 1 380px",minWidth:300}}>
+              <div style={{display:"inline-flex",alignItems:"center",gap:8,padding:"5px 13px",borderRadius:20,
+                background:`${C.green}14`,border:`1px solid ${C.green}40`,color:C.green,
+                fontSize:11.5,fontWeight:700,marginBottom:18}}>
+                NEW · STANDALONE OR BUNDLED
+              </div>
+              <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 14px",maxWidth:440}}>
+                Security Awareness Training your whole team actually completes.
+              </h2>
+              <p style={{fontSize:15,color:dim,lineHeight:1.65,margin:"0 0 22px",maxWidth:480}}>
+                Insurers and auditors want proof your staff are trained. ShieldAI Training gives every
+                employee a personal link, tracks completion in real time, and generates the reports you
+                hand to an auditor — built on CISA and NIST-aligned curriculum. Available as its own
+                add-on, or included with Guided and Managed vCISO plans.
+              </p>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+                  style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+                    fontSize:15,fontWeight:700,cursor:"pointer",boxShadow:`0 0 36px ${cyan}33`}}>
+                  Add Training to your plan
+                </button>
+              </div>
+            </div>
+
+            <div style={{flex:"1 1 380px",minWidth:300,display:"flex",flexDirection:"column",gap:12}}>
+              {[
+                { icon:"👥", t:"Assign in seconds", d:"Add employees and assign training by role or department — no per-seat account setup." },
+                { icon:"🔗", t:"Personal training links", d:"Each employee gets a private link. No logins, no passwords — they just click and complete." },
+                { icon:"📊", t:"Real-time completion tracking", d:"See exactly who's done, who's overdue, and average quiz scores across your team." },
+                { icon:"🗓️", t:"Quarterly training, scheduled", d:"Keep staff current with recurring quarterly programs, assigned to everyone in one click." },
+                { icon:"📄", t:"Audit-ready reports", d:"Export completion reports that satisfy cyber-insurance and compliance requirements." },
+              ].map((f,i)=>(
+                <div key={i} style={{display:"flex",gap:13,alignItems:"flex-start",padding:"13px 16px",
+                  background:C.card,border:`1px solid ${line}`,borderRadius:12}}>
+                  <div style={{fontSize:20,flexShrink:0}}>{f.icon}</div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700,marginBottom:3}}>{f.t}</div>
+                    <div style={{fontSize:12.5,color:dim,lineHeight:1.5}}>{f.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      </div>
 
       {/* TRUST */}
       <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"40px 0",background:navy}}>
@@ -6959,10 +7013,9 @@ function AdminPanel({ onClose }) {
 
   const TIER_LIST = [
     { id:"free", name:"Free", price:"$0" },
-    { id:"starter", name:"Starter", price:"$159/mo" },
-    { id:"growth", name:"Growth", price:"$349/mo" },
-    { id:"guided", name:"Guided", price:"$699/mo" },
-    { id:"managed", name:"Managed vCISO", price:"$1,950/mo" },
+    { id:"starter", name:"Starter", price:"$99/mo" },
+    { id:"pro", name:"Pro", price:"$299/mo" },
+    { id:"enterprise", name:"Enterprise", price:"Custom" },
   ];
 
   // Load the rich account-control record for a user.
@@ -7942,8 +7995,8 @@ function AdminPanel({ onClose }) {
                 <SectionLabel text="Per-Client Billing"/>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {billing.rows.sort((a,b)=>b.priceCents-a.priceCents).map(r=>{
-                    const tierColor = r.tier==="managed"?C.purple:r.tier==="guided"?C.purple
-                      :r.tier==="growth"?C.accent:r.tier==="starter"?C.green:C.textMut;
+                    const tierColor = r.tier==="enterprise"?C.purple:r.tier==="pro"?C.accent
+                      :r.tier==="starter"?C.green:C.textMut;
                     const stColor = ["active","manual","trialing"].includes(r.status)?C.green
                       :r.status==="past_due"?C.amber:r.status==="free"?C.textMut:C.red;
                     return (
@@ -8238,14 +8291,16 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
 // ─────────────────────────────────────────────────────────────
 //  COMPANY ADMIN CONSOLE
 //  Customer-facing overview of THEIR security program. Pulls the
-//  real posture score & company info from their generated program;
-//  trend, compliance %, analyst chat, and team-training figures are
-//  representative (mockup) until those data layers are live.
+//  real posture score & company info from their generated program,
+//  and the posture trend from real history (/api/client/posture-history).
+//  Compliance %, analyst chat, and team-training figures are
+//  representative until those data layers are live.
 // ─────────────────────────────────────────────────────────────
 function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);   // { company, results }
+  const [postureHistory, setPostureHistory] = useState(null); // real points from /api/client/posture-history
   const [chatDraft, setChatDraft] = useState("");
   const [chatLog, setChatLog] = useState([
     { from: "analyst", who: "Alex (ShieldAI Analyst)", text: "Welcome to your security console. I'm your assigned analyst — message me anytime with questions about your program.", time: "2d ago" },
@@ -8262,6 +8317,11 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
         if (!pRes.ok) throw new Error("Could not load your program");
         const program = await pRes.json();
         setData({ company: assessment.company || {}, results: program.sections || {} });
+        // Real posture history (never fabricated). Non-fatal if it fails.
+        try {
+          const hRes = await authFetch(`${API_BASE}/api/client/posture-history`);
+          if (hRes.ok) setPostureHistory(await hRes.json());
+        } catch { /* leave null — chart falls back to the single current score */ }
       } catch (e) { setError(e.message); } finally { setLoading(false); }
     })();
   }, [assessmentId, programId]);
@@ -8295,11 +8355,14 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
   const company = data.company || {};
   const scoreColor = score>=80?C.green:score>=60?"#7ED957":score>=40?C.amber:C.red;
 
-  const trend = (() => {
-    const pts = []; let v = Math.max(8, score - 22);
-    for (let i=0;i<11;i++){ pts.push(Math.round(v)); v += (score - v)/(11-i) + (Math.random()*3-1.5); }
-    pts.push(score); return pts;
-  })();
+  // Real posture points only. If the client has multiple generated programs /
+  // recorded snapshots, we plot them; with just one, we show the single real
+  // score as one point rather than inventing a 12-month history.
+  const realPoints = (postureHistory?.points || [])
+    .map(p => p.score)
+    .filter(n => typeof n === "number");
+  const trend = realPoints.length ? realPoints : [score];
+  const haveHistory = trend.length > 1;
 
   const sections = data.results || {};
   const progItems = [
@@ -8356,9 +8419,20 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
                 color:scoreColor,fontSize:12,fontWeight:700,display:"inline-block"}}>{level.toUpperCase()}</div>
             </div>
           </Panel>
-          <Panel title="Posture Trend (12 months)" flex="1 1 400px"
-            action={<span style={{fontSize:11,color:C.green}}>▲ improving</span>}>
-            <TrendChartLight data={trend} color={scoreColor}/>
+          <Panel title={haveHistory ? "Posture Trend" : "Current Posture"} flex="1 1 400px"
+            action={haveHistory
+              ? <span style={{fontSize:11,color: trend[trend.length-1] >= trend[0] ? C.green : C.amber}}>
+                  {trend[trend.length-1] >= trend[0] ? "▲ improving" : "▼ declining"}
+                </span>
+              : <span style={{fontSize:11,color:C.textMut}}>building history</span>}>
+            {haveHistory
+              ? <TrendChartLight data={trend} color={scoreColor}/>
+              : <div style={{padding:"18px 6px 6px",textAlign:"center"}}>
+                  <div style={{fontSize:44,fontWeight:800,color:scoreColor,lineHeight:1}}>{score}</div>
+                  <div style={{fontSize:12,color:C.textMut,marginTop:8,lineHeight:1.5}}>
+                    Your posture trend will appear here as your score is reassessed over time.
+                  </div>
+                </div>}
           </Panel>
         </div>
 
@@ -8480,6 +8554,7 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
 // Light-theme trend chart for the company console
 function TrendChartLight({ data, color }) {
   const w = 560, h = 130, pad = 8;
+  if (!data || data.length < 2) return null; // single/empty handled by caller
   const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
   const range = max - min || 1;
   const pts = data.map((v,i)=>{
@@ -9006,11 +9081,11 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
 }
 
 // ─────────────────────────────────────────────────────────────
-//  ANALYST CONSOLE — SOC-style command center (MOCKUP)
+//  ANALYST CONSOLE — SOC-style command center
 //  The internal console where ShieldAI's cybersecurity engineers
-//  run CISO programs for a portfolio of clients. Vision mockup:
-//  every panel shows what the platform makes possible, populated
-//  with believable sample data.
+//  run CISO programs for a portfolio of clients. Populated from
+//  real, server-scoped portfolio data (analysts see only their
+//  assigned clients); fields with no data yet render as "—".
 // ─────────────────────────────────────────────────────────────
 
 const ANALYST_EMAIL = "analyst@xandultd.com";
@@ -9954,7 +10029,7 @@ function TrainingManager({ client, onClose }) {
         )}
         <div style={{padding:"10px 20px",borderTop:`1px solid ${SOC.border}`,
           fontSize:10,color:SOC.textMut,textAlign:"center"}}>
-          Vision mockup · live program generation uses ShieldAI's CISA/NIST training engine
+          Live program generation powered by ShieldAI's CISA/NIST training engine
         </div>
       </div>
     </div>
@@ -10192,8 +10267,6 @@ function AnalystConsole({ user, onExit }) {
       <span style={{fontWeight:700,fontSize:15,color:SOC.text}}>{title}</span>
       <span style={{fontSize:10,color:SOC.cyan,letterSpacing:2,padding:"2px 10px",
         background:`${SOC.cyan}18`,borderRadius:20,border:`1px solid ${SOC.cyan}33`}}>ANALYST CONSOLE</span>
-      <span style={{fontSize:9,color:SOC.textMut,padding:"2px 8px",background:SOC.bg,
-        border:`1px solid ${SOC.border}`,borderRadius:4}}>VISION MOCKUP</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
         <span style={{fontSize:11,color:SOC.textSec}}>{user.email}</span>
         <button onClick={()=>setView(view==="myclients"?"portfolio":"myclients")}
@@ -11963,80 +12036,33 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 //  UPGRADE PROMPT (shown when a tier gate blocks an action)
 // ─────────────────────────────────────────────────────────────
 function UpgradeModal({ info, onClose }) {
-  const [addonBusy, setAddonBusy] = useState(false);
-  const [addonMsg, setAddonMsg] = useState(null);
   if (!info) return null;
   const isLimit = info.code === "LIMIT_REACHED";
-  const isTrainingAddon = info.addon === "training_delivery";
-
-  async function buyTrainingAddon() {
-    setAddonBusy(true); setAddonMsg(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/billing/checkout-addon`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ addon: "training_delivery" }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.url) { window.location.href = data.url; return; }
-      // Billing not yet live (Stripe price unset) or add-on unavailable — explain gracefully.
-      setAddonMsg(data.error || "Training add-on checkout isn't available yet. Contact your ShieldAI admin to enable it.");
-    } catch {
-      setAddonMsg("Couldn't start checkout. Contact your ShieldAI admin to add training delivery.");
-    } finally { setAddonBusy(false); }
-  }
-
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
       display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.accent}55`,
-        borderRadius:14,maxWidth:440,width:"100%",padding:"26px 28px",textAlign:"center"}}>
-        <div style={{fontSize:30,marginBottom:10}}>{isTrainingAddon ? "🎓" : isLimit ? "📦" : "🔒"}</div>
+        borderRadius:14,maxWidth:420,width:"100%",padding:"26px 28px",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:10}}>{isLimit ? "📦" : "🔒"}</div>
         <h2 style={{color:C.text,fontSize:19,margin:"0 0 8px"}}>
-          {isTrainingAddon ? "Add employee training delivery" : isLimit ? "Plan limit reached" : "Upgrade to unlock"}
+          {isLimit ? "Plan limit reached" : "Upgrade to unlock"}
         </h2>
         <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 18px"}}>
           {info.error || "This feature isn't included in your current plan."}
           {info.currentTier && <><br/><span style={{color:C.textMut,fontSize:12}}>Current plan: {info.currentTier}</span></>}
         </p>
-
-        {isTrainingAddon && (
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-            padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
-            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{color:C.text,fontWeight:700,fontSize:14}}>Training Delivery add-on</span>
-              <span style={{color:C.green,fontWeight:800,fontSize:15}}>$40<span style={{fontSize:11,color:C.textMut}}>/mo</span></span>
-            </div>
-            <div style={{color:C.textMut,fontSize:12,lineHeight:1.5}}>
-              Tokenized learner links, assignments, quarterly scheduling, completion tracking, and reports.
-              Bundled free on Growth and higher.
-            </div>
-          </div>
-        )}
-        {addonMsg && <div style={{color:C.amber,fontSize:12,marginBottom:12,lineHeight:1.5}}>{addonMsg}</div>}
-
         <div style={{display:"flex",gap:8,justifyContent:"center"}}>
           <button onClick={onClose}
             style={{padding:"9px 18px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>Maybe later</button>
-          {isTrainingAddon ? (
-            <button onClick={buyTrainingAddon} disabled={addonBusy}
-              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.green},${C.accent})`,
-                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
-                cursor:addonBusy?"default":"pointer",opacity:addonBusy?0.7:1}}>
-              {addonBusy ? "Starting…" : "Add for $40/mo"}
-            </button>
-          ) : (
-            <button onClick={onClose}
-              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-              View plans
-            </button>
-          )}
+          <button onClick={onClose}
+            style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            View plans
+          </button>
         </div>
         <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
-          {isTrainingAddon
-            ? "Or upgrade to Growth or higher, where training delivery is included."
-            : "Contact your ShieldAI admin to change your subscription tier."}
+          Contact your ShieldAI admin to change your subscription tier.
         </div>
       </div>
     </div>
@@ -12329,8 +12355,8 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermind")
               ? setShowClientMastermind(true)
-              : setUpgradePrompt({ error:"Mastermind assistant is available on the Managed vCISO plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
-            title={can("mastermind") ? "" : "Managed vCISO plan feature"}
+              : setUpgradePrompt({ error:"Mastermind assistant is available on the Enterprise plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
+            title={can("mastermind") ? "" : "Enterprise plan feature"}
             style={{padding:"5px 12px",
               background: can("mastermind") ? `${C.purple}22` : C.surface,
               border:`1px solid ${can("mastermind") ? C.purple+"55" : C.border}`,borderRadius:6,
