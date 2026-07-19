@@ -5,50 +5,21 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { randomUUID } from "crypto";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import db, { storeBinder } from "./db.js";
-import {
-  isDemoRequest,
-  demoSessionId,
-  registerDemoRoutes,
-  demoGuard,
-  assertStoreSeparation,
-  createAccessCode,
-  DEMO_PATH_PREFIX,
-} from "./demoGateway.js";
+import db from "./db.js";
 import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
-import { registerCveRoutes } from "./cveRoutes.js";
-import { registerDomainRoutes } from "./domainRoutes.js";
-// The compliance workspace and task/gap engine. Both modules existed, were
-// tested, and were never registered — so every /api/compliance/* and /api/tasks/*
-// endpoint returned the SPA's index.html rather than a response. Registering
-// them is what puts the 11 control-mapped frameworks in front of a client.
-import { registerComplianceRoutes } from "./complianceRoutes.js";
-import { registerTaskRoutes } from "./taskRoutes.js";
-// Five more modules that were written, tested, and never registered — so every
-// one of their endpoints returned the SPA's index.html instead of a response.
-// portfolioRoutes is the notable one: its changelog records access control as
-// "verified via runtime smoke test", which cannot have been true through HTTP
-// while the route was unreachable. Registering it makes that testable.
-import { registerEvidenceRoutes } from "./evidenceRoutes.js";
-import { registerPortfolioRoutes } from "./portfolioRoutes.js";
-import { registerBrandingRoutes } from "./brandingRoutes.js";
-import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
-import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
-import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+import { registerStaffRoutes, authorizeStaffForClient } from "./staffRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
 import { computePostureScore } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
+import { hasCapability, getTier } from "./tiers.js";
 import {
   registerUser,
   loginUser,
@@ -63,24 +34,9 @@ import {
 
 dotenv.config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 const app = express();
 const gate = makeTierGate(db);
-// Railway (and most PaaS) inject the port to listen on. Falling back to 3001
-// keeps local dev unchanged.
-const PORT = process.env.PORT || 3001;
-// Must bind all interfaces in a container — binding localhost makes the app
-// unreachable from outside, which looks exactly like a silent healthcheck fail.
-const HOST = process.env.HOST || "0.0.0.0";
-
-// ── Healthcheck ──────────────────────────────────────────────
-// Registered first: no auth, no DB, no store binding. Railway's healthcheckPath
-// points here, so it must answer 200 even if nothing else is ready, and it must
-// never be swallowed by the SPA fallback below.
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", uptime: process.uptime() });
-});
+const PORT = 3001;
 
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
@@ -89,19 +45,6 @@ app.use((req, res, next) => {
   if (req.originalUrl === "/api/billing/webhook") return next();
   return express.json({ limit: "5mb" })(req, res, next);
 });
-
-// ── DEMO / PRODUCTION BOUNDARY ───────────────────────────────
-// Bind every request to exactly one data store before any route runs.
-// Demo requests → demo-db.json. Everything else → db.json. Nothing downstream
-// can reach across: db.data always resolves to the bound store.
-// Demo requests bind to the visitor's own private, in-memory sandbox — a full
-// writable clone of the seeded demo data that no one else can see and that is
-// discarded when they leave. Everything else binds to production.
-app.use(storeBinder(isDemoRequest, demoSessionId));
-
-// The demo is otherwise fully functional. Only things that would reach the real
-// world — real money, real accounts, real enrollment tokens — are blocked.
-app.use((req, res, next) => (req.isDemo ? demoGuard(req, res, next) : next()));
 
 const progressStore = {};
 
@@ -249,59 +192,6 @@ app.delete("/api/admin/leads/:id", requireAdmin, async (req, res) => {
   res.json({ deleted: req.params.id });
 });
 
-// ── Access codes (admin) ──────────────────────────────────────
-// Admin mints a code (optionally tied to a lead) to grant demo access; the
-// visitor redeems it at /api/demo/redeem-code. See demoGateway.js.
-app.get("/api/admin/access-codes", requireAdmin, (req, res) => {
-  const codes = [...(db.data.accessCodes || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(codes);
-});
-
-app.post("/api/admin/access-codes", requireAdmin, async (req, res) => {
-  try {
-    const { type, leadId, note } = req.body || {};
-    const record = await createAccessCode(db, { type, leadId: leadId || null, note: note || "", createdBy: req.userId });
-    res.json(record);
-  } catch (err) {
-    if (err.code === "BAD_TYPE") return res.status(400).json({ error: err.message });
-    console.error("Access-code create error:", err.message);
-    res.status(500).json({ error: "Could not create the access code." });
-  }
-});
-
-// Approve a lead AND mint a code in one step. Sets the lead status to
-// "qualified", stamps it with the issued code, and returns both.
-app.post("/api/admin/leads/:id/approve", requireAdmin, async (req, res) => {
-  try {
-    const lead = (db.data.leads || []).find(l => l.id === req.params.id);
-    if (!lead) return res.status(404).json({ error: "Lead not found." });
-    const type = req.body?.type === "investor" ? "investor" : "client";
-    const record = await createAccessCode(db, {
-      type, leadId: lead.id, note: `Approved for ${lead.name || lead.email}`, createdBy: req.userId,
-    });
-    lead.status = "qualified";
-    lead.accessCode = record.code;
-    lead.accessType = type;
-    lead.approvedAt = new Date().toISOString();
-    await db.write();
-    res.json({ lead, accessCode: record });
-  } catch (err) {
-    if (err.code === "BAD_TYPE") return res.status(400).json({ error: err.message });
-    console.error("Lead approve error:", err.message);
-    res.status(500).json({ error: "Could not approve the lead." });
-  }
-});
-
-// Activate/deactivate a code (reversible; we never hard-delete for audit trail).
-app.patch("/api/admin/access-codes/:id", requireAdmin, async (req, res) => {
-  const record = (db.data.accessCodes || []).find(c => c.id === req.params.id);
-  if (!record) return res.status(404).json({ error: "Access code not found." });
-  if (typeof req.body?.active === "boolean") record.active = req.body.active;
-  if (typeof req.body?.note === "string") record.note = req.body.note.slice(0, 300);
-  await db.write();
-  res.json(record);
-});
-
 // How many registration slots remain (used by the UI)
 app.get("/api/auth/capacity", (req, res) => {
   const used = (db.data.users || []).length;
@@ -441,6 +331,77 @@ app.post("/api/programs/generate", requireAuth, gate.capability("buildPrograms")
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+//  STAFF: generate a program ON BEHALF OF a client (Option B)
+//  Files under the CLIENT's id and enforces the CLIENT's tier + program
+//  limit (the tier gate exempts staff, so we check the client explicitly).
+//  Authorized by admin-or-owning-analyst via authorizeStaffForClient.
+// ─────────────────────────────────────────────────────────────
+app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, res) => {
+  try {
+    const auth = authorizeStaffForClient(db, req, req.params.cid, analystOwnsClient);
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    const client = auth.client;
+
+    // Enforce the CLIENT's plan — not the staff user's.
+    const clientTier = gate.tierOf(client.id);
+    if (!hasCapability(clientTier, "buildPrograms")) {
+      return res.status(402).json({
+        error: `This client's plan (${getTier(clientTier).name}) doesn't include program generation. Upgrade the client to continue.`,
+        code: "UPGRADE_REQUIRED", capability: "buildPrograms", currentTier: clientTier,
+      });
+    }
+    const limit = getTier(clientTier).limits?.programs;
+    if (limit != null) {
+      const current = counters.programs(db, client.id);
+      if (current >= limit) {
+        return res.status(402).json({
+          error: `This client has reached their plan's limit of ${limit} programs. Upgrade the client for more.`,
+          code: "LIMIT_REACHED", resource: "programs", currentTier: clientTier, limit, current,
+        });
+      }
+    }
+
+    const { assessmentId } = req.body || {};
+    const assessment = db.data.assessments.find(
+      a => a.id === assessmentId && a.userId === client.id
+    );
+    if (!assessment) return res.status(404).json({ error: "Assessment not found for this client." });
+
+    const programId = randomUUID();
+    const program = {
+      id: programId,
+      userId: client.id,               // filed under the CLIENT
+      assessmentId,
+      createdAt: new Date().toISOString(),
+      status: "running",
+      sections: {},
+      generatedByStaff: req.userId,     // provenance: who ran it
+      generatedByRole: req.isAdmin ? "admin" : "analyst",
+    };
+    db.data.programs.push(program);
+
+    logClientAction(db, {
+      clientUserId: client.id, actorUserId: req.userId,
+      actorRole: req.isAdmin ? "admin" : "analyst",
+      action: "generated_program",
+      detail: `Generated a security program on behalf of client (assessment ${assessmentId}).`,
+    });
+    await db.write();
+
+    progressStore[programId] = { step: 0, total: PIPELINE.length, label: "Starting...", status: "running" };
+
+    runPipeline(programId, assessment.data).catch(err => {
+      console.error("Pipeline fatal error (staff-initiated):", err);
+      progressStore[programId] = { ...progressStore[programId], status: "error", error: err.message };
+    });
+
+    res.json({ programId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function runPipeline(programId, assessmentData) {
   const ctx = JSON.stringify(assessmentData, null, 2);
   const program = db.data.programs.find(p => p.id === programId);
@@ -492,13 +453,6 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           functions: posture.functions,
           weakestAreas: posture.weakestAreas,
           complianceNote: posture.complianceNote,
-          // The chosen lens, so the dashboard labels the breakdown correctly —
-          // a CIS client should not see "NIST CSF Posture Breakdown" over their
-          // CIS hygiene groups. alternateView carries the other framework's view
-          // when the client picked "cis" or "both".
-          frameworkLens: posture.frameworkLens || "NIST CSF",
-          lens: posture.lens || "nist",
-          alternateView: posture.alternateView || null,
         };
 
         program.sections[step.key] = aiResult;
@@ -770,7 +724,7 @@ app.get("/api/training/catalog", requireAuth, (req, res) => {
 });
 
 // Generate a full, company-tailored curriculum (hybrid: fixed backbone + AI detail)
-app.post("/api/training/generate", requireAuth, gate.capability("trainingPlan"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
+app.post("/api/training/generate", requireAuth, gate.capability("trainingPrograms"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
   try {
     const { companyContext, includeManagerTrack } = req.body || {};
     const company = companyContext || {};
@@ -1120,91 +1074,19 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
-registerDemoRoutes(app, db);
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
-registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds });
-registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
-registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
-registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
-registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
-registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
-registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
-registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
+registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 
 // ─────────────────────────────────────────────────────────────
-//  STATIC FRONTEND
-// ─────────────────────────────────────────────────────────────
-// Serve the built Vite app. This MUST come after every API route so it can
-// never shadow one, and the SPA fallback excludes /api and /health so those
-// keep returning real responses instead of index.html.
-const DIST_DIR = path.join(__dirname, "dist");
-if (fs.existsSync(DIST_DIR)) {
-  app.use(express.static(DIST_DIR));
-  app.get(/^\/(?!api\/|health$).*/, (req, res) => {
-    res.sendFile(path.join(DIST_DIR, "index.html"));
-  });
-  console.log("ShieldAI static frontend served from ./dist");
-} else {
-  console.warn("⚠️  ./dist not found — frontend not served. Run `npm run build`.");
-}
-
-// ─────────────────────────────────────────────────────────────
-// Fail loudly at boot if demo data ever leaked into production.
-const separation = assertStoreSeparation();
-if (!separation.ok) {
-  console.error("\n✖ STORE SEPARATION VIOLATION\n  " + separation.message + "\n");
-  process.exit(1);
-}
-console.log("✔ Demo/production stores are separate (db.json | demo-db.json)");
-
-const server = app.listen(PORT, HOST, () => {
-  console.log(`✅ ShieldAI backend listening on ${HOST}:${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`✅ ShieldAI backend running at http://localhost:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
-
-  // ── Optional background demo seeding ───────────────────────
-  // Set SEED_DEMO_ON_BOOT=true to build the demo sandbox. It runs AFTER the
-  // server is already listening, so /health answers immediately and the
-  // platform healthcheck can never time out waiting on the AI pipeline
-  // (which takes several minutes across all the demo companies).
-  //
-  // Safe to leave on: it no-ops once the sandbox exists. Seeding only ever
-  // touches demo-db.json.
-  if (String(process.env.SEED_DEMO_ON_BOOT).toLowerCase() === "true") {
-    void seedDemoInBackground();
-  }
 });
-
-async function seedDemoInBackground() {
-  try {
-    const { isDemoSeeded, seedDemoStore } = await import("./seedDemo.js");
-
-    if (await isDemoSeeded()) {
-      console.log("↩ Demo sandbox already seeded — skipping (set SEED_DEMO_FORCE=true to rebuild).");
-      if (String(process.env.SEED_DEMO_FORCE).toLowerCase() !== "true") return;
-      console.log("⟳ SEED_DEMO_FORCE=true — rebuilding the demo sandbox…");
-    }
-
-    console.log("⏳ Seeding demo sandbox in the background (this takes a few minutes)…");
-    console.log("   The app is already serving traffic; demo buttons appear when it finishes.");
-    const t0 = Date.now();
-    const result = await seedDemoStore();
-    const mins = ((Date.now() - t0) / 60000).toFixed(1);
-    console.log(`✅ Demo sandbox ready in ${mins} min — ${result.companies} companies.`);
-    console.log("   You can now remove SEED_DEMO_ON_BOOT from the environment.");
-  } catch (err) {
-    // A seeding failure must never take down the app. Production is unaffected;
-    // the demo buttons simply stay hidden until it's re-run.
-    console.error("⚠️  Demo seeding failed — the app is unaffected and running normally.");
-    console.error("   Reason:", err?.message || err);
-  }
-}
 
 // Surface the real reason if the server can't stay up (e.g. port in use).
 server.on("error", (err) => {
