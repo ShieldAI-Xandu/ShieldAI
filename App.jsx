@@ -5251,9 +5251,9 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents","Training available as an add-on"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins","Security awareness training included"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Training assigned & tracked for you","Below the cost of human-only firms"], cta:"Contact us" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
@@ -5534,6 +5534,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                 d:"Six real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace." },
               { icon:"🔔", t:"Notifications & review",
                 d:"When your analyst approves a policy or requests changes, you know immediately — with a direct link to what changed." },
+              { icon:"🎓", t:"Security awareness training",
+                d:"Assign training to every employee, track completion in real time, and export audit-ready reports. Standalone or bundled." },
               { icon:"🤝", t:"A human vCISO in the loop",
                 d:"AI drafts and monitors; a dedicated analyst reviews and advises at every stage. AI advises, humans act — by design." },
             ].map((f,i)=>(
@@ -5663,6 +5665,58 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           ))}
         </div>
       </Section>
+
+      {/* TRAINING ADD-ON — standalone product, sold on its own or bundled at
+          higher tiers. Advertised as a distinct benefit per the packaging
+          decision (both add-on and included). */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+        <Section>
+          <div style={{display:"flex",gap:44,flexWrap:"wrap",alignItems:"flex-start"}}>
+            <div style={{flex:"1 1 380px",minWidth:300}}>
+              <div style={{display:"inline-flex",alignItems:"center",gap:8,padding:"5px 13px",borderRadius:20,
+                background:`${C.green}14`,border:`1px solid ${C.green}40`,color:C.green,
+                fontSize:11.5,fontWeight:700,marginBottom:18}}>
+                NEW · STANDALONE OR BUNDLED
+              </div>
+              <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 14px",maxWidth:440}}>
+                Security Awareness Training your whole team actually completes.
+              </h2>
+              <p style={{fontSize:15,color:dim,lineHeight:1.65,margin:"0 0 22px",maxWidth:480}}>
+                Insurers and auditors want proof your staff are trained. ShieldAI Training gives every
+                employee a personal link, tracks completion in real time, and generates the reports you
+                hand to an auditor — built on CISA and NIST-aligned curriculum. Available as its own
+                add-on, or included with Guided and Managed vCISO plans.
+              </p>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+                  style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+                    fontSize:15,fontWeight:700,cursor:"pointer",boxShadow:`0 0 36px ${cyan}33`}}>
+                  Add Training to your plan
+                </button>
+              </div>
+            </div>
+
+            <div style={{flex:"1 1 380px",minWidth:300,display:"flex",flexDirection:"column",gap:12}}>
+              {[
+                { icon:"👥", t:"Assign in seconds", d:"Add employees and assign training by role or department — no per-seat account setup." },
+                { icon:"🔗", t:"Personal training links", d:"Each employee gets a private link. No logins, no passwords — they just click and complete." },
+                { icon:"📊", t:"Real-time completion tracking", d:"See exactly who's done, who's overdue, and average quiz scores across your team." },
+                { icon:"🗓️", t:"Quarterly training, scheduled", d:"Keep staff current with recurring quarterly programs, assigned to everyone in one click." },
+                { icon:"📄", t:"Audit-ready reports", d:"Export completion reports that satisfy cyber-insurance and compliance requirements." },
+              ].map((f,i)=>(
+                <div key={i} style={{display:"flex",gap:13,alignItems:"flex-start",padding:"13px 16px",
+                  background:C.card,border:`1px solid ${line}`,borderRadius:12}}>
+                  <div style={{fontSize:20,flexShrink:0}}>{f.icon}</div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700,marginBottom:3}}>{f.t}</div>
+                    <div style={{fontSize:12.5,color:dim,lineHeight:1.5}}>{f.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      </div>
 
       {/* TRUST */}
       <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"40px 0",background:navy}}>

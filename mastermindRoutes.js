@@ -22,6 +22,7 @@ import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
 import { taskSummary, simulateControlChange, currentPosture } from "./taskRoutes.js";
 import { evidenceSummary } from "./evidenceRoutes.js";
 import { complianceSummary } from "./complianceRoutes.js";
+import { trainingSummary, clientTrainingSummary } from "./trainingProgramRoutes.js";
 // The BRIDGE, not complianceFrameworks.js. Same function signatures, but the
 // assessments are now computed by the deep control-mapped modules — so
 // check_compliance answers about ISO 27001 from 93 real Annex A controls with
@@ -117,6 +118,7 @@ function portfolioSnapshot(db, depth = "summary") {
         byStatus: myRecs.reduce((m, r) => { m[r.status] = (m[r.status]||0)+1; return m; }, {}),
         ...(full ? { items: myRecs.slice(-12).map(r => ({ title: r.title, severity: r.severity, status: r.status, origin: r.origin })) } : {}),
       },
+      training: clientTrainingSummary(db, u.id, full),
       ...(full ? { recentActions: actions.filter(a => a.clientUserId === u.id).slice(-10).map(a => ({ action: a.action, detail: a.detail, at: a.at })) } : {}),
     };
   });
@@ -141,6 +143,7 @@ function portfolioSnapshot(db, depth = "summary") {
     tasks: taskSummary(db, depth),
     evidence: evidenceSummary(db, depth),
     compliance: complianceSummary(db, depth),
+    training: trainingSummary(db, depth),
     recentEvents: events.slice(-20).map(e => ({ client: nameOf(e.ownerUserId), severity: e.severity, type: e.type, message: e.message, at: e.ts || e.at })),
   };
 }
@@ -279,6 +282,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       description: "Read white-label branding across the platform: which analysts/MSPs have their own brand, how many clients each brand covers, and how many clients are still on the default ShieldAI brand. Optionally pass a client id/email to see exactly which brand that client sees. Read-only.",
       input_schema: { type: "object", properties: {
         clientIdOrEmail: { type: "string", description: "Optional. If given, returns the branding this specific client currently sees." },
+      }, required: [] },
+    },
+    {
+      name: "get_training",
+      description: "Read the standalone security-training program status. With no argument, returns a fleet-wide rollup (total learners, assignments, completion rate, overdue). Pass a client id/email to get that client's training detail: learner count, completion rate, average score, overdue learners, and quarters scheduled. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "Optional. If given, returns that client's training detail." },
       }, required: [] },
     },
   ];
@@ -549,6 +559,14 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           };
         }
         return brandingSummary(db);
+      }
+      case "get_training": {
+        if (input.clientIdOrEmail) {
+          const u = resolveClient(input.clientIdOrEmail);
+          if (!u) return { error: "Client not found." };
+          return { client: u.companyName || u.email, ...clientTrainingSummary(db, u.id, true) };
+        }
+        return trainingSummary(db, "full");
       }
       case "list_recommendations": {
         let recs = (db.data.recommendations || []);

@@ -118,6 +118,54 @@ function learnerFacing(assignment, learner) {
   };
 }
 
+// ── Mastermind summaries ──────────────────────────────────────
+// Read-only rollups the AI console can reason over. No writes, no actions —
+// consistent with the read-only snapshot the other modules provide.
+export function clientTrainingSummary(db, clientUserId, full = false) {
+  const learners = (db.data.learners || []).filter(l => l.clientUserId === clientUserId);
+  const assigns = (db.data.trainingAssignments || []).filter(a => a.clientUserId === clientUserId);
+  assigns.forEach(rollup);
+  const byStatus = {};
+  let scoreSum = 0, scoreCount = 0;
+  for (const a of assigns) {
+    byStatus[a.status] = (byStatus[a.status] || 0) + 1;
+    if (typeof a.score === "number") { scoreSum += a.score; scoreCount++; }
+  }
+  const completed = byStatus.completed || 0;
+  return {
+    learners: learners.length,
+    activeLearners: learners.filter(l => l.status === "active").length,
+    assignments: assigns.length,
+    completionRate: assigns.length ? Math.round((completed / assigns.length) * 100) : 0,
+    avgScore: scoreCount ? Math.round(scoreSum / scoreCount) : null,
+    overdue: byStatus.overdue || 0,
+    byStatus,
+    quartersScheduled: (db.data.trainingQuarters || []).filter(q => q.clientUserId === clientUserId).length,
+    ...(full ? {
+      overdueLearners: assigns.filter(a => a.status === "overdue").map(a => {
+        const l = (db.data.learners || []).find(x => x.id === a.learnerId);
+        return { learner: l?.name || "(removed)", title: a.title, dueDate: a.dueDate };
+      }).slice(0, 15),
+    } : {}),
+  };
+}
+
+export function trainingSummary(db, depth = "summary") {
+  const learners = db.data.learners || [];
+  const assigns = db.data.trainingAssignments || [];
+  assigns.forEach(rollup);
+  const completed = assigns.filter(a => a.status === "completed").length;
+  const overdue = assigns.filter(a => a.status === "overdue").length;
+  return {
+    totalLearners: learners.length,
+    totalAssignments: assigns.length,
+    completed,
+    overdue,
+    completionRate: assigns.length ? Math.round((completed / assigns.length) * 100) : 0,
+    quartersScheduled: (db.data.trainingQuarters || []).length,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────
 export function registerTrainingProgramRoutes(app, {
   db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds,
