@@ -7348,6 +7348,12 @@ function AdminPanel({ onClose }) {
   }
 
   // ── USER DETAIL VIEW ────────────────────────────────────
+  if (view === "workspace" && userDetail) {
+    return <WorkspaceViewer
+      client={{ id:userDetail.id, name:userDetail.companyName||userDetail.email, email:userDetail.email, tier:userDetail.tier }}
+      onBack={()=>setView("user")}/>;
+  }
+
   if (view === "user") {
     const u = userDetail;
     return (
@@ -7374,6 +7380,13 @@ function AdminPanel({ onClose }) {
                   </div>
                   {!u.isAdmin && (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {!u.isAnalyst && (
+                        <button onClick={() => setView("workspace")}
+                          style={{padding:"6px 14px",background:`${C.green||"#00E5A0"}18`,border:`1px solid ${C.green||"#00E5A0"}55`,
+                            borderRadius:6,color:C.green||"#00E5A0",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                          View Workspace →
+                        </button>
+                      )}
                       <button onClick={() => { setResetFor(resetFor===u.id?null:u.id); setNewPw(""); }}
                         style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
                           borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -10012,6 +10025,362 @@ function mastermindReply(quickId, client) {
 }
 
 
+// ─────────────────────────────────────────────────────────────
+//  WORKSPACE VIEWER — "View as client" drill-in for staff
+//  Works for both admin and analyst: both hit /api/staff/clients/:cid/*
+//  Read the client's assessments, programs, policies, training; edit a
+//  policy or assessment on their behalf; generate a program (respecting the
+//  CLIENT's tier limit — shows an upgrade notice on 402); delete a program.
+//  Self-contained: renders its own header bar (the console Header is local).
+// ─────────────────────────────────────────────────────────────
+const PROGRAM_SECTION_LABELS = {
+  riskOverview: "Risk overview & top threats",
+  priorities: "Prioritized roadmap & quick wins",
+  policiesCore: "Core security policies",
+  policiesOps: "Operational security policies",
+  compliance: "Compliance framework gap analysis",
+  workflows: "Incident response workflows",
+  threatIntel: "Threat intelligence",
+  tools: "Recommended tool stack",
+  training: "Awareness training program",
+  execReport: "Executive summary report",
+};
+
+function WorkspaceViewer({ client, onBack }) {
+  const cid = client.id;
+  const [tab, setTab] = useState("overview");
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [banner, setBanner] = useState(null);
+
+  const [openProgram, setOpenProgram] = useState(null);
+  const [openPolicy, setOpenPolicy] = useState(null);
+  const [policyEdit, setPolicyEdit] = useState(null);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const [genFor, setGenFor] = useState(null);
+  const [genProgress, setGenProgress] = useState(null);
+
+  async function loadOverview() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/overview`);
+      if (!res.ok) { setError(`Failed to load workspace (${res.status})`); return; }
+      setOverview(await res.json());
+    } catch { setError("Network error loading workspace."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadOverview(); /* eslint-disable-next-line */ }, [cid]);
+
+  async function openProgramDetail(id) {
+    setDetailLoading(true); setOpenProgram(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/${id}`);
+      if (res.ok) setOpenProgram(await res.json());
+      else setBanner({ kind: "error", text: `Could not open program (${res.status}).` });
+    } catch { setBanner({ kind: "error", text: "Network error opening program." }); }
+    finally { setDetailLoading(false); }
+  }
+
+  async function openPolicyDetail(id) {
+    setDetailLoading(true); setOpenPolicy(null); setPolicyEdit(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/policies/${id}`);
+      if (res.ok) setOpenPolicy(await res.json());
+      else setBanner({ kind: "error", text: `Could not open policy (${res.status}).` });
+    } catch { setBanner({ kind: "error", text: "Network error opening policy." }); }
+    finally { setDetailLoading(false); }
+  }
+
+  async function savePolicy() {
+    if (openPolicy == null || policyEdit == null) return;
+    setSavingPolicy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/policies/${openPolicy.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: policyEdit }),
+      });
+      if (res.ok) {
+        const upd = await res.json();
+        setOpenPolicy({ ...openPolicy, content: upd.content });
+        setPolicyEdit(null);
+        setBanner({ kind: "info", text: "Policy saved on behalf of the client." });
+      } else setBanner({ kind: "error", text: `Save failed (${res.status}).` });
+    } catch { setBanner({ kind: "error", text: "Network error saving policy." }); }
+    finally { setSavingPolicy(false); }
+  }
+
+  async function deleteProgram(id) {
+    if (!window.confirm("Delete this program on behalf of the client? They can regenerate it.")) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/${id}`, { method: "DELETE" });
+      if (res.ok) { setBanner({ kind: "info", text: "Program deleted." }); if (openProgram?.id === id) setOpenProgram(null); loadOverview(); }
+      else setBanner({ kind: "error", text: `Delete failed (${res.status}).` });
+    } catch { setBanner({ kind: "error", text: "Network error deleting program." }); }
+  }
+
+  async function generateFor(assessmentId) {
+    setGenFor(assessmentId); setGenProgress({ label: "Starting…", status: "running", step: 0, total: 10 }); setBanner(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assessmentId }),
+      });
+      if (res.status === 402) {
+        const body = await res.json().catch(() => ({}));
+        setBanner({ kind: "warn", text: body.error || "This client's plan doesn't allow more programs. Upgrade the client from the Admin console." });
+        setGenFor(null); setGenProgress(null); return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setBanner({ kind: "error", text: body.error || `Generation failed (${res.status}).` });
+        setGenFor(null); setGenProgress(null); return;
+      }
+      const { programId } = await res.json();
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        const st = await authFetch(`${API_BASE}/api/programs/${programId}/status`);
+        if (!st.ok) throw new Error(`status ${st.status}`);
+        const p = await st.json();
+        setGenProgress(p);
+        if (p.status === "complete") break;
+        if (p.status === "error") throw new Error(p.error || "Pipeline failed");
+      }
+      setBanner({ kind: "info", text: "Program generated on behalf of the client." });
+      setGenFor(null); setGenProgress(null); loadOverview();
+    } catch (e) {
+      setBanner({ kind: "error", text: `Generation error: ${e.message}` });
+      setGenFor(null); setGenProgress(null);
+    }
+  }
+
+  const bannerColor = banner?.kind === "error" ? SOC.red : banner?.kind === "warn" ? SOC.amber : SOC.cyan;
+  const tabs = [["overview","Overview"],["assessments","Assessments"],["programs","Programs"],["policies","Policies"],["training","Training"]];
+  const panel = { background:SOC.panel, border:`1px solid ${SOC.border}`, borderRadius:10 };
+  const chip = (active) => ({
+    padding:"7px 14px", borderRadius:7, fontSize:12, fontWeight:600, cursor:"pointer",
+    background: active ? `${SOC.cyan}18` : "transparent",
+    border: `1px solid ${active ? SOC.cyan+"55" : SOC.border}`,
+    color: active ? SOC.cyan : SOC.textSec,
+  });
+
+  return (
+    <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+      <div style={{borderBottom:`1px solid ${SOC.border}`,padding:"16px 20px",background:SOC.panel}}>
+        <span style={{fontSize:15,fontWeight:700,color:SOC.text}}>Workspace · {client.name || client.email}</span>
+      </div>
+      <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
+        <button onClick={onBack}
+          style={{marginBottom:14,padding:"6px 14px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+            borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← Back to clients</button>
+
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:15,fontWeight:700,color:SOC.text}}>{client.name || client.email}</span>
+          <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,background:`${SOC.purple}22`,color:SOC.purple}}>
+            {(overview?.client?.tier || client.tier || "free").toUpperCase()}
+          </span>
+          <span style={{fontSize:11,color:SOC.textMut}}>Acting on behalf of the client — changes are logged.</span>
+        </div>
+
+        {banner && (
+          <div style={{...panel,borderColor:`${bannerColor}55`,background:`${bannerColor}12`,
+            padding:"10px 14px",marginBottom:12,color:bannerColor,fontSize:13,display:"flex",justifyContent:"space-between",gap:10}}>
+            <span>{banner.text}</span>
+            <span onClick={()=>setBanner(null)} style={{cursor:"pointer",opacity:.7}}>✕</span>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+          {tabs.map(([id,label]) => (
+            <button key={id} onClick={()=>{ setTab(id); setOpenProgram(null); setOpenPolicy(null); }} style={chip(tab===id)}>
+              {label}{overview?.counts?.[id] != null ? ` (${overview.counts[id]})` : ""}
+            </button>
+          ))}
+        </div>
+
+        {loading ? <div style={{color:SOC.textMut,padding:24}}>Loading workspace…</div> :
+         error ? <div style={{...panel,padding:20,color:SOC.red}}>{error}</div> :
+         !overview ? null : (
+          <>
+            {tab==="overview" && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+                {[["Assessments",overview.counts.assessments,SOC.cyan],["Programs",overview.counts.programs,SOC.green],
+                  ["Policies",overview.counts.policies,SOC.purple],["Training",overview.counts.training,SOC.amber],
+                  ["Endpoints",overview.counts.endpoints,SOC.blue],["Open recs",overview.counts.openRecommendations,SOC.red]
+                ].map(([label,n,col]) => (
+                  <div key={label} style={{...panel,padding:"16px"}}>
+                    <div style={{fontSize:26,fontWeight:800,color:col}}>{n}</div>
+                    <div style={{fontSize:11,color:SOC.textMut,textTransform:"uppercase",letterSpacing:1,marginTop:2}}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab==="assessments" && (
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {overview.assessments.length===0 ? (
+                  <div style={{...panel,padding:30,textAlign:"center",color:SOC.textMut}}>No assessments yet.</div>
+                ) : overview.assessments.map(a => (
+                  <div key={a.id} style={{...panel,padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{a.company?.name || "Untitled assessment"}</div>
+                        <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>
+                          {a.company?.industry || "—"} · created {new Date(a.createdAt).toLocaleDateString()}
+                          {a.updatedAt ? ` · edited ${new Date(a.updatedAt).toLocaleDateString()}` : ""}
+                        </div>
+                      </div>
+                      {genFor===a.id ? (
+                        <span style={{fontSize:12,color:SOC.cyan}}>
+                          {genProgress?.label || "Generating…"} {genProgress?.total ? `(${genProgress.step}/${genProgress.total})` : ""}
+                        </span>
+                      ) : (
+                        <button onClick={()=>generateFor(a.id)}
+                          style={{padding:"7px 14px",background:`${SOC.green}18`,border:`1px solid ${SOC.green}55`,
+                            borderRadius:7,color:SOC.green,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                          Generate Program →
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab==="programs" && (
+              openProgram ? (
+                <div style={{...panel,padding:"18px"}}>
+                  <button onClick={()=>setOpenProgram(null)}
+                    style={{marginBottom:12,padding:"5px 12px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+                      borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← All programs</button>
+                  <div style={{fontSize:12,color:SOC.textMut,marginBottom:14}}>
+                    Program {openProgram.id.slice(0,8)} · {openProgram.status}
+                    {openProgram.generatedByRole ? ` · generated by ${openProgram.generatedByRole}` : ""}
+                  </div>
+                  {Object.keys(openProgram.sections || {}).length===0 ? (
+                    <div style={{color:SOC.textMut}}>No sections (program may still be running or errored).</div>
+                  ) : Object.entries(openProgram.sections).map(([key,val]) => (
+                    <div key={key} style={{marginBottom:18}}>
+                      <div style={{fontSize:12,fontWeight:700,color:SOC.cyan,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>
+                        {PROGRAM_SECTION_LABELS[key] || key}
+                      </div>
+                      <div style={{background:"#fff",borderRadius:8,padding:"12px 14px"}}>
+                        <MarkdownDocLight text={typeof val === "string" ? val : (val?.content || JSON.stringify(val, null, 2))}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {detailLoading && <div style={{color:SOC.textMut}}>Loading…</div>}
+                  {overview.programs.length===0 ? (
+                    <div style={{...panel,padding:30,textAlign:"center",color:SOC.textMut}}>
+                      No programs yet. Generate one from the Assessments tab.
+                    </div>
+                  ) : overview.programs.map(p => {
+                    const col = p.status==="complete"?SOC.green : p.status==="error"?SOC.red : SOC.amber;
+                    return (
+                      <div key={p.id} style={{...panel,padding:"14px 16px",display:"flex",alignItems:"center",gap:12}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>Program {p.id.slice(0,8)}</div>
+                          <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>created {new Date(p.createdAt).toLocaleDateString()}</div>
+                        </div>
+                        <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,background:`${col}22`,color:col}}>{p.status}</span>
+                        <button onClick={()=>openProgramDetail(p.id)}
+                          style={{padding:"6px 12px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
+                            borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>Open</button>
+                        <button onClick={()=>deleteProgram(p.id)}
+                          style={{padding:"6px 12px",background:`${SOC.red}14`,border:`1px solid ${SOC.red}44`,
+                            borderRadius:7,color:SOC.red,fontSize:12,fontWeight:600,cursor:"pointer"}}>Delete</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            )}
+
+            {tab==="policies" && (
+              openPolicy ? (
+                <div style={{...panel,padding:"18px"}}>
+                  <button onClick={()=>{setOpenPolicy(null); setPolicyEdit(null);}}
+                    style={{marginBottom:12,padding:"5px 12px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+                      borderRadius:6,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>← All policies</button>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+                    <span style={{fontSize:15,fontWeight:700}}>{openPolicy.policyName}</span>
+                    {policyEdit==null ? (
+                      <button onClick={()=>setPolicyEdit(openPolicy.content || "")}
+                        style={{padding:"6px 12px",background:`${SOC.amber}18`,border:`1px solid ${SOC.amber}55`,
+                          borderRadius:7,color:SOC.amber,fontSize:12,fontWeight:600,cursor:"pointer"}}>Edit</button>
+                    ) : (
+                      <>
+                        <button onClick={savePolicy} disabled={savingPolicy}
+                          style={{padding:"6px 12px",background:`${SOC.green}18`,border:`1px solid ${SOC.green}55`,
+                            borderRadius:7,color:SOC.green,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                          {savingPolicy?"Saving…":"Save"}</button>
+                        <button onClick={()=>setPolicyEdit(null)} disabled={savingPolicy}
+                          style={{padding:"6px 12px",background:SOC.panelHi,border:`1px solid ${SOC.border}`,
+                            borderRadius:7,color:SOC.textSec,fontSize:12,cursor:"pointer"}}>Cancel</button>
+                      </>
+                    )}
+                  </div>
+                  {policyEdit==null ? (
+                    <div style={{background:"#fff",borderRadius:8,padding:"12px 14px"}}>
+                      <MarkdownDocLight text={openPolicy.content || ""}/>
+                    </div>
+                  ) : (
+                    <textarea value={policyEdit} onChange={e=>setPolicyEdit(e.target.value)}
+                      style={{width:"100%",minHeight:420,background:SOC.bg,color:SOC.text,border:`1px solid ${SOC.border}`,
+                        borderRadius:8,padding:"12px 14px",fontFamily:"ui-monospace,Menlo,monospace",fontSize:13,lineHeight:1.5,resize:"vertical"}}/>
+                  )}
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {detailLoading && <div style={{color:SOC.textMut}}>Loading…</div>}
+                  {overview.policies.length===0 ? (
+                    <div style={{...panel,padding:30,textAlign:"center",color:SOC.textMut}}>No policy documents yet.</div>
+                  ) : overview.policies.map(p => (
+                    <div key={p.id} style={{...panel,padding:"14px 16px",display:"flex",alignItems:"center",gap:12}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{p.policyName}</div>
+                        <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>
+                          created {new Date(p.createdAt).toLocaleDateString()}
+                          {p.updatedAt ? ` · edited ${new Date(p.updatedAt).toLocaleDateString()}` : ""}
+                        </div>
+                      </div>
+                      <button onClick={()=>openPolicyDetail(p.id)}
+                        style={{padding:"6px 12px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
+                          borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>Open / Edit</button>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+
+            {tab==="training" && (
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {overview.training.length===0 ? (
+                  <div style={{...panel,padding:30,textAlign:"center",color:SOC.textMut}}>No training programs yet.</div>
+                ) : overview.training.map(t => (
+                  <div key={t.id} style={{...panel,padding:"14px 16px"}}>
+                    <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{t.companyContext?.name || "Training program"}</div>
+                    <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>
+                      {t.moduleCount} module(s) · created {new Date(t.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -10028,6 +10397,7 @@ function AnalystConsole({ user, onExit }) {
   const [myClients, setMyClients] = useState(null);
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
   const [actionsLoading, setActionsLoading] = useState(false);
+  const [workspaceClient, setWorkspaceClient] = useState(null); // client whose full workspace is open
 
   async function loadMyClients() {
     try {
@@ -10317,6 +10687,10 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
+  if (workspaceClient) {
+    return <WorkspaceViewer client={workspaceClient} onBack={()=>setWorkspaceClient(null)}/>;
+  }
+
   if (view === "myclients") {
     const list = myClients || [];
     return (
@@ -10387,6 +10761,11 @@ function AnalystConsole({ user, onExit }) {
                           {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
                         </div>
                       </div>
+                      <button onClick={()=>setWorkspaceClient(c)}
+                        style={{padding:"7px 14px",background:`${SOC.green}18`,border:`1px solid ${SOC.green}55`,
+                          borderRadius:7,color:SOC.green,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                        View Workspace →
+                      </button>
                       <button onClick={()=>loadClientActions(c.id)}
                         style={{padding:"7px 14px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
                           borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
