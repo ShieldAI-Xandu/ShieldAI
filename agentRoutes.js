@@ -654,6 +654,22 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       pushHistory(rec, "analyst", req.userId, "suggested", "Authored.");
       pushHistory(rec, "analyst", req.userId, "proposed", "Proposed to client.");
       db.data.recommendations.push(rec);
+      // Record the advisory event on the client's action log. The actorRole
+      // reflects who authored the advice: "ai" for Mastermind-drafted guidance
+      // an analyst forwarded, "analyst" for analyst-authored guidance. This is
+      // the "AI advises, humans act" trail the legal/activity report reads — an
+      // AI-drafted recommendation is an advisory event, distinct from the human
+      // decision to accept/decline it that gets logged separately.
+      if (logClientAction) {
+        logClientAction(db, {
+          clientUserId: ownerUserId,
+          actorUserId: rec.origin === "ai" ? null : req.userId,
+          actorRole: rec.origin === "ai" ? "ai" : "analyst",
+          action: "recommendation_proposed",
+          recommendationId: rec.id,
+          detail: `${rec.origin === "ai" ? "AI-drafted" : "Analyst"} recommendation proposed to client: "${rec.title}".`,
+        });
+      }
       await db.write();
       res.json(rec);
     } catch (err) {
