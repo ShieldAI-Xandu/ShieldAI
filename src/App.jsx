@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
+import ComplianceWorkspace from "./ComplianceWorkspace.jsx";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -81,7 +82,7 @@ Your specialty: ${modelInfo.specialty}
 
 ${systemPrompt}`;
 
-  const res = await authFetch("http://localhost:3001/api/claude", {
+  const res = await authFetch(`${API_BASE}/api/claude`, {
     method: "POST",
     headers: { 
        "Content-Type": "application/json",
@@ -539,12 +540,10 @@ function IntakeChat({ onComplete }) {
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS ENGINE  (backend-powered)
 // ─────────────────────────────────────────────────────────────
-// API base:
-//  - Dev (Vite on :5173): talk to the local backend on :3001.
-//  - Prod (Express serves the built frontend from ./dist): same-origin, so an
-//    empty base makes requests hit /api/... on whatever host served the page.
-// This replaces a previously hardcoded "http://localhost:3001", which broke
-// the live site (the browser was trying to reach the visitor's own machine).
+// In production the Express backend serves this built frontend from ./dist, so
+// the API lives on the same origin — an empty base makes every fetch relative
+// and correct regardless of the deployed domain. In dev, Vite serves the
+// frontend on its own port, so calls must be pointed at the backend explicitly.
 const API_BASE = import.meta.env.DEV ? "http://localhost:3001" : "";
 
 // ─────────────────────────────────────────────────────────────
@@ -554,9 +553,68 @@ let AUTH_TOKEN = null;
 
 function setAuthToken(token) {
   AUTH_TOKEN = token;
+  if (!token) IS_DEMO_SESSION = false;
   // For persistence across refreshes in your local Vite app, uncomment:
   // if (token) localStorage.setItem("shieldai_token", token);
   // else localStorage.removeItem("shieldai_token");
+}
+
+// ── DEMO SANDBOX ─────────────────────────────────────────────
+// Starts a read-only demo session with no credentials. The token returned is
+// signed with the demo secret and binds every subsequent request to the demo
+// data store on the backend — a visitor in the demo can never reach real
+// client data, and nothing they do can write to it.
+let IS_DEMO_SESSION = false;
+function isDemoSession() { return IS_DEMO_SESSION; }
+
+// The access-code type for the current demo session: "investor" | "client" |
+// null. Drives whether the analyst console is reachable and whether the client
+// dashboard shows the "Your vCISO" explainer instead.
+let DEMO_ACCESS_TYPE = null;
+function demoAccessType() { return DEMO_ACCESS_TYPE; }
+
+async function startDemoSession(persona = "client") {
+  const res = await fetch(`${API_BASE}/api/demo/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Could not start the demo.");
+  IS_DEMO_SESSION = true;
+  setAuthToken(data.token);
+  return { ...data.user, isDemo: true, readOnly: false };
+}
+
+// Redeem an admin-issued access code → a scoped demo session. Investor codes
+// return accessType "investor" (client + analyst views); client codes return
+// "client" (client views only). The code is the only credential the visitor
+// needs — no password, no account.
+async function redeemAccessCode(code) {
+  const res = await fetch(`${API_BASE}/api/demo/redeem-code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Could not redeem that access code.");
+  IS_DEMO_SESSION = true;
+  DEMO_ACCESS_TYPE = data.accessType || "client";
+  setAuthToken(data.token);
+  return { ...data.user, isDemo: true, readOnly: false, accessType: data.accessType };
+}
+
+// Tell the server to destroy this visitor's sandbox now rather than waiting for
+// it to expire. Everything they created in the demo disappears with it.
+async function endDemoSession() {
+  if (!IS_DEMO_SESSION) return;
+  try {
+    await authFetch(`${API_BASE}/api/demo/exit`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } catch { /* best-effort: the sandbox expires on its own regardless */ }
+  IS_DEMO_SESSION = false;
+  DEMO_ACCESS_TYPE = null;
 }
 
 function getAuthToken() {
@@ -570,6 +628,39 @@ function getAuthToken() {
 // capabilities without prop-threading. Defaults to "deny" until provided.
 const CapabilityContext = createContext({ can: () => false, tier: "free", capabilities: {} });
 function useCapabilities() { return useContext(CapabilityContext); }
+
+// ── White-label branding store ──
+// Resolves the brand THIS user should see (their assigned analyst's brand, the
+// platform default, or ShieldAI's built-in default) from GET /api/branding.
+// Implemented as a tiny subscribable store rather than a context provider so it
+// can re-skin every ShieldLockup without wrapping the app's many render
+// branches. Display-only; the advisory boundary is untouched.
+const DEFAULT_BRAND = {
+  productName: "ShieldAI", companyName: "ShieldAI", tagline: "Virtual CISO Platform",
+  logoUrl: null, primaryColor: "#2E5EAA", accentColor: "#00C8FF",
+  supportEmail: null, supportUrl: null, footerNote: null, isDefault: true,
+};
+let _brand = DEFAULT_BRAND;
+const _brandSubs = new Set();
+function setBrand(b) {
+  _brand = b ? { ...DEFAULT_BRAND, ...b } : DEFAULT_BRAND;
+  _brandSubs.forEach(fn => { try { fn(_brand); } catch { /* ignore */ } });
+}
+// React hook: subscribe to the current brand.
+function useBranding() {
+  const [b, setB] = useState(_brand);
+  useEffect(() => { _brandSubs.add(setB); setB(_brand); return () => { _brandSubs.delete(setB); }; }, []);
+  return b;
+}
+// Fetch + publish the resolved brand for the logged-in user. Call from the root
+// whenever the user changes; resets to default when logged out.
+function refreshBrandForUser(user) {
+  if (!user) { setBrand(DEFAULT_BRAND); return; }
+  authFetch(`${API_BASE}/api/branding`)
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (d) setBrand(d); })
+    .catch(() => { /* keep default — branding must never block the app */ });
+}
 
 // Global hook for tier-gate (HTTP 402) responses. The root registers a handler
 // that shows an "upgrade" modal; any gated API call that returns 402 triggers it.
@@ -956,11 +1047,11 @@ function OverviewSection({ assessment, results }) {
         </Card>
       </div>
 
-      {/* NIST CSF breakdown */}
+      {/* Posture breakdown — labelled by the client's chosen lens */}
       {breakdown?.functions && (
         <Card style={{marginBottom:16}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-            <SectionLabel text="NIST CSF Posture Breakdown"/>
+            <SectionLabel text={`${breakdown.frameworkLens || "NIST CSF"} Posture Breakdown`}/>
             <span style={{marginLeft:"auto",fontSize:10,color:C.textMut}}>
               Methodology: {breakdown.methodology}
             </span>
@@ -988,6 +1079,36 @@ function OverviewSection({ assessment, results }) {
               borderRadius:6,color:C.textSec,fontSize:12}}>
               ⚖️ {breakdown.complianceNote}
             </div>
+          )}
+
+          {/* The other framework's view, for clients who chose CIS or both.
+              Same business, same answers — a second lens, not a second verdict.
+              Collapsed by default so the chosen lens stays the focus. */}
+          {breakdown.alternateView?.functions && (
+            <details style={{marginTop:14}}>
+              <summary style={{cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600}}>
+                Also view in {breakdown.alternateView.frameworkLens || (breakdown.lens === "cis" ? "NIST CSF" : "CIS Controls")} terms
+                {" · "}{breakdown.alternateView.postureScore}/100
+              </summary>
+              <div style={{marginTop:10,paddingLeft:2,display:"flex",flexDirection:"column",gap:10}}>
+                <div style={{fontSize:10,color:C.textMut}}>
+                  Same answers, grouped by {breakdown.alternateView.frameworkLens || "the other framework"}. The headline
+                  score above is your chosen lens — this is the same posture seen a different way.
+                </div>
+                {breakdown.alternateView.functions.map((fn,i)=>{
+                  const clr = fn.score>=80?C.green:fn.score>=60?"#7ED957":fn.score>=40?C.amber:C.red;
+                  return (
+                    <div key={i}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{color:C.textSec,fontSize:12}}>{fn.name}</span>
+                        <span style={{color:clr,fontSize:12,fontWeight:700}}>{fn.score}/100</span>
+                      </div>
+                      <ProgressBar value={fn.score} color={clr}/>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
           )}
         </Card>
       )}
@@ -1232,6 +1353,15 @@ function WorkflowsSection({ results }) {
   );
 }
 
+// SUPERSEDED by ComplianceWorkspace.jsx and no longer routed.
+//
+// This rendered `results.compliance.frameworks` — prose the AI wrote during
+// program generation — which was the only compliance view a client ever saw
+// while the deterministic engine's 624 cited controls went unrendered. The
+// workspace now reads /api/compliance/* directly.
+//
+// Kept for reference until the AI-generated program output is reworked; it is
+// not imported anywhere. Delete once that's settled.
 function ComplianceSection({ results }) {
   const frames = results?.compliance?.frameworks || [];
 
@@ -1310,9 +1440,1650 @@ function ComplianceSection({ results }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  BREACH MONITORING — company domain card
+// ─────────────────────────────────────────────────────────────
+// Real HIBP-backed breach exposure, gated on two things the backend enforces:
+//   1. the client proving they control the domain (DNS TXT record)
+//   2. an admin enrolling it in the HIBP dashboard (manual, no API for it)
+//
+// Everything shown here comes from the server's clientView(), which is the
+// single source of truth for what a client is told. This component deliberately
+// does NOT compute its own status — that's how a UI drifts into implying
+// monitoring that isn't actually running.
+// ─────────────────────────────────────────────────────────────
+//  CVE EXPOSURE — live NVD-backed vulnerability matching.
+//  Reads /api/client/cve-exposure, which derives real CVEs from the
+//  software the monitoring agent / assessment actually reports. This is
+//  the real-data replacement for the model-generated "recentCVEs" prose
+//  that used to sit in this section — nothing here is fabricated.
+// ─────────────────────────────────────────────────────────────
+const SEV_TONE = {
+  CRITICAL: C.red, HIGH: C.red, MEDIUM: C.amber, LOW: C.green, UNKNOWN: C.textSec,
+};
+function cveSevColor(s) { return SEV_TONE[String(s || "UNKNOWN").toUpperCase()] || C.textSec; }
+
+function CveExposureCard() {
+  const [data, setData] = useState(null);     // { software, exposure, note? }
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/cve-exposure`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load CVE exposure.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function refresh() {
+    setRefreshing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/cve-exposure/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Refresh failed.");
+      // Refresh returns { userId, exposure }; reload the full view so
+      // software list + note stay in sync with the recomputed exposure.
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setRefreshing(false); }
+  }
+
+  const exposure = data?.exposure;
+  const counts = exposure?.counts || {};
+  const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"];
+  const totalFindings = order.reduce((n, k) => n + (counts[k] || 0), 0);
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="CVE Exposure"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>LIVE · NVD/CVE</span>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          {exposure?.degraded && (
+            <span style={{fontSize:11,color:C.amber,fontWeight:600}}>⚠ partial results</span>
+          )}
+          <button onClick={refresh} disabled={refreshing||loading}
+            style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.border}`,
+              background:C.surface,color:C.accent,fontSize:12,fontWeight:600,
+              cursor:(refreshing||loading)?"default":"pointer",opacity:(refreshing||loading)?0.6:1}}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* No inventory — honest empty state, not a fabricated all-clear. */}
+          {(!data?.software || data.software.length === 0) ? (
+            <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+              {data?.note ||
+                "No software inventory found yet. CVE matching needs the monitoring agent's inventory or a tech-stack entry in the assessment."}
+            </div>
+          ) : (
+            <>
+              {/* Severity rollup */}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+                {order.filter(k => counts[k]).map(k => (
+                  <div key={k} style={{display:"flex",alignItems:"center",gap:7,padding:"6px 12px",
+                    background:`${cveSevColor(k)}12`,border:`1px solid ${cveSevColor(k)}33`,borderRadius:8}}>
+                    <span style={{fontSize:16,fontWeight:800,color:cveSevColor(k)}}>{counts[k]}</span>
+                    <span style={{fontSize:11,fontWeight:600,color:cveSevColor(k),letterSpacing:0.4}}>{k}</span>
+                  </div>
+                ))}
+                {totalFindings === 0 && (
+                  <div style={{padding:"6px 12px",background:`${C.green}12`,
+                    border:`1px solid ${C.green}33`,borderRadius:8,color:C.green,fontSize:12,fontWeight:600}}>
+                    No CVEs matched the current inventory.
+                  </div>
+                )}
+              </div>
+
+              {/* Monitored software */}
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                MONITORED SOFTWARE ({data.software.length})
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+                {data.software.map((sw,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                    border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>{sw}</span>
+                ))}
+              </div>
+
+              {/* Top CVEs, most severe first */}
+              {(exposure?.top || []).length > 0 && (
+                <>
+                  <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                    HIGHEST-SEVERITY MATCHES
+                  </div>
+                  {(exposure.top || []).map((c,i) => (
+                    <div key={c.id+i} style={{marginBottom:8,padding:"10px 12px",
+                      background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                        <a href={c.url||`https://www.cve.org/CVERecord?id=${c.id}`} target="_blank" rel="noreferrer"
+                          style={{color:C.accent,fontSize:12.5,fontWeight:700,textDecoration:"none"}}>{c.id}</a>
+                        <Badge label={String(c.severity||"UNKNOWN")} color={cveSevColor(c.severity)}/>
+                        {c.score != null && (
+                          <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>CVSS {c.score}</span>
+                        )}
+                        {c.software && (
+                          <span style={{marginLeft:"auto",fontSize:11,color:C.textSec}}>{c.software}</span>
+                        )}
+                      </div>
+                      <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{c.description}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {exposure?.queriedAt && (
+                <div style={{marginTop:10,fontSize:11,color:C.textMut}}>
+                  Queried {new Date(exposure.queriedAt).toLocaleString()} · source: NVD
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  REMEDIATION — the closed loop.
+//  Gaps ranked by projected posture gain → create task → work it →
+//  complete it → the deterministic engine re-scores and the trend moves.
+//  Everything here reads/writes /api/tasks/*; no score is ever invented.
+// ─────────────────────────────────────────────────────────────
+const TASK_STATUS_TONE = {
+  open:        { color: C.textSec, label: "Open" },
+  in_progress: { color: C.accent,  label: "In Progress" },
+  blocked:     { color: C.red,     label: "Blocked" },
+  done:        { color: C.green,   label: "Done" },
+  cancelled:   { color: C.textMut, label: "Cancelled" },
+};
+const TASK_PRIO_TONE = {
+  critical: C.red, high: "#FF8C00", medium: C.amber, low: C.textSec,
+};
+
+// Small dependency-free SVG line chart for posture over time.
+function PostureTrend({ history }) {
+  const pts = (history || []).map(h => ({ t: new Date(h.at).getTime(), score: h.score }));
+  if (pts.length < 2) {
+    return (
+      <div style={{color:C.textMut,fontSize:12,padding:"8px 0"}}>
+        The trend chart fills in as tasks are completed — each completion records a real posture snapshot.
+      </div>
+    );
+  }
+  const W = 640, H = 120, pad = 24;
+  const xs = pts.map(p => p.t), ys = pts.map(p => p.score);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.max(0, Math.min(...ys) - 5), yMax = Math.min(100, Math.max(...ys) + 5);
+  const xOf = t => pad + ((t - xMin) / (xMax - xMin || 1)) * (W - pad * 2);
+  const yOf = s => H - pad - ((s - yMin) / (yMax - yMin || 1)) * (H - pad * 2);
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${xOf(p.t).toFixed(1)},${yOf(p.score).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1], first = pts[0];
+  const net = last.score - first.score;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{display:"block"}}>
+        <line x1={pad} y1={H-pad} x2={W-pad} y2={H-pad} stroke={C.border} strokeWidth="1"/>
+        <path d={path} fill="none" stroke={C.accent} strokeWidth="2"/>
+        {pts.map((p,i) => (
+          <circle key={i} cx={xOf(p.t)} cy={yOf(p.score)} r="3" fill={C.accent}/>
+        ))}
+        <circle cx={xOf(last.t)} cy={yOf(last.score)} r="4.5" fill={C.green}/>
+      </svg>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.textMut,marginTop:4}}>
+        <span>{new Date(first.t).toLocaleDateString()} · {first.score}</span>
+        <span style={{color: net >= 0 ? C.green : C.red, fontWeight:600}}>
+          {net >= 0 ? "+" : ""}{net} over {pts.length} snapshots
+        </span>
+        <span>{new Date(last.t).toLocaleDateString()} · {last.score}</span>
+      </div>
+    </div>
+  );
+}
+
+function RemediationSection() {
+  const [gaps, setGaps] = useState(null);      // { posture, gaps[] }
+  const [tasks, setTasks] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [tab, setTab] = useState("gaps");       // gaps | tasks
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [gRes, tRes, hRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/tasks/gaps`),
+        authFetch(`${API_BASE}/api/tasks`),
+        authFetch(`${API_BASE}/api/tasks/posture-history`),
+      ]);
+      const g = await gRes.json();
+      const t = await tRes.json();
+      const h = await hRes.json();
+      if (!gRes.ok) throw new Error(g.error || "Could not load gap analysis.");
+      setGaps(g);
+      setTasks(Array.isArray(t) ? t : []);
+      setHistory(Array.isArray(h) ? h : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  function flash(msg, tone = C.green) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function createTask(gap, priority = "medium") {
+    setBusyId("gap:" + gap.controlId); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          controlId: gap.controlId, targetLabel: gap.targetAnswer,
+          title: `Improve: ${gap.question}`, priority,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not create task.");
+      flash(`Task created · projected +${gap.projectedGain} posture`);
+      await loadAll();
+      setTab("tasks");
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function setStatus(task, status) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not update task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function complete(task) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not complete task.");
+      const p = d.posture || {};
+      const delta = p.delta ?? 0;
+      flash(`Completed · posture ${p.before} → ${p.after} (${delta >= 0 ? "+" : ""}${delta})`,
+        delta >= 0 ? C.green : C.amber);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  async function removeTask(task) {
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Could not delete task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  const posture = gaps?.posture;
+  const openGaps = (gaps?.gaps || []).filter(g => !g.hasOpenTask);
+  const activeTasks = tasks.filter(t => !["done", "cancelled"].includes(t.status));
+  const doneTasks = tasks.filter(t => t.status === "done");
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Remediation"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>DETERMINISTIC SCORING</span>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* Posture header + trend */}
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:20,flexWrap:"wrap"}}>
+              <div style={{minWidth:120}}>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:4}}>POSTURE SCORE</div>
+                {posture ? (
+                  <>
+                    <div style={{fontSize:40,fontWeight:800,color:C.accent,lineHeight:1}}>{posture.score}</div>
+                    <div style={{fontSize:12,color:C.textSec,marginTop:4}}>{posture.level}</div>
+                  </>
+                ) : (
+                  <div style={{fontSize:13,color:C.textSec}}>No assessment yet.</div>
+                )}
+              </div>
+              <div style={{flex:1,minWidth:280}}>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:6}}>POSTURE TREND</div>
+                <PostureTrend history={history}/>
+              </div>
+            </div>
+            {posture?.weakestAreas?.length > 0 && (
+              <div style={{marginTop:12,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>WEAKEST:</span>
+                {posture.weakestAreas.map((w,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:`${C.red}12`,
+                    border:`1px solid ${C.red}30`,color:C.red,fontSize:11}}>{w}</span>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Tabs */}
+          <div style={{display:"flex",gap:8,marginBottom:14}}>
+            {[["gaps",`Prioritized Gaps (${openGaps.length})`],["tasks",`Tasks (${activeTasks.length})`]].map(([id,label]) => (
+              <button key={id} onClick={()=>setTab(id)}
+                style={{padding:"7px 16px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",
+                  border:`1px solid ${tab===id?C.accent:C.border}`,
+                  background:tab===id?`${C.accent}18`:C.surface,
+                  color:tab===id?C.accent:C.textSec}}>{label}</button>
+            ))}
+          </div>
+
+          {/* GAPS */}
+          {tab === "gaps" && (
+            <>
+              {!posture ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>
+                  Complete a security assessment to see prioritized remediation gaps.
+                </div></Card>
+              ) : openGaps.length === 0 ? (
+                <Card><div style={{color:C.green,fontSize:13,fontWeight:600}}>
+                  ✓ No open gaps. Every scored control is at its best answer, or already has a task.
+                </div></Card>
+              ) : (
+                <div style={{fontSize:12,color:C.textSec,marginBottom:10}}>
+                  Ranked by how much each fix would move the deterministic posture score. Creating a task lets you track the work; completing it applies the change and re-scores.
+                </div>
+              )}
+              {openGaps.map(g => {
+                const busy = busyId === "gap:" + g.controlId;
+                return (
+                  <Card key={g.controlId} style={{marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+                      <div style={{textAlign:"center",minWidth:60}}>
+                        <div style={{fontSize:22,fontWeight:800,color:C.green}}>+{g.projectedGain}</div>
+                        <div style={{fontSize:9,color:C.textMut,letterSpacing:0.5}}>PROJECTED</div>
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                          <Badge label={g.nistFunction} color={NIST_COLORS[g.nistFunction]}/>
+                          <span style={{fontSize:11,color:C.textMut}}>→ score {g.projectedScore}</span>
+                        </div>
+                        <div style={{color:C.text,fontSize:13.5,fontWeight:600,marginBottom:6}}>{g.question}</div>
+                        <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>
+                          <span style={{color:C.textMut}}>Now:</span> {g.currentAnswer || "Unanswered"}
+                          <span style={{margin:"0 8px",color:C.textMut}}>→</span>
+                          <span style={{color:C.green}}>{g.targetAnswer}</span>
+                        </div>
+                      </div>
+                      <button onClick={()=>createTask(g)} disabled={busy}
+                        style={{padding:"8px 14px",borderRadius:8,border:"none",
+                          background:C.accent,color:"#04121F",fontSize:12.5,fontWeight:700,
+                          cursor:busy?"default":"pointer",opacity:busy?0.6:1,whiteSpace:"nowrap"}}>
+                        {busy ? "Creating…" : "Create Task"}
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </>
+          )}
+
+          {/* TASKS */}
+          {tab === "tasks" && (
+            <>
+              {activeTasks.length === 0 && doneTasks.length === 0 ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>
+                  No tasks yet. Open the Prioritized Gaps tab to turn your biggest fixes into tracked work.
+                </div></Card>
+              ) : null}
+
+              {activeTasks.map(t => {
+                const busy = busyId === t.id;
+                const tone = TASK_STATUS_TONE[t.status] || TASK_STATUS_TONE.open;
+                const overdue = t.dueDate && new Date(t.dueDate) < new Date();
+                return (
+                  <Card key={t.id} style={{marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                      <span style={{width:8,height:8,borderRadius:"50%",background:TASK_PRIO_TONE[t.priority]||C.textSec}}/>
+                      <span style={{color:C.text,fontSize:13.5,fontWeight:600,flex:1}}>{t.title}</span>
+                      {t.projectedGain != null && (
+                        <span style={{fontSize:11,color:C.green,fontWeight:600}}>+{t.projectedGain} projected</span>
+                      )}
+                      <span style={{fontSize:11,fontWeight:700,color:tone.color,
+                        padding:"2px 9px",borderRadius:20,background:`${tone.color}18`}}>{tone.label}</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10}}>
+                      <span>{t.nistFunction}</span>
+                      {t.dueDate && (
+                        <span style={{color:overdue?C.red:C.textMut}}>
+                          {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {t.status !== "in_progress" && (
+                        <button onClick={()=>setStatus(t,"in_progress")} disabled={busy}
+                          style={miniBtn(C.accent,busy)}>Start</button>
+                      )}
+                      {t.status !== "blocked" && (
+                        <button onClick={()=>setStatus(t,"blocked")} disabled={busy}
+                          style={miniBtn(C.red,busy)}>Block</button>
+                      )}
+                      <button onClick={()=>complete(t)} disabled={busy}
+                        style={{...miniBtn(C.green,busy),background:C.green,color:"#04121F",border:"none"}}>
+                        {busy ? "Working…" : "Complete & Re-score"}
+                      </button>
+                      <button onClick={()=>removeTask(t)} disabled={busy}
+                        style={{...miniBtn(C.textMut,busy),marginLeft:"auto"}}>Delete</button>
+                    </div>
+                  </Card>
+                );
+              })}
+
+              {doneTasks.length > 0 && (
+                <>
+                  <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,margin:"16px 0 8px"}}>
+                    COMPLETED ({doneTasks.length})
+                  </div>
+                  {doneTasks.map(t => (
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+                      background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
+                      <span style={{color:C.green}}>✓</span>
+                      <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{t.title}</span>
+                      {t.actualGain != null && (
+                        <span style={{fontSize:11,color: t.actualGain >= 0 ? C.green : C.amber,fontWeight:600}}>
+                          {t.actualGain >= 0 ? "+" : ""}{t.actualGain} posture
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+function miniBtn(color, busy) {
+  return {
+    padding:"6px 12px", borderRadius:7, border:`1px solid ${color}55`,
+    background:`${color}12`, color, fontSize:12, fontWeight:600,
+    cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  EVIDENCE / AUDIT READINESS.
+//  Auditors, insurers, and boards want proof, not assertions. This reads
+//  /api/evidence/* — coverage (completed work that can't be proven),
+//  the evidence list, base64 upload, authenticated download, delete.
+// ─────────────────────────────────────────────────────────────
+const EVIDENCE_ACCEPT =
+  ".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.doc,.docx,.xls,.xlsx";
+const EVIDENCE_MAX_BYTES = 3.5 * 1024 * 1024;
+
+function fmtBytes(n) {
+  if (!n) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Read a File into { filename, mimeType, content } where content is raw base64.
+function fileToUpload(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const res = String(r.result || "");
+      const comma = res.indexOf(",");
+      resolve({ filename: file.name, mimeType: file.type, content: comma >= 0 ? res.slice(comma + 1) : res });
+    };
+    r.onerror = () => reject(new Error("Could not read the file."));
+    r.readAsDataURL(file);
+  });
+}
+
+// Download an auth-protected evidence file as a blob (can't use a bare href
+// because the endpoint requires the Authorization header).
+async function downloadEvidence(ev) {
+  const res = await authFetch(`${API_BASE}${ev.downloadUrl}`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = ev.filename || "evidence";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function EvidenceSection() {
+  const [coverage, setCoverage] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  // Upload form
+  const [file, setFile] = useState(null);
+  const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
+  const fileRef = useRef(null);
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [cRes, lRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/evidence/coverage`),
+        authFetch(`${API_BASE}/api/evidence`),
+      ]);
+      const c = await cRes.json();
+      const l = await lRes.json();
+      if (!cRes.ok) throw new Error(c.error || "Could not load coverage.");
+      setCoverage(c);
+      setItems(Array.isArray(l) ? l : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function submitEvidence(extra = {}) {
+    setBusy(true); setError(null);
+    try {
+      let payload = { kind: "general", title: title.trim() || undefined, note: note.trim() || undefined, ...extra };
+      if (file) {
+        if (file.size > EVIDENCE_MAX_BYTES) throw new Error(`File is ${(file.size/1024/1024).toFixed(1)}MB — the limit is 3.5MB.`);
+        const up = await fileToUpload(file);
+        payload = { ...payload, ...up };
+      } else if (!payload.note && !payload.title) {
+        throw new Error("Attach a file, or add a title/note.");
+      }
+      const res = await authFetch(`${API_BASE}/api/evidence`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Upload failed.");
+      flash("Evidence added.");
+      setFile(null); setTitle(""); setNote("");
+      if (fileRef.current) fileRef.current.value = "";
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Quick-attach a note against a specific completed task that lacks proof.
+  async function attachToTask(taskId, taskTitle) {
+    const proof = window.prompt(`Describe the evidence for "${taskTitle}"\n(e.g. "MFA screenshot filed in IT drive; confirmed with admin")`);
+    if (proof == null || !proof.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/evidence`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "task", refId: taskId, title: `Evidence: ${taskTitle}`, note: proof.trim() }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not attach evidence.");
+      flash("Evidence attached to task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(ev) {
+    if (!window.confirm(`Delete "${ev.title}"? This cannot be undone.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/evidence/${ev.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Delete failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function doDownload(ev) {
+    try { await downloadEvidence(ev); }
+    catch (e) { setError(e.message); }
+  }
+
+  const pct = coverage?.coveragePct ?? 100;
+  const covTone = pct >= 80 ? C.green : pct >= 50 ? C.amber : C.red;
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Evidence & Audit Readiness"/>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* Coverage banner */}
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+              <div style={{minWidth:96,textAlign:"center"}}>
+                <div style={{fontSize:38,fontWeight:800,color:covTone,lineHeight:1}}>{pct}%</div>
+                <div style={{fontSize:10,color:C.textMut,letterSpacing:1,marginTop:2}}>AUDIT COVERAGE</div>
+              </div>
+              <div style={{flex:1,minWidth:240}}>
+                <div style={{fontSize:13.5,color:C.text,fontWeight:600,marginBottom:4}}>
+                  {coverage?.completedTasks
+                    ? `${coverage.withEvidence} of ${coverage.completedTasks} completed tasks have proof on file.`
+                    : "No completed tasks yet — audit coverage tracks proof for work you finish."}
+                </div>
+                <p style={{fontSize:12,color:C.textSec,lineHeight:1.6,margin:0}}>
+                  Auditors, insurers, and boards accept proof, not assertions. Anything below shows completed work that can't yet be evidenced.
+                </p>
+                {/* progress bar */}
+                <div style={{marginTop:10,height:8,borderRadius:6,background:C.surface,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",background:covTone,transition:"width .3s"}}/>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Completed tasks missing proof */}
+          {coverage?.missing?.length > 0 && (
+            <Card style={{marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <span style={{color:C.amber}}>⚠</span>
+                <SectionLabel text={`Completed — proof missing (${coverage.missing.length})`}/>
+              </div>
+              {coverage.missing.map(m => (
+                <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",
+                  background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
+                  <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{m.title}</span>
+                  {m.completedAt && <span style={{fontSize:11,color:C.textMut}}>{new Date(m.completedAt).toLocaleDateString()}</span>}
+                  <button onClick={()=>attachToTask(m.id, m.title)} disabled={busy}
+                    style={miniBtn(C.accent,busy)}>Attach proof</button>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {/* Upload */}
+          <Card style={{marginBottom:14}}>
+            <SectionLabel text="Add Evidence"/>
+            <div style={{marginTop:12,display:"grid",gap:10}}>
+              <input value={title} onChange={e=>setTitle(e.target.value)}
+                placeholder="Title (e.g. Q3 access review sign-off)" style={inputStyle}/>
+              <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2}
+                placeholder="Note (optional) — a note alone is valid evidence, e.g. 'Confirmed with IT on 3/14'"
+                style={{...inputStyle,resize:"vertical",fontFamily:"inherit"}}/>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <input ref={fileRef} type="file" accept={EVIDENCE_ACCEPT}
+                  onChange={e=>setFile(e.target.files?.[0]||null)}
+                  style={{fontSize:12,color:C.textSec}}/>
+                {file && <span style={{fontSize:11,color:C.textMut}}>{fmtBytes(file.size)}</span>}
+                <button onClick={()=>submitEvidence()} disabled={busy}
+                  style={{marginLeft:"auto",padding:"9px 18px",borderRadius:8,border:"none",
+                    background:C.accent,color:"#04121F",fontSize:13,fontWeight:700,
+                    cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                  {busy ? "Saving…" : "Add Evidence"}
+                </button>
+              </div>
+              <div style={{fontSize:11,color:C.textMut}}>
+                PDF, images, text, CSV, Word, Excel · 3.5MB max. Files are stored with a SHA-256 integrity hash.
+              </div>
+            </div>
+          </Card>
+
+          {/* Evidence list */}
+          <SectionLabel text={`Evidence on File (${items.length})`}/>
+          <div style={{marginTop:10}}>
+            {items.length === 0 ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No evidence stored yet.</div>
+            ) : items.map(ev => (
+              <div key={ev.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+                background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
+                <span style={{fontSize:18}}>{ev.filename ? "📎" : "📝"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:2}}>{ev.title}</div>
+                  <div style={{fontSize:11,color:C.textMut,display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <Badge label={ev.kind} color={C.textSec}/>
+                    {ev.filename && <span>{ev.filename} · {fmtBytes(ev.bytes)}</span>}
+                    <span>{new Date(ev.uploadedAt).toLocaleDateString()}</span>
+                    {ev.uploadedByName && <span>by {ev.uploadedByName}</span>}
+                  </div>
+                  {ev.note && <div style={{fontSize:12,color:C.textSec,marginTop:4,lineHeight:1.5}}>{ev.note}</div>}
+                </div>
+                {ev.filename && (
+                  <button onClick={()=>doDownload(ev)} style={miniBtn(C.accent,false)}>Download</button>
+                )}
+                <button onClick={()=>remove(ev)} disabled={busy} style={miniBtn(C.textMut,busy)}>Delete</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  NOTIFICATIONS — persistent bell in the dashboard top bar.
+//  Reads /api/notifications ({ unread, notifications }), marks single/all
+//  read. Polls lightly so analyst review outcomes surface without a reload.
+// ─────────────────────────────────────────────────────────────
+const NOTIF_TONE = {
+  review_approved:          { icon: "✅", color: C.green },
+  review_changes_requested: { icon: "✏️", color: C.amber },
+  info:                     { icon: "ℹ️", color: C.accent },
+  alert:                    { icon: "⚠️", color: C.red },
+  system:                   { icon: "🔔", color: C.textSec },
+};
+function notifTone(type) { return NOTIF_TONE[type] || NOTIF_TONE.system; }
+
+// Map a notification's link to a dashboard section id, when it points at one.
+function sectionForLink(link) {
+  if (!link) return null;
+  const l = String(link).toLowerCase();
+  if (l.includes("polic")) return "policies";
+  if (l.includes("complian")) return "compliance";
+  if (l.includes("task") || l.includes("remediat")) return "remediation";
+  if (l.includes("evidence")) return "evidence";
+  if (l.includes("threat") || l.includes("cve") || l.includes("breach")) return "threats";
+  if (l.includes("train")) return "training";
+  return null;
+}
+
+function NotificationBell({ onNavigate }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState({ unread: 0, notifications: [] });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+
+  async function load() {
+    try {
+      const res = await authFetch(`${API_BASE}/api/notifications`);
+      if (!res.ok) return;
+      const d = await res.json();
+      setData({ unread: d.unread || 0, notifications: d.notifications || [] });
+    } catch { /* silent — the bell must never break the dashboard */ }
+    finally { setLoading(false); }
+  }
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000); // light poll
+    return () => clearInterval(t);
+  }, []);
+
+  // Close on outside click.
+  useEffect(() => {
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    if (open) document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  async function markRead(n) {
+    if (!n.read) {
+      try {
+        await authFetch(`${API_BASE}/api/notifications/${n.id}/read`, { method: "POST", body: "{}" });
+        setData(d => ({
+          unread: Math.max(0, d.unread - 1),
+          notifications: d.notifications.map(x => x.id === n.id ? { ...x, read: true } : x),
+        }));
+      } catch { /* non-fatal */ }
+    }
+    const sec = sectionForLink(n.link);
+    if (sec && onNavigate) { onNavigate(sec); setOpen(false); }
+  }
+
+  async function markAll() {
+    setBusy(true);
+    try {
+      await authFetch(`${API_BASE}/api/notifications/read-all`, { method: "POST", body: "{}" });
+      setData(d => ({ unread: 0, notifications: d.notifications.map(x => ({ ...x, read: true })) }));
+    } catch { /* non-fatal */ }
+    finally { setBusy(false); }
+  }
+
+  const { unread, notifications } = data;
+
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(o=>!o)} aria-label="Notifications"
+        style={{position:"relative",width:38,height:38,borderRadius:9,cursor:"pointer",
+          border:`1px solid ${open?C.accent:C.border}`,background:open?`${C.accent}18`:C.surface,
+          color:C.text,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        🔔
+        {unread > 0 && (
+          <span style={{position:"absolute",top:-5,right:-5,minWidth:18,height:18,padding:"0 5px",
+            borderRadius:10,background:C.red,color:"#fff",fontSize:10.5,fontWeight:700,
+            display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${C.bg}`}}>
+            {unread > 99 ? "99+" : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{position:"absolute",right:0,top:46,width:360,maxHeight:460,overflowY:"auto",
+          background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:12,zIndex:50,
+          boxShadow:"0 12px 40px rgba(0,0,0,0.5)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            padding:"14px 16px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.card}}>
+            <span style={{fontSize:14,fontWeight:700,color:C.text}}>Notifications</span>
+            {unread > 0 && (
+              <button onClick={markAll} disabled={busy}
+                style={{background:"none",border:"none",color:C.accent,fontSize:12,fontWeight:600,
+                  cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                Mark all read
+              </button>
+            )}
+          </div>
+
+          {loading ? (
+            <div style={{padding:"20px"}}><Spinner/></div>
+          ) : notifications.length === 0 ? (
+            <div style={{padding:"28px 16px",textAlign:"center",color:C.textSec,fontSize:13}}>
+              You're all caught up.
+            </div>
+          ) : (
+            notifications.map(n => {
+              const tone = notifTone(n.type);
+              const clickable = !!sectionForLink(n.link);
+              return (
+                <div key={n.id} onClick={()=>markRead(n)}
+                  style={{display:"flex",gap:11,padding:"12px 16px",borderBottom:`1px solid ${C.border}`,
+                    cursor:(clickable||!n.read)?"pointer":"default",
+                    background:n.read?"transparent":`${C.accent}0C`}}>
+                  <span style={{fontSize:16,lineHeight:1.2}}>{tone.icon}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:12.5,fontWeight:600,color:C.text,flex:1}}>{n.title}</span>
+                      {!n.read && <span style={{width:7,height:7,borderRadius:"50%",background:C.accent,flexShrink:0}}/>}
+                    </div>
+                    {n.body && <div style={{fontSize:12,color:C.textSec,marginTop:3,lineHeight:1.5}}>{n.body}</div>}
+                    <div style={{fontSize:10.5,color:C.textMut,marginTop:4,display:"flex",gap:8}}>
+                      <span>{timeAgo(n.createdAt)}</span>
+                      {n.actorRole && n.actorRole !== "system" && <span>· {n.actorRole}</span>}
+                      {clickable && <span style={{color:C.accent}}>· view</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── "Your vCISO" — shown to client-access demo visitors in place of the analyst
+// console. It explains what a human security analyst does for them at each stage
+// of the engagement. The platform's boundary holds: AI advises, humans act — and
+// this is where a prospect sees the "humans act" half made concrete.
+const VCISO_STAGES = [
+  { icon:"🧭", stage:"Onboarding", title:"Scoping your program",
+    analyst:"A dedicated analyst reviews your assessment answers, confirms which compliance frameworks actually apply to you, and sets a realistic posture target — so you're not chasing controls that don't fit your business." },
+  { icon:"📊", stage:"Assessment review", title:"Validating the baseline",
+    analyst:"They sanity-check the AI's findings against how your business really runs, correct anything the questionnaire couldn't capture, and flag the risks that matter most for your size and industry." },
+  { icon:"🛠️", stage:"Remediation", title:"Driving the work forward",
+    analyst:"Your analyst turns the prioritized gaps into a plan, helps your team action the highest-impact fixes first, and keeps the posture score moving — reviewing evidence as work gets completed." },
+  { icon:"✅", stage:"Compliance", title:"Getting you audit-ready",
+    analyst:"They map your controls to each framework, make sure the evidence would satisfy an auditor or insurer, and prepare the documentation you'd need when someone asks you to prove it." },
+  { icon:"🔍", stage:"Ongoing monitoring", title:"Watching your back",
+    analyst:"As new CVEs and breaches surface, your analyst interprets what's actually relevant to your stack, cuts the noise, and tells you what to do — not just that something happened." },
+  { icon:"📈", stage:"Reviews", title:"Reporting to your stakeholders",
+    analyst:"On a regular cadence they produce the board- and client-ready posture reports that show progress over time, so leadership can see security improving in terms they trust." },
+];
+
+function VirtualCISOSection() {
+  return (
+    <div>
+      <div style={{marginBottom:16}}>
+        <SectionLabel text="Your Virtual CISO"/>
+      </div>
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+          <div style={{fontSize:30}}>🤝</div>
+          <div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>
+              The platform does the heavy lifting. A human makes the calls.
+            </div>
+            <p style={{fontSize:13.5,color:C.textSec,lineHeight:1.65,margin:0}}>
+              Everything you see in this dashboard is generated and tracked automatically — but ShieldAI's
+              core principle is <strong style={{color:C.text}}>“AI advises, humans act.”</strong> On a
+              Guided or Managed plan, a dedicated security analyst works alongside you at every stage below.
+              This is what that looks like.
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      <div style={{position:"relative"}}>
+        {VCISO_STAGES.map((s,i) => (
+          <div key={i} style={{display:"flex",gap:16,marginBottom:14}}>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+              <div style={{width:44,height:44,borderRadius:12,background:`${C.accent}18`,
+                border:`1px solid ${C.accent}44`,display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:20,flexShrink:0}}>{s.icon}</div>
+              {i < VCISO_STAGES.length-1 && (
+                <div style={{width:2,flex:1,minHeight:20,background:C.border,marginTop:4}}/>
+              )}
+            </div>
+            <Card style={{flex:1,marginBottom:0}}>
+              <div style={{fontSize:10,color:C.accent,letterSpacing:1.5,fontWeight:700,marginBottom:4}}>
+                {s.stage.toUpperCase()}
+              </div>
+              <div style={{fontSize:14.5,fontWeight:700,color:C.text,marginBottom:6}}>{s.title}</div>
+              <p style={{fontSize:13,color:C.textSec,lineHeight:1.6,margin:0}}>{s.analyst}</p>
+            </Card>
+          </div>
+        ))}
+      </div>
+
+      <Card style={{marginTop:6,background:`${C.accent}0C`,border:`1px solid ${C.accent}33`}}>
+        <div style={{fontSize:13.5,color:C.text,lineHeight:1.6}}>
+          Want to see how an analyst manages this behind the scenes? The full analyst console is part of the
+          investor tour. Talk to us about a Guided or Managed plan to have a real vCISO assigned to your business.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TRAINING PROGRAM — standalone product management dashboard.
+//  Manage learners, assign catalog topics, schedule quarterly training, and
+//  track completion. Reads/writes /api/training-program/*. Fully separate from
+//  the endpoint monitoring agent — no overlap by design.
+// ─────────────────────────────────────────────────────────────
+const TP_STATUS_TONE = {
+  assigned:    { c: C.textSec, l: "Assigned" },
+  in_progress: { c: C.accent,  l: "In Progress" },
+  completed:   { c: C.green,   l: "Completed" },
+  overdue:     { c: C.red,     l: "Overdue" },
+  waived:      { c: C.textMut, l: "Waived" },
+};
+function tpTone(s) { return TP_STATUS_TONE[s] || TP_STATUS_TONE.assigned; }
+
+function TrainingProgramSection() {
+  const [tab, setTab] = useState("overview"); // overview | learners | assign | quarterly | reports
+  const [catalog, setCatalog] = useState([]);
+  const [learners, setLearners] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  // Add-learner form
+  const [nl, setNl] = useState({ name: "", email: "", department: "" });
+  // Assign form
+  const [pickLearners, setPickLearners] = useState([]);
+  const [pickTopics, setPickTopics] = useState([]);
+  const [assignDue, setAssignDue] = useState("");
+  // Quarterly form
+  const now = new Date();
+  const [qForm, setQForm] = useState({
+    year: now.getFullYear(), quarter: Math.floor(now.getMonth() / 3) + 1, topicIds: [], dueDate: "", label: "",
+  });
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [c, l, a, o] = await Promise.all([
+        authFetch(`${API_BASE}/api/training-program/catalog`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/learners`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/assignments`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/overview`).then(r => r.json()),
+      ]);
+      setCatalog(Array.isArray(c) ? c : []);
+      setLearners(Array.isArray(l) ? l : []);
+      setAssignments(Array.isArray(a) ? a : []);
+      setOverview(o && !o.error ? o : null);
+    } catch (e) { setError("Could not load training data."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function addLearner() {
+    if (!nl.name.trim() || !nl.email.trim()) { setError("Name and email are required."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nl),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not add learner.");
+      setNl({ name: "", email: "", department: "" });
+      flash(`Added ${d.name}.`);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeLearner(l) {
+    if (!window.confirm(`Remove ${l.name} and their assignments? This can't be undone.`)) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json()).error || "Delete failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function copyLink(l) {
+    const url = `${window.location.origin}${l.link}`;
+    try { navigator.clipboard.writeText(url); flash("Training link copied."); }
+    catch { flash("Copy failed — link: " + url, C.amber); }
+  }
+
+  async function submitAssign() {
+    if (!pickLearners.length || !pickTopics.length) { setError("Pick at least one learner and one topic."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ learnerIds: pickLearners, topicIds: pickTopics, dueDate: assignDue || null }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Assign failed.");
+      flash(`Assigned to ${d.created} learner(s).`);
+      setPickLearners([]); setPickTopics([]); setAssignDue("");
+      await loadAll();
+      setTab("overview");
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function scheduleQuarter() {
+    if (!qForm.topicIds.length) { setError("Pick at least one topic for the quarter."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/quarters`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(qForm),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not schedule.");
+      flash(`Scheduled "${d.quarter.label}" for ${d.assigned} learner(s).`);
+      setQForm(f => ({ ...f, topicIds: [], label: "" }));
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remind(a) {
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}/remind`, { method: "POST", body: "{}" });
+      if (!res.ok) throw new Error((await res.json()).error || "Reminder failed.");
+      flash("Reminder logged.");
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function waive(a) {
+    if (!window.confirm(`Waive "${a.title}" for ${a.learnerName}?`)) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "waived" }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Waive failed.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function toggle(list, setList, id) {
+    setList(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
+  }
+  function toggleQTopic(id) {
+    setQForm(f => ({ ...f, topicIds: f.topicIds.includes(id) ? f.topicIds.filter(x => x !== id) : [...f.topicIds, id] }));
+  }
+
+  const tabs = [["overview","Overview"],["learners",`Learners (${learners.length})`],
+    ["assign","Assign"],["quarterly","Quarterly"],["reports","Reports"]];
+  const inp = { padding:"9px 12px", background:C.surface, border:`1px solid ${C.border}`,
+    borderRadius:8, color:C.text, fontSize:13, boxSizing:"border-box", fontFamily:"inherit" };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Training Program"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>ASSIGN · TRACK · REPORT</span>
+      </div>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(([id,label]) => (
+          <button key={id} onClick={()=>setTab(id)}
+            style={{padding:"7px 15px",borderRadius:8,fontSize:12.5,fontWeight:600,cursor:"pointer",
+              border:`1px solid ${tab===id?C.accent:C.border}`,
+              background:tab===id?`${C.accent}18`:C.surface,color:tab===id?C.accent:C.textSec}}>{label}</button>
+        ))}
+      </div>
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* OVERVIEW */}
+          {tab === "overview" && (
+            <>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+                {[
+                  ["Learners", overview?.learnerCount ?? 0, C.accent],
+                  ["Completion", `${overview?.completionRate ?? 0}%`, C.green],
+                  ["Overdue", overview?.overdue ?? 0, (overview?.overdue ? C.red : C.textSec)],
+                  ["Avg Score", overview?.avgScore != null ? `${overview.avgScore}` : "—", C.amber],
+                ].map(([label,val,tone],i)=>(
+                  <div key={i} style={{flex:"1 1 140px",padding:"16px 18px",background:C.card,
+                    border:`1px solid ${C.border}`,borderRadius:12}}>
+                    <div style={{fontSize:28,fontWeight:800,color:tone,lineHeight:1}}>{val}</div>
+                    <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginTop:5}}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <SectionLabel text="Recent Assignments"/>
+              <div style={{marginTop:10}}>
+                {assignments.length === 0 ? (
+                  <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>
+                    No assignments yet. Add learners, then use the Assign tab.
+                  </div>
+                ) : assignments.slice(0,12).map(a => {
+                  const tone = tpTone(a.status);
+                  return (
+                    <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
+                      background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:6}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.text}}>{a.learnerName}</div>
+                        <div style={{fontSize:11,color:C.textMut}}>{a.title}</div>
+                      </div>
+                      <div style={{width:90,height:6,borderRadius:6,background:C.surface,overflow:"hidden"}}>
+                        <div style={{width:`${a.progress}%`,height:"100%",background:tone.c}}/>
+                      </div>
+                      <span style={{fontSize:11,fontWeight:700,color:tone.c,padding:"2px 9px",
+                        borderRadius:20,background:`${tone.c}18`,minWidth:78,textAlign:"center"}}>{tone.l}</span>
+                      {a.status !== "completed" && a.status !== "waived" && (
+                        <>
+                          <button onClick={()=>remind(a)} disabled={busy} style={miniBtn(C.accent,busy)}>Remind</button>
+                          <button onClick={()=>waive(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* LEARNERS */}
+          {tab === "learners" && (
+            <>
+              <Card style={{marginBottom:14}}>
+                <SectionLabel text="Add Learner"/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr auto",gap:10,marginTop:12,alignItems:"center"}}>
+                  <input style={inp} placeholder="Full name" value={nl.name} onChange={e=>setNl({...nl,name:e.target.value})}/>
+                  <input style={inp} placeholder="Email" value={nl.email} onChange={e=>setNl({...nl,email:e.target.value})}/>
+                  <input style={inp} placeholder="Department (optional)" value={nl.department} onChange={e=>setNl({...nl,department:e.target.value})}/>
+                  <button onClick={addLearner} disabled={busy}
+                    style={{padding:"9px 18px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+                      fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>Add</button>
+                </div>
+              </Card>
+              {learners.length === 0 ? (
+                <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No learners yet.</div>
+              ) : learners.map(l => (
+                <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+                  background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{l.name}
+                      {l.department && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}> · {l.department}</span>}
+                    </div>
+                    <div style={{fontSize:11,color:C.textMut}}>{l.email}</div>
+                  </div>
+                  <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
+                  <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
+                  <button onClick={()=>removeLearner(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ASSIGN */}
+          {tab === "assign" && (
+            <>
+              {learners.length === 0 ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>Add learners first, then assign training.</div></Card>
+              ) : (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                  <Card>
+                    <SectionLabel text={`Learners (${pickLearners.length} selected)`}/>
+                    <div style={{marginTop:10,maxHeight:320,overflowY:"auto"}}>
+                      {learners.map(l => (
+                        <label key={l.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 6px",cursor:"pointer"}}>
+                          <input type="checkbox" checked={pickLearners.includes(l.id)}
+                            onChange={()=>toggle(pickLearners,setPickLearners,l.id)}/>
+                          <span style={{fontSize:12.5,color:C.text}}>{l.name}</span>
+                          <span style={{fontSize:11,color:C.textMut,marginLeft:"auto"}}>{l.email}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button onClick={()=>setPickLearners(pickLearners.length===learners.length?[]:learners.map(l=>l.id))}
+                      style={{...miniBtn(C.accent,false),marginTop:8}}>
+                      {pickLearners.length===learners.length?"Clear all":"Select all"}
+                    </button>
+                  </Card>
+                  <Card>
+                    <SectionLabel text={`Topics (${pickTopics.length} selected)`}/>
+                    <div style={{marginTop:10,maxHeight:320,overflowY:"auto"}}>
+                      {catalog.map(t => (
+                        <label key={t.id} style={{display:"flex",alignItems:"flex-start",gap:9,padding:"7px 6px",cursor:"pointer"}}>
+                          <input type="checkbox" checked={pickTopics.includes(t.id)}
+                            onChange={()=>toggle(pickTopics,setPickTopics,t.id)} style={{marginTop:3}}/>
+                          <div>
+                            <div style={{fontSize:12.5,color:C.text,fontWeight:600}}>{t.title}</div>
+                            <div style={{fontSize:11,color:C.textMut}}>{t.audience} · {t.duration}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{marginTop:12,display:"flex",gap:10,alignItems:"center"}}>
+                      <span style={{fontSize:11,color:C.textMut}}>Due:</span>
+                      <input type="date" value={assignDue} onChange={e=>setAssignDue(e.target.value)} style={inp}/>
+                    </div>
+                    <button onClick={submitAssign} disabled={busy}
+                      style={{marginTop:12,width:"100%",padding:"11px",borderRadius:8,border:"none",
+                        background:C.accent,color:C.bg,fontSize:13.5,fontWeight:700,
+                        cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                      {busy ? "Assigning…" : `Assign to ${pickLearners.length} learner(s)`}
+                    </button>
+                  </Card>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* QUARTERLY */}
+          {tab === "quarterly" && (
+            <Card>
+              <SectionLabel text="Schedule Quarterly Training"/>
+              <p style={{fontSize:12.5,color:C.textSec,margin:"6px 0 14px",lineHeight:1.6}}>
+                Pick a quarter and the topics to cover. On scheduling, an assignment is created for every active learner.
+              </p>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:14}}>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>YEAR</label>
+                  <input type="number" value={qForm.year} onChange={e=>setQForm({...qForm,year:+e.target.value})} style={{...inp,width:100}}/></div>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>QUARTER</label>
+                  <select value={qForm.quarter} onChange={e=>setQForm({...qForm,quarter:+e.target.value})} style={{...inp,width:100}}>
+                    {[1,2,3,4].map(q=><option key={q} value={q}>Q{q}</option>)}
+                  </select></div>
+                <div><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>DUE DATE</label>
+                  <input type="date" value={qForm.dueDate} onChange={e=>setQForm({...qForm,dueDate:e.target.value})} style={inp}/></div>
+                <div style={{flex:1,minWidth:180}}><label style={{fontSize:11,color:C.textMut,display:"block",marginBottom:4}}>LABEL (optional)</label>
+                  <input value={qForm.label} onChange={e=>setQForm({...qForm,label:e.target.value})} placeholder={`Q${qForm.quarter} ${qForm.year} Training`} style={{...inp,width:"100%"}}/></div>
+              </div>
+              <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>TOPICS</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:6,marginBottom:14}}>
+                {catalog.map(t => (
+                  <label key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",
+                    background:qForm.topicIds.includes(t.id)?`${C.accent}12`:C.surface,
+                    border:`1px solid ${qForm.topicIds.includes(t.id)?C.accent+"44":C.border}`,borderRadius:7,cursor:"pointer"}}>
+                    <input type="checkbox" checked={qForm.topicIds.includes(t.id)} onChange={()=>toggleQTopic(t.id)}/>
+                    <span style={{fontSize:12,color:C.text}}>{t.title}</span>
+                  </label>
+                ))}
+              </div>
+              <button onClick={scheduleQuarter} disabled={busy}
+                style={{padding:"11px 22px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+                  fontSize:13.5,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                {busy ? "Scheduling…" : "Schedule Quarter"}
+              </button>
+            </Card>
+          )}
+
+          {/* REPORTS */}
+          {tab === "reports" && (
+            <TrainingReportView/>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Per-learner completion report with CSV export.
+function TrainingReportView() {
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/training-program/report`)
+      .then(r => r.json()).then(d => setReport(d)).catch(() => setReport({ rows: [] }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  function exportCsv() {
+    const rows = report?.rows || [];
+    const header = ["Learner","Email","Department","Assigned","Completed","Completion %","Avg Score","Overdue","Last Completed"];
+    const lines = [header.join(",")].concat(rows.map(r =>
+      [r.learner, r.email, r.department, r.assigned, r.completed, r.completionRate,
+       r.avgScore ?? "", r.overdue, r.lastCompletedAt ? new Date(r.lastCompletedAt).toLocaleDateString() : ""]
+      .map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `training-report-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+
+  if (loading) return <Spinner/>;
+  const rows = report?.rows || [];
+  return (
+    <Card>
+      <div style={{display:"flex",alignItems:"center",marginBottom:14}}>
+        <SectionLabel text="Completion Report"/>
+        <button onClick={exportCsv} disabled={!rows.length}
+          style={{marginLeft:"auto",padding:"7px 14px",borderRadius:7,border:`1px solid ${C.border}`,
+            background:C.surface,color:C.accent,fontSize:12,fontWeight:600,cursor:rows.length?"pointer":"default",opacity:rows.length?1:0.5}}>
+          Export CSV
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{color:C.textSec,fontSize:13}}>No learners to report on yet.</div>
+      ) : (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5}}>
+            <thead>
+              <tr style={{textAlign:"left",color:C.textMut,fontSize:11,letterSpacing:0.5}}>
+                <th style={{padding:"8px 10px"}}>LEARNER</th><th style={{padding:"8px 10px"}}>DEPT</th>
+                <th style={{padding:"8px 10px"}}>DONE</th><th style={{padding:"8px 10px"}}>RATE</th>
+                <th style={{padding:"8px 10px"}}>SCORE</th><th style={{padding:"8px 10px"}}>OVERDUE</th>
+                <th style={{padding:"8px 10px"}}>LAST</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r,i)=>(
+                <tr key={i} style={{borderTop:`1px solid ${C.border}`,color:C.textSec}}>
+                  <td style={{padding:"9px 10px",color:C.text,fontWeight:600}}>{r.learner}</td>
+                  <td style={{padding:"9px 10px"}}>{r.department||"—"}</td>
+                  <td style={{padding:"9px 10px"}}>{r.completed}/{r.assigned}</td>
+                  <td style={{padding:"9px 10px",color:r.completionRate>=80?C.green:r.completionRate>=50?C.amber:C.red,fontWeight:600}}>{r.completionRate}%</td>
+                  <td style={{padding:"9px 10px"}}>{r.avgScore!=null?r.avgScore:"—"}</td>
+                  <td style={{padding:"9px 10px",color:r.overdue?C.red:C.textSec}}>{r.overdue}</td>
+                  <td style={{padding:"9px 10px"}}>{r.lastCompletedAt?new Date(r.lastCompletedAt).toLocaleDateString():"—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function DomainMonitoringCard() {
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(null);   // "submit" | "verify"
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load domain status.");
+      setState(data);
+      if (!data.domain && data.suggested) setInput(data.suggested);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function submit() {
+    if (!input.trim()) return;
+    setBusy("submit"); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: input.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that domain.");
+      setState(data);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function verify() {
+    setBusy("verify"); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain/verify`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification check failed.");
+      setState(data);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  function copyTxt() {
+    const v = state?.instructions?.value;
+    if (!v) return;
+    navigator.clipboard?.writeText(v).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {});
+  }
+
+  if (loading) return <Card style={{marginBottom:14}}><Spinner/></Card>;
+
+  const tone = {
+    monitored:          { color: C.green,  icon: "🛡️" },
+    awaiting_hibp:      { color: C.amber,  icon: "⏳" },
+    awaiting_ownership: { color: C.accent, icon: "🔑" },
+    service_inactive:   { color: C.textSec,icon: "○"  },
+    rejected:           { color: C.red,    icon: "⚠️" },
+    none:               { color: C.textSec,icon: "＋" },
+  }[state?.state] || { color: C.textSec, icon: "○" };
+
+  const ins = state?.instructions;
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Breach & Dark-Web Monitoring"/>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,
+          padding:"4px 10px",borderRadius:20,background:`${tone.color}15`,
+          border:`1px solid ${tone.color}38`}}>
+          <span style={{fontSize:11}}>{tone.icon}</span>
+          <span style={{fontSize:11,fontWeight:700,color:tone.color,letterSpacing:0.3}}>
+            {state?.monitored ? "ACTIVE" : "NOT ACTIVE"}
+          </span>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:5}}>{state?.headline}</div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>{state?.detail}</p>
+
+      {state?.domain && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,
+          padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7}}>
+          <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>DOMAIN</span>
+          <span style={{fontSize:13,color:C.text,fontWeight:600,fontFamily:"monospace"}}>{state.domain}</span>
+          {state.ownershipVerifiedAt && (
+            <span style={{marginLeft:"auto",fontSize:10.5,color:C.green,fontWeight:600}}>✓ ownership verified</span>
+          )}
+        </div>
+      )}
+
+      {/* ── Submit / change the domain ── */}
+      {(state?.state === "none" || state?.nextStep === "verify_dns") && (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:ins?14:0}}>
+          <input value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+            placeholder="yourcompany.com"
+            style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,
+              border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,
+              fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <button onClick={submit} disabled={busy==="submit"||!input.trim()}
+            style={{padding:"10px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+              borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
+              cursor:busy||!input.trim()?"default":"pointer",opacity:busy||!input.trim()?0.5:1}}>
+            {busy==="submit" ? "Saving…" : state?.domain ? "Change domain" : "Add domain"}
+          </button>
+        </div>
+      )}
+
+      {/* ── DNS TXT instructions ── */}
+      {ins && (
+        <div style={{padding:"14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+          <div style={{fontSize:11.5,fontWeight:700,color:C.text,marginBottom:4,letterSpacing:0.3}}>
+            STEP 1 · PUBLISH THIS DNS RECORD
+          </div>
+          <p style={{fontSize:11.5,color:C.textSec,lineHeight:1.55,margin:"0 0 12px"}}>{ins.help}</p>
+
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"7px 14px",
+            fontSize:12,marginBottom:12,alignItems:"center"}}>
+            <span style={{color:C.textMut,fontWeight:600}}>Type</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.type}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Host</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.host}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Value</span>
+            <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+              <span style={{color:C.accent,fontFamily:"monospace",fontSize:11.5,
+                wordBreak:"break-all",lineHeight:1.4}}>{ins.value}</span>
+              <button onClick={copyTxt}
+                style={{flexShrink:0,padding:"3px 9px",background:copied?`${C.green}20`:C.card,
+                  border:`1px solid ${copied?C.green+"55":C.border}`,borderRadius:5,
+                  color:copied?C.green:C.textSec,fontSize:10.5,fontWeight:600,cursor:"pointer"}}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
+            paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11.5,fontWeight:700,color:C.text,letterSpacing:0.3}}>STEP 2</div>
+            <button onClick={verify} disabled={busy==="verify"}
+              style={{padding:"8px 16px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                borderRadius:7,color:C.green,fontSize:12,fontWeight:700,
+                cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+              {busy==="verify" ? "Checking DNS…" : "Check DNS record"}
+            </button>
+            {state?.lastCheckedAt && (
+              <span style={{fontSize:11,color:C.textMut}}>
+                Last checked {new Date(state.lastCheckedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Why we ask ── */}
+      {state?.state !== "monitored" && (
+        <p style={{fontSize:11,color:C.textMut,lineHeight:1.55,margin:"14px 0 0"}}>
+          We verify domain control before monitoring so we never pull breach data for a
+          domain that isn't yours.
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function ThreatIntelSection({ results }) {
   const tl = results?.threatIntel?.threatLandscape;
-  if (!tl) return <div style={{color:C.textSec,padding:20}}>Threat intelligence not loaded.</div>;
+
+  // Breach monitoring is live data and independent of the AI-generated threat
+  // landscape, so it renders even when the program hasn't been generated yet.
+  if (!tl) {
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+          <SectionLabel text="Threat Intelligence"/>
+        </div>
+        <CveExposureCard/>
+        <DomainMonitoringCard/>
+        <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
+          The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -1320,15 +3091,20 @@ function ThreatIntelSection({ results }) {
         <SectionLabel text="Threat Intelligence"/>
         <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
       </div>
-      {tl.darkWebMentions && tl.darkWebMentions !== "No intel" && (
-        <div style={{padding:"12px 16px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
-          borderRadius:8,marginBottom:14,color:C.red,fontSize:13}}>
-          ⚠️ Dark web monitoring: {tl.darkWebMentions}
-        </div>
-      )}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+      {/* Real, HIBP-backed breach monitoring. This replaces the old
+          `darkWebMentions` banner, which was model-generated text rather than
+          actual breach data — exactly the kind of thing that must never appear
+          in a security product. */}
+      {/* Live, NVD-backed CVE exposure — real data, replaces the old
+          model-generated "recentCVEs" card that used to render here. */}
+      <CveExposureCard/>
+      <DomainMonitoringCard/>
+      <div style={{marginBottom:14}}>
         <Card>
-          <SectionLabel text="Industry Threats"/>
+          <SectionLabel text="Industry Threat Landscape"/>
+          <div style={{fontSize:11,color:C.textMut,margin:"2px 0 12px"}}>
+            AI-generated briefing — context, not live detection.
+          </div>
           {(tl.industryThreats||[]).map((t,i)=>(
             <div key={i} style={{marginBottom:12,paddingBottom:12,
               borderBottom:i<(tl.industryThreats.length-1)?`1px solid ${C.border}`:"none"}}>
@@ -1340,21 +3116,6 @@ function ThreatIntelSection({ results }) {
               {(t.mitigations||[]).map((m,j)=>(
                 <div key={j} style={{color:C.green,fontSize:11}}>✓ {m}</div>
               ))}
-            </div>
-          ))}
-        </Card>
-        <Card>
-          <SectionLabel text="Recent CVEs & Vulnerabilities"/>
-          {(tl.recentCVEs||[]).map((c,i)=>(
-            <div key={i} style={{marginBottom:10,padding:"8px 12px",
-              background:C.surface,borderRadius:6}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                <span style={{color:C.accent,fontSize:12,fontWeight:700}}>{c.id}</span>
-                <Badge label={c.severity}/>
-              </div>
-              <div style={{color:C.textSec,fontSize:12,marginBottom:3}}>{c.description}</div>
-              <div style={{color:C.textMut,fontSize:11}}>Affected: {c.affected}</div>
-              {c.patch && <div style={{color:C.green,fontSize:11}}>Patch: {c.patch}</div>}
             </div>
           ))}
         </Card>
@@ -2770,15 +4531,24 @@ function Dashboard({ assessment, results, onReset }) {
     (results?.policiesCore?.policies?.length || 0) +
     (results?.policiesOps?.policies?.length || 0);
 
+  // A client-access demo (prospect) can't open the analyst console, so we give
+  // them a "Your vCISO" explainer showing what a human analyst does for them at
+  // each stage. Investor demos and normal accounts don't need it.
+  const showVciso = isDemoSession() && demoAccessType() === "client";
+
   const nav = [
     { id:"overview",    icon:"🎯", label:"Overview",          badge:null },
     { id:"priorities",  icon:"📊", label:"Priorities",        badge:results?.priorities?.priorities?.length },
     { id:"policies",    icon:"📄", label:"Policies",          badge:policyCount || null },
     { id:"workflows",   icon:"🔄", label:"Workflows",         badge:results?.workflows?.workflows?.length },
     { id:"compliance",  icon:"✅", label:"Compliance",        badge:results?.compliance?.frameworks?.length },
+    { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
+    { id:"evidence",    icon:"📎", label:"Evidence",           badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
+    ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:results?.tools?.toolStack?.length },
     { id:"training",    icon:"🎓", label:"Training",          badge:results?.training?.trainingProgram?.modules?.length },
+    { id:"trainingmgr", icon:"👥", label:"Training Program",  badge:null },
     { id:"report",      icon:"📋", label:"Exec Report",       badge:null },
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
   ];
@@ -2788,10 +4558,19 @@ function Dashboard({ assessment, results, onReset }) {
     priorities: <PrioritiesSection results={results}/>,
     policies:   <PoliciesSection results={results}/>,
     workflows:  <WorkflowsSection results={results}/>,
-    compliance: <ComplianceSection results={results}/>,
+    // The live compliance engine, not the AI's prose. ComplianceSection rendered
+    // `results.compliance.frameworks` — text generated during program creation —
+    // while 624 computed, cited controls sat unused on the server. This reads
+    // /api/compliance/* directly, so what a client sees is what the deterministic
+    // engine actually concluded from their answers.
+    compliance: <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
+    remediation: <RemediationSection/>,
+    evidence:    <EvidenceSection/>,
+    vciso:       <VirtualCISOSection/>,
     threats:    <ThreatIntelSection results={results}/>,
     tools:      <ToolsSection results={results}/>,
     training:   <TrainingSection results={results} assessment={assessment}/>,
+    trainingmgr: <TrainingProgramSection/>,
     report:     <ExecReportSection assessment={assessment} results={results}/>,
     library:    <PolicyLibrarySection assessment={assessment}/>,
   };
@@ -2840,7 +4619,10 @@ function Dashboard({ assessment, results, onReset }) {
       </div>
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"24px"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"24px",display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",marginBottom:16}}>
+          <NotificationBell onNavigate={setSection}/>
+        </div>
         {sectionMap[section]}
       </div>
     </div>
@@ -2881,6 +4663,16 @@ function ShieldLogo({ size = 28, glow = false }) {
 
 // Wordmark: "Shield" in the current ink color + "AI" in brand cyan
 function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
+  const brand = useBranding();
+  // Custom brand: render the product name in one ink color (no "AI" accent
+  // split, which is ShieldAI-specific). Default brand keeps the Shield+AI look.
+  if (brand && !brand.isDefault && brand.productName && brand.productName !== "ShieldAI") {
+    return (
+      <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1, color: ink }}>
+        {brand.productName}
+      </span>
+    );
+  }
   return (
     <span style={{ fontWeight:800, fontSize:size, letterSpacing:-0.3, lineHeight:1 }}>
       <span style={{ color: ink }}>Shield</span>
@@ -2891,22 +4683,537 @@ function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
 
 // Logo + wordmark lockup
 function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
+  const brand = useBranding();
+  const customLogo = brand && !brand.isDefault && brand.logoUrl;
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap }}>
-      <ShieldLogo size={logoSize} glow={glow}/>
+      {customLogo
+        ? <img src={brand.logoUrl} alt="" style={{ height:logoSize, maxWidth:logoSize*4, objectFit:"contain" }}/>
+        : <ShieldLogo size={logoSize} glow={glow}/>}
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
   );
 }
 
-function MarketingPage({ onEnterApp, onLogin }) {
+// A quietly animated "live" dot. Used to signal the product is actually running
+// rather than a mockup — the single most important thing the marketing page has
+// to convey to an investor.
+function LivePulse({ color = C.green, size = 7 }) {
+  return (
+    <span style={{position:"relative",display:"inline-flex",width:size,height:size,flexShrink:0}}>
+      <style>{`@keyframes shieldai-ping{75%,100%{transform:scale(2.4);opacity:0}}`}</style>
+      <span style={{position:"absolute",inset:0,borderRadius:"50%",background:color,opacity:0.65,
+        animation:"shieldai-ping 2s cubic-bezier(0,0,0.2,1) infinite"}}/>
+      <span style={{position:"relative",width:size,height:size,borderRadius:"50%",background:color}}/>
+    </span>
+  );
+}
+
+// Persistent, unmissable marker that the user is in the sandbox. Without this,
+// a visitor could mistake seeded sample companies for real client data.
+function DemoBanner({ onExit }) {
+  return (
+    <div style={{position:"sticky",top:0,zIndex:9999,display:"flex",alignItems:"center",
+      justifyContent:"center",gap:14,flexWrap:"wrap",padding:"9px 16px",
+      background:"linear-gradient(90deg,#7C3AED,#4F46E5)",color:"#fff",
+      fontSize:13,fontWeight:600,letterSpacing:0.2}}>
+      <span>
+        DEMO SANDBOX — everything works, but the data is sample data and your changes
+        are discarded when you leave. Nothing here is a real client.
+      </span>
+      <button onClick={onExit}
+        style={{padding:"4px 12px",background:"rgba(255,255,255,0.16)",
+          border:"1px solid rgba(255,255,255,0.4)",borderRadius:6,color:"#fff",
+          fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        Exit demo
+      </button>
+    </div>
+  );
+}
+
+// ── Investor landing page ──
+// A tailored entry point for investors: the diligence materials (pitch deck,
+// business plan, market analysis, executive summary, demo video) plus a request
+// form that lands in leads tagged as an investor request. On approval the admin
+// issues an investor access code, which unlocks the full product tour (client +
+// analyst views). Documents are served from Vite's /public dir; a doc that
+// hasn't been published yet shows as "available on request" rather than a dead
+// link.
+
+// Flip to true once /investor/ShieldAI_Demo.mp4 and /investor/demo-poster.jpg
+// exist in the public folder. Keeps the page from rendering a broken player.
+const DEMO_VIDEO_READY = false;
+
+const INVESTOR_DOCS = [
+  { key:"pitch",   icon:"📊", title:"Pitch Deck",         desc:"The 12-slide investor deck — problem, product, market, traction, ask.", href:"/investor/ShieldAI_Pitch_Deck.pdf" },
+  { key:"plan",    icon:"📈", title:"Business Plan",       desc:"Full 2026 business plan: strategy, go-to-market, financial model, milestones.", href:"/investor/ShieldAI_Business_Plan.pdf" },
+  { key:"market",  icon:"🌐", title:"Market Analysis",     desc:"TAM/SAM/SOM for the SMB vCISO market and competitive landscape.", href:"/investor/ShieldAI_Market_Analysis.pdf" },
+  { key:"summary", icon:"📄", title:"Executive Summary",   desc:"A two-page overview of the company, product, and opportunity.", href:"/investor/ShieldAI_Executive_Summary.pdf" },
+];
+
+function InvestorPage({ onBack, onOpenCode }) {
+  const [form, setForm] = useState({ name:"", email:"", company:"", role:"", message:"" });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function submit() {
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
+    if (!form.name.trim() || !emailOk) {
+      setErr("Please enter your name and a valid email."); return;
+    }
+    setSubmitting(true); setErr(null);
+    try {
+      // Reuse the public leads endpoint; tag the request as investor so it's
+      // triaged correctly in the admin leads view.
+      const res = await fetch(`${API_BASE}/api/leads`, {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          name: form.name, email: form.email, company: form.company,
+          employees: "", // n/a for investors
+          message: `[INVESTOR ACCESS REQUEST]${form.role?` Role: ${form.role}.`:""} ${form.message}`.trim(),
+        }),
+      });
+      if (!res.ok) throw new Error("Submission failed");
+      setSubmitted(true);
+    } catch { setErr("Something went wrong. Please try again."); }
+    finally { setSubmitting(false); }
+  }
+
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const field = { width:"100%", padding:"11px 13px", background:C.bg, border:`1px solid ${line}`,
+    borderRadius:9, color:ink, fontSize:14, boxSizing:"border-box", marginBottom:11,
+    fontFamily:"inherit" };
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      {/* Nav */}
+      <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
+        background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
+        <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+          <span style={{fontSize:11,color:cyan,marginLeft:4,letterSpacing:1,fontWeight:700}}>INVESTORS</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
+            <button onClick={onBack} style={{background:"none",border:"none",color:dim,fontSize:13,
+              cursor:"pointer",fontFamily:"inherit"}}>← Back to site</button>
+            <button onClick={onOpenCode} style={{padding:"8px 16px",background:"none",
+              border:`1px solid ${cyan}66`,borderRadius:8,color:cyan,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+              I have an access code
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:1080,margin:"0 auto",padding:"48px 24px 80px"}}>
+        {/* Hero */}
+        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
+          fontSize:12,fontWeight:600,marginBottom:22}}>
+          <LivePulse/> Live in production · real customers, real data
+        </div>
+        <h1 style={{fontSize:44,fontWeight:800,lineHeight:1.1,letterSpacing:-1.2,margin:"0 0 18px",maxWidth:760}}>
+          The vCISO platform, built and running — not a pitch for one.
+        </h1>
+        <p style={{fontSize:17,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 0 30px"}}>
+          ShieldAI delivers full security-program management, AI-assisted advisory, real threat
+          intelligence, and compliance tracking to the SMB market that can't afford a $200k CISO.
+          Review the materials below, then request access to explore the live product yourself.
+        </p>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:8}}>
+          <button onClick={()=>document.getElementById("inv-request")?.scrollIntoView({behavior:"smooth"})}
+            style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+              fontSize:15,fontWeight:700,cursor:"pointer",boxShadow:`0 0 40px ${cyan}44`}}>
+            Request demo access
+          </button>
+          <button onClick={onOpenCode}
+            style={{padding:"13px 26px",background:"none",border:`1px solid ${line}`,borderRadius:10,
+              color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+            Enter with a code →
+          </button>
+        </div>
+
+        {/* Traction strip */}
+        <div style={{display:"flex",gap:28,flexWrap:"wrap",margin:"40px 0 12px",
+          padding:"22px 28px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
+          {[["$200k","Cost of the CISO we replace"],["6","Compliance frameworks live"],
+            ["100%","Real threat data — zero fabrication"],["2","Hard product boundaries by design"]].map(([n,l],i)=>(
+            <div key={i} style={{flex:"1 1 160px"}}>
+              <div style={{fontSize:30,fontWeight:800,color:cyan,lineHeight:1}}>{n}</div>
+              <div style={{fontSize:12,color:dim,marginTop:5,lineHeight:1.4}}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Documents */}
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 6px"}}>Diligence materials</h2>
+        <p style={{fontSize:14,color:dim,margin:"0 0 22px"}}>
+          Open a document to view it. Anything not yet published here is available on request with your access approval.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14,marginBottom:14}}>
+          {INVESTOR_DOCS.map(d => (
+            <a key={d.key} href={d.href} target="_blank" rel="noreferrer"
+              style={{display:"block",padding:"18px 20px",background:C.card,border:`1px solid ${line}`,
+                borderRadius:14,textDecoration:"none",color:ink,transition:"border-color .2s"}}>
+              <div style={{fontSize:26,marginBottom:10}}>{d.icon}</div>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:5}}>{d.title}</div>
+              <div style={{fontSize:12.5,color:dim,lineHeight:1.5}}>{d.desc}</div>
+              <div style={{fontSize:12,color:cyan,fontWeight:600,marginTop:12}}>Open →</div>
+            </a>
+          ))}
+        </div>
+
+        {/* Demo video — flip DEMO_VIDEO_READY to true once the mp4 + poster are
+            in public/investor/. Until then we show a placeholder that routes to
+            the live hands-on demo instead of a broken player. */}
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 18px"}}>Product walkthrough</h2>
+        {DEMO_VIDEO_READY ? (
+          <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
+            <div style={{position:"relative",width:"100%",paddingTop:"56.25%",background:"#000"}}>
+              <video controls preload="metadata" poster="/investor/demo-poster.jpg"
+                style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",background:"#000"}}>
+                <source src="/investor/ShieldAI_Demo.mp4" type="video/mp4"/>
+              </video>
+            </div>
+            <div style={{padding:"14px 20px",fontSize:12.5,color:dim}}>
+              A guided tour of the live platform. Prefer to drive it yourself? Request access below for a
+              hands-on sandbox with both the client and analyst consoles.
+            </div>
+          </div>
+        ) : (
+          <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"40px 32px",
+            textAlign:"center"}}>
+            <div style={{fontSize:34,marginBottom:12}}>🎥</div>
+            <div style={{fontSize:17,fontWeight:700,color:ink,marginBottom:8}}>
+              A recorded walkthrough is on the way.
+            </div>
+            <p style={{fontSize:14,color:dim,lineHeight:1.6,maxWidth:520,margin:"0 auto 20px"}}>
+              In the meantime, the best walkthrough is the product itself. Request access below and
+              you'll get a hands-on sandbox with both the client and analyst consoles.
+            </p>
+            <button onClick={()=>document.getElementById("inv-request")?.scrollIntoView({behavior:"smooth"})}
+              style={{padding:"11px 22px",background:cyan,color:deep,border:"none",borderRadius:9,
+                fontSize:14,fontWeight:700,cursor:"pointer"}}>
+              Request demo access
+            </button>
+          </div>
+        )}
+
+        {/* Request form */}
+        <div id="inv-request" style={{position:"relative",top:-70}}/>
+        <h2 style={{fontSize:24,fontWeight:800,margin:"50px 0 6px"}}>Request demo access</h2>
+        <p style={{fontSize:14,color:dim,margin:"0 0 22px",maxWidth:640}}>
+          Tell us who you are. On approval you'll receive an access code that opens the full product —
+          both the client experience and the analyst console — no account or password required.
+        </p>
+
+        {submitted ? (
+          <div style={{padding:"26px",background:`${C.green}12`,border:`1px solid ${C.green}44`,
+            borderRadius:14,maxWidth:560}}>
+            <div style={{fontSize:17,fontWeight:700,color:C.green,marginBottom:8}}>Request received</div>
+            <p style={{fontSize:14,color:dim,lineHeight:1.6,margin:0}}>
+              Thanks — your request is in our queue. Once approved, we'll email you an access code you can
+              enter from the button in the top bar. It's the only credential you'll need, and it stays valid
+              for 96 hours so you can explore at your own pace.
+            </p>
+          </div>
+        ) : (
+          <div style={{maxWidth:560,background:C.card,border:`1px solid ${line}`,borderRadius:14,padding:"24px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <input style={field} placeholder="Full name *" value={form.name}
+                onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
+              <input style={field} placeholder="Work email *" value={form.email}
+                onChange={e=>setForm(f=>({...f,email:e.target.value}))}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11}}>
+              <input style={field} placeholder="Firm / fund" value={form.company}
+                onChange={e=>setForm(f=>({...f,company:e.target.value}))}/>
+              <input style={field} placeholder="Role (e.g. Partner)" value={form.role}
+                onChange={e=>setForm(f=>({...f,role:e.target.value}))}/>
+            </div>
+            <textarea style={{...field,minHeight:84,resize:"vertical"}} placeholder="Anything you'd like us to know (optional)"
+              value={form.message} onChange={e=>setForm(f=>({...f,message:e.target.value}))}/>
+            {err && <p style={{fontSize:13,color:"#F87171",margin:"0 0 10px"}}>{err}</p>}
+            <button onClick={submit} disabled={submitting}
+              style={{padding:"13px 26px",background:cyan,color:deep,border:"none",borderRadius:10,
+                fontSize:15,fontWeight:700,cursor:submitting?"default":"pointer",opacity:submitting?0.6:1}}>
+              {submitting ? "Submitting…" : "Request access"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  LEARNER PAGE — the public, token-gated employee training experience.
+//  No login: the employee opens /train/<token>. They see assigned training,
+//  work through each module's objectives, and mark it complete (with a short
+//  self-check). Talks only to the public /api/train/:token endpoints.
+// ─────────────────────────────────────────────────────────────
+function LearnerPage({ token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [openMod, setOpenMod] = useState(null); // { assignmentId, topicId }
+  const [busy, setBusy] = useState(false);
+
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "This training link isn't valid.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [token]);
+
+  async function complete(assignmentId, topicId, score) {
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentId, topicId, score }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save your progress.");
+      setOpenMod(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <div style={{borderBottom:`1px solid ${line}`,padding:"16px 24px"}}>
+        <div style={{maxWidth:760,margin:"0 auto",display:"flex",alignItems:"center",gap:12}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+          <span style={{fontSize:11,color:dim,marginLeft:4,letterSpacing:1,fontWeight:600}}>SECURITY TRAINING</span>
+        </div>
+      </div>
+
+      <div style={{maxWidth:760,margin:"0 auto",padding:"36px 24px 80px"}}>
+        {loading ? <Spinner/> : error ? (
+          <div style={{padding:"26px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+            borderRadius:14,color:C.red,fontSize:14}}>{error}</div>
+        ) : (
+          <>
+            <h1 style={{fontSize:26,fontWeight:800,margin:"0 0 6px"}}>
+              Welcome{data?.learner?.name ? `, ${data.learner.name.split(" ")[0]}` : ""}.
+            </h1>
+            <p style={{fontSize:14.5,color:dim,lineHeight:1.6,margin:"0 0 28px"}}>
+              Here's your assigned security training. Work through each module and mark it complete.
+              Your progress is saved automatically.
+            </p>
+
+            {(data?.assignments || []).length === 0 ? (
+              <div style={{padding:"24px",background:C.card,border:`1px solid ${line}`,borderRadius:14,
+                color:dim,fontSize:14}}>You have no training assigned right now. Nice — you're all caught up.</div>
+            ) : (data.assignments || []).map(a => (
+              <div key={a.assignmentId} style={{marginBottom:20,background:C.card,
+                border:`1px solid ${line}`,borderRadius:16,overflow:"hidden"}}>
+                <div style={{padding:"16px 20px",borderBottom:`1px solid ${line}`,
+                  display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:15,fontWeight:700}}>{a.title}</div>
+                    {a.dueDate && <div style={{fontSize:12,color:dim,marginTop:2}}>Due {new Date(a.dueDate).toLocaleDateString()}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:80,height:7,borderRadius:6,background:deep,overflow:"hidden"}}>
+                      <div style={{width:`${a.progress}%`,height:"100%",
+                        background:a.status==="completed"?C.green:cyan}}/>
+                    </div>
+                    <span style={{fontSize:12,fontWeight:700,
+                      color:a.status==="completed"?C.green:cyan}}>{a.progress}%</span>
+                  </div>
+                </div>
+                <div style={{padding:"8px 12px"}}>
+                  {a.modules.map(m => {
+                    const isOpen = openMod?.assignmentId === a.assignmentId && openMod?.topicId === m.topicId;
+                    return (
+                      <div key={m.topicId} style={{margin:"6px 0"}}>
+                        <div onClick={()=>setOpenMod(isOpen?null:{assignmentId:a.assignmentId,topicId:m.topicId})}
+                          style={{display:"flex",alignItems:"center",gap:12,padding:"12px 12px",cursor:"pointer",
+                            background:isOpen?deep:"transparent",borderRadius:10}}>
+                          <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
+                            alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
+                            background:m.completed?C.green:`${cyan}22`,color:m.completed?"#04121F":cyan}}>
+                            {m.completed ? "✓" : ""}
+                          </span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{m.title}</div>
+                            <div style={{fontSize:11,color:dim}}>{m.audience} · {m.duration}</div>
+                          </div>
+                          {m.completed && m.score != null && (
+                            <span style={{fontSize:11,color:C.green,fontWeight:600}}>Score {m.score}%</span>
+                          )}
+                          <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                        </div>
+                        {isOpen && (
+                          <LearnerModule module={m} busy={busy}
+                            onComplete={(score)=>complete(a.assignmentId, m.topicId, score)}/>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+        <div style={{marginTop:30,textAlign:"center",fontSize:11,color:C.textMut}}>
+          Powered by ShieldAI · Your progress is private to your organization.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A single module: objectives + a one-question knowledge check → mark complete.
+function LearnerModule({ module, onComplete, busy }) {
+  const [answered, setAnswered] = useState(module.completed);
+  const line = C.border, dim = C.textSec, cyan = C.accent, deep = C.bg;
+
+  return (
+    <div style={{padding:"6px 12px 16px 48px"}}>
+      {module.source && (
+        <div style={{fontSize:11,color:C.textMut,marginBottom:10}}>Source: {module.source}</div>
+      )}
+      <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>
+        WHAT YOU'LL LEARN
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {(module.objectives || []).map((o,i)=>(
+          <div key={i} style={{display:"flex",gap:9,fontSize:13,color:C.text,lineHeight:1.5}}>
+            <span style={{color:cyan,flexShrink:0}}>›</span>{o}
+          </div>
+        ))}
+        {(!module.objectives || module.objectives.length === 0) && (
+          <div style={{fontSize:13,color:dim}}>Review this topic and confirm you understand the key practices.</div>
+        )}
+      </div>
+
+      {module.completed ? (
+        <div style={{fontSize:12.5,color:C.green,fontWeight:600}}>
+          ✓ Completed{module.completedAt ? ` on ${new Date(module.completedAt).toLocaleDateString()}` : ""}
+        </div>
+      ) : (
+        <div style={{padding:"14px 16px",background:deep,borderRadius:10,border:`1px solid ${line}`}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:10}}>
+            Knowledge check: Confirm you've reviewed and understand the objectives above.
+          </div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <button onClick={()=>onComplete(100)} disabled={busy}
+              style={{padding:"10px 18px",borderRadius:8,border:"none",background:cyan,color:deep,
+                fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+              {busy ? "Saving…" : "I understand — mark complete"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Access-code entry. The code is the only credential a demo visitor needs;
+// redeeming it drops them into the correct scoped sandbox (investor vs client).
+function AccessCodeModal({ onClose, onRedeem }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function submit() {
+    const c = code.trim();
+    if (!c) { setErr("Enter your access code."); return; }
+    setBusy(true); setErr(null);
+    try { await onRedeem(c); }              // on success the app navigates away
+    catch (e) { setErr(e.message || "That code isn't valid."); setBusy(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(4,10,20,0.72)",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:420,background:C.card,
+        border:`1px solid ${C.borderHi}`,borderRadius:16,padding:"28px 26px",
+        boxShadow:"0 24px 70px rgba(0,0,0,0.55)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+          <ShieldLogo size={26}/>
+          <span style={{fontSize:17,fontWeight:800,color:C.text}}>Enter the demo</span>
+        </div>
+        <p style={{fontSize:13,color:C.textSec,lineHeight:1.6,margin:"0 0 18px"}}>
+          Paste the access code from your approval email. It's the only credential you need —
+          no account, no password.
+        </p>
+        <input autoFocus value={code} onChange={e=>setCode(e.target.value.toUpperCase())}
+          onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
+          placeholder="SHLD-XXXX-XXXX"
+          style={{width:"100%",padding:"12px 14px",background:C.bg,border:`1px solid ${C.border}`,
+            borderRadius:10,color:C.text,fontSize:16,letterSpacing:1.5,textAlign:"center",
+            boxSizing:"border-box",fontFamily:"ui-monospace,SFMono-Regular,Menlo,monospace"}}/>
+        {err && <p style={{fontSize:12.5,color:"#F87171",margin:"10px 0 0"}}>{err}</p>}
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button onClick={submit} disabled={busy}
+            style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:C.accent,
+              color:C.bg,fontSize:14,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+            {busy ? "Verifying…" : "Enter demo"}
+          </button>
+          <button onClick={onClose} disabled={busy}
+            style={{padding:"12px 18px",borderRadius:10,border:`1px solid ${C.border}`,
+              background:"none",color:C.textSec,fontSize:14,cursor:"pointer"}}>
+            Cancel
+          </button>
+        </div>
+        <p style={{fontSize:11.5,color:C.textMut,margin:"16px 0 0",lineHeight:1.6,textAlign:"center"}}>
+          Don't have a code? Request access from the Investors page or the contact form below.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenInvestor,
+                        openCodeEntry, onCodeEntryOpened }) {
   const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [formErr, setFormErr] = useState(null);
+  const [demoState, setDemoState] = useState({ seeded: null, personas: [] });
+  const [demoBusy, setDemoBusy] = useState(null);
+  const [demoErr, setDemoErr] = useState(null);
+  const [showCodeEntry, setShowCodeEntry] = useState(false);
+  const [mobileMenu, setMobileMenu] = useState(false);
+
+  // Returning from the investor page's "I have a code" button opens the modal.
+  useEffect(() => {
+    if (openCodeEntry) { setShowCodeEntry(true); onCodeEntryOpened && onCodeEntryOpened(); }
+  }, [openCodeEntry]);
+
+  // Ask the backend whether the sandbox is seeded before offering the button —
+  // better to hide the entry point than to hand someone a broken demo.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/api/demo/status`)
+      .then(r => r.json())
+      .then(d => { if (alive && d && Array.isArray(d.personas)) setDemoState({ seeded: !!d.seeded, personas: d.personas }); })
+      .catch(() => { if (alive) setDemoState({ seeded: false, personas: [] }); });
+    return () => { alive = false; };
+  }, []);
+
+  async function enterDemo(persona) {
+    setDemoBusy(persona); setDemoErr(null);
+    try { await onStartDemo(persona); }
+    catch (e) { setDemoErr(e.message || "Could not start the demo."); }
+    finally { setDemoBusy(null); }
+  }
 
   async function submitLead() {
-    if (!form.email.includes("@")) { setFormErr("Please enter a valid email address."); return; }
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
+    if (!form.name.trim()) { setFormErr("Please enter your name."); return; }
+    if (!emailOk) { setFormErr("Please enter a valid work email address."); return; }
     setSubmitting(true); setFormErr(null);
     try {
       const res = await fetch(`${API_BASE}/api/leads`, {
@@ -2933,37 +5240,87 @@ function MarketingPage({ onEnterApp, onLogin }) {
   );
 
   const steps = [
-    { n:"01", t:"Assess", d:"Answer a short, structured assessment about your business and current security posture." },
-    { n:"02", t:"Score", d:"Our deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork." },
-    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training." },
-    { n:"04", t:"Manage", d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire." },
+    { n:"01", t:"Assess",  d:"Answer a short, structured assessment about your business and current security posture.",
+      out:"Takes about 15 minutes" },
+    { n:"02", t:"Score",   d:"A deterministic engine scores you against the NIST Cybersecurity Framework — explainable, not guesswork.",
+      out:"Every point traceable to a control" },
+    { n:"03", t:"Program", d:"Get a complete security program: policies, roadmap, compliance mapping, and staff training.",
+      out:"Documents you can hand to an auditor" },
+    { n:"04", t:"Manage",  d:"Our engineers run your program continuously, amplified by AI — for a fraction of a full-time hire.",
+      out:"Ongoing, not a one-time report" },
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
+    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
+    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
 
   return (
-    <div style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
+    <div className="mkt-root" style={{background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",minHeight:"100vh"}}>
+      {/* Responsive rules — this page is otherwise all inline styles, so a small
+          scoped stylesheet handles the breakpoints inline styles can't. */}
+      <style>{`
+        .mkt-nav-links { display:flex; gap:14px; align-items:center; margin-left:auto; }
+        .mkt-nav-toggle { display:none; margin-left:auto; background:none; border:1px solid ${line};
+          border-radius:8px; color:${ink}; width:38px; height:38px; cursor:pointer; font-size:16px; }
+        .mkt-mobile-menu { display:none; }
+        .mkt-hero-h1 { font-size:52px; }
+        .mkt-hero-sub { font-size:18px; }
+        @media (max-width: 720px) {
+          .mkt-nav-links { display:none; }
+          .mkt-nav-links.open { display:flex; }
+          .mkt-nav-toggle { display:inline-flex; align-items:center; justify-content:center; }
+          .mkt-mobile-menu.open { display:flex; flex-direction:column; gap:4px; padding:8px 24px 16px; }
+          .mkt-hero-h1 { font-size:34px; }
+          .mkt-hero-sub { font-size:16px; }
+          .mkt-cta-row { flex-direction:column; align-items:stretch; }
+          .mkt-cta-row > button { width:100%; }
+        }
+        .mkt-root button:focus-visible, .mkt-root a:focus-visible,
+        .mkt-root input:focus-visible, .mkt-root select:focus-visible,
+        .mkt-root textarea:focus-visible {
+          outline: 2px solid ${cyan}; outline-offset: 2px; border-radius: 6px;
+        }
+      `}</style>
+
       {/* NAV */}
       <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
         background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
         <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
           <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
           <span style={{fontSize:11,color:dim,marginLeft:4}}>Virtual CISO</span>
-          <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}}>
+          <div className="mkt-nav-links">
             <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
+            <button onClick={onOpenInvestor}
+              style={{background:"none",border:"none",padding:0,color:cyan,fontSize:13,fontWeight:600,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              Investors
+            </button>
             <a href="#contact" style={{color:dim,fontSize:13,textDecoration:"none"}}>Contact</a>
             <button onClick={onLogin} style={{padding:"8px 16px",background:"none",
               border:`1px solid ${line}`,borderRadius:8,color:ink,fontSize:13,fontWeight:600,cursor:"pointer"}}>
               Client Login
             </button>
           </div>
+          <button className="mkt-nav-toggle" aria-label="Menu" onClick={()=>setMobileMenu(o=>!o)}>
+            {mobileMenu ? "✕" : "☰"}
+          </button>
+        </div>
+        {/* Mobile dropdown */}
+        <div className={`mkt-mobile-menu${mobileMenu?" open":""}`}
+          style={{borderTop:`1px solid ${line}`,background:deep}}>
+          <a href="#how" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>How it works</a>
+          <a href="#pricing" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Pricing</a>
+          <button onClick={()=>{setMobileMenu(false);onOpenInvestor();}}
+            style={{background:"none",border:"none",padding:"10px 0",color:cyan,fontSize:15,fontWeight:600,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
+          <a href="#contact" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Contact</a>
+          <button onClick={()=>{setMobileMenu(false);onLogin();}}
+            style={{marginTop:8,padding:"11px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+              color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>Client Login</button>
         </div>
       </div>
 
@@ -2972,45 +5329,128 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <div style={{display:"flex",justifyContent:"center",marginBottom:28}}>
           <ShieldLogo size={64} glow/>
         </div>
-        <div style={{display:"inline-block",padding:"6px 14px",borderRadius:20,
-          background:`${cyan}15`,border:`1px solid ${cyan}33`,color:cyan,fontSize:12,fontWeight:600,marginBottom:24}}>
-          Security leadership your business can actually afford
+        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
+          fontSize:12,fontWeight:600,marginBottom:24,letterSpacing:0.2}}>
+          <LivePulse/>
+          Built and running in production today
         </div>
-        <h1 style={{fontSize:52,fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
+        <h1 className="mkt-hero-h1" style={{fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
           maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
           The cybersecurity expert<br/>your business is required to have.
         </h1>
-        <p style={{fontSize:18,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 auto 36px"}}>
-          A full-time CISO costs $200,000 a year. ShieldAI gives you the same protection —
-          AI-powered, expert-reviewed — for the price of a subscription.
+        <p className="mkt-hero-sub" style={{color:dim,lineHeight:1.6,maxWidth:640,margin:"0 auto 36px"}}>
+          A full-time CISO costs $200,000 a year. ShieldAI delivers the same protection —
+          real threat intelligence, prioritized remediation, audit-ready evidence, and compliance
+          tracking, with a human analyst in the loop — for the price of a subscription.
         </p>
-        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+        <div className="mkt-cta-row" style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          {/* One primary action — starting the assessment is the strongest
+              self-serve hook. Everything else is visually secondary. */}
+          <button onClick={onEnterApp}
             style={{padding:"14px 28px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
               color:deep,border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:"pointer",
               boxShadow:`0 0 40px ${cyan}44`}}>
-            Request information
-          </button>
-          <button onClick={onEnterApp}
-            style={{padding:"14px 28px",background:"none",border:`1px solid ${line}`,
-              borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
             Try the assessment →
           </button>
+          <button onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+            style={{padding:"14px 28px",background:"none",border:`1px solid ${line}`,
+              borderRadius:10,color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+            Request information
+          </button>
+          {demoState.seeded && (
+            <button onClick={()=>setShowCodeEntry(true)}
+              style={{padding:"14px 28px",background:"none",border:`1px solid ${cyan}66`,
+                borderRadius:10,color:cyan,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+              Enter demo with access code →
+            </button>
+          )}
         </div>
-
-        {/* Signature: posture score motif */}
-        <div style={{marginTop:60,display:"inline-flex",alignItems:"center",gap:28,
-          padding:"24px 36px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
-          <div style={{textAlign:"center"}}>
-            <div style={{fontSize:46,fontWeight:800,color:C.green,lineHeight:1}}>91</div>
-            <div style={{fontSize:10,color:dim,letterSpacing:1,marginTop:3}}>NIST POSTURE</div>
+        {demoState.seeded && (
+          <div style={{display:"inline-flex",alignItems:"center",gap:10,marginTop:18,padding:"9px 16px",
+            borderRadius:10,background:`${C.purple}0E`,border:`1px solid ${C.purple}30`,
+            maxWidth:600,textAlign:"left"}}>
+            <LivePulse color={C.purple} size={6}/>
+            <span style={{fontSize:12.5,color:dim,lineHeight:1.5}}>
+              <strong style={{color:C.text,fontWeight:600}}>The demo is access-controlled.</strong>{" "}
+              Investors and prospective clients receive a code after requesting access. Your code is
+              the only credential you need — it opens a private, isolated sandbox with sample data.
+            </span>
           </div>
-          <div style={{width:1,height:48,background:line}}/>
-          <div style={{textAlign:"left",maxWidth:280}}>
-            <div style={{fontSize:13,color:ink,fontWeight:600,marginBottom:3}}>A score you can prove</div>
-            <div style={{fontSize:12,color:dim,lineHeight:1.5}}>
-              Every point traces to a specific control — the kind of evidence insurers and auditors trust.
+        )}
+        {demoErr && (
+          <p style={{fontSize:13,color:"#F87171",marginTop:10}}>{demoErr}</p>
+        )}
+        {showCodeEntry && (
+          <AccessCodeModal
+            onClose={()=>setShowCodeEntry(false)}
+            onRedeem={onRedeemCode}/>
+        )}
+
+        {/* Signature: an inline product preview. Self-contained (no image asset)
+            so it can't 404, and it shows the actual dashboard motifs a visitor
+            sees inside — posture score, live CVE exposure, remediation gain. */}
+        <div style={{marginTop:56,maxWidth:720,marginLeft:"auto",marginRight:"auto",
+          background:C.card,border:`1px solid ${line}`,borderRadius:18,overflow:"hidden",
+          boxShadow:`0 30px 80px rgba(0,0,0,0.4)`,textAlign:"left"}}>
+          {/* Window chrome */}
+          <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
+            borderBottom:`1px solid ${line}`,background:navy}}>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#FF5F57"}}/>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#FEBC2E"}}/>
+            <span style={{width:10,height:10,borderRadius:"50%",background:"#28C840"}}/>
+            <span style={{marginLeft:10,fontSize:11,color:dim}}>ShieldAI · Security Dashboard</span>
+            <span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,
+              fontSize:10,color:C.green,fontWeight:600}}><LivePulse size={5}/> LIVE</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,padding:"22px 24px"}}>
+            {/* Posture ring */}
+            <div style={{textAlign:"center"}}>
+              <div style={{position:"relative",width:104,height:104}}>
+                <svg viewBox="0 0 100 100" width="104" height="104">
+                  <circle cx="50" cy="50" r="42" fill="none" stroke={line} strokeWidth="8"/>
+                  <circle cx="50" cy="50" r="42" fill="none" stroke={C.green} strokeWidth="8"
+                    strokeLinecap="round" strokeDasharray={`${2*Math.PI*42*0.91} ${2*Math.PI*42}`}
+                    transform="rotate(-90 50 50)"/>
+                </svg>
+                <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",
+                  alignItems:"center",justifyContent:"center"}}>
+                  <span style={{fontSize:30,fontWeight:800,color:C.green,lineHeight:1}}>91</span>
+                  <span style={{fontSize:8,color:dim,letterSpacing:1}}>POSTURE</span>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:C.green,fontWeight:600,marginTop:8}}>Strong</div>
             </div>
+            {/* Live tiles */}
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{display:"flex",gap:10}}>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`}}>
+                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>CVE EXPOSURE · NVD</div>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <span style={{fontSize:18,fontWeight:800,color:C.red}}>3</span>
+                    <span style={{fontSize:11,color:dim}}>High</span>
+                    <span style={{fontSize:18,fontWeight:800,color:C.amber,marginLeft:6}}>7</span>
+                    <span style={{fontSize:11,color:dim}}>Medium</span>
+                  </div>
+                </div>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`}}>
+                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>AUDIT COVERAGE</div>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <span style={{fontSize:18,fontWeight:800,color:C.green}}>86%</span>
+                    <span style={{fontSize:11,color:dim}}>evidence on file</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${line}`,
+                display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:9,color:dim,letterSpacing:1}}>TOP FIX</span>
+                <span style={{fontSize:12,color:ink,flex:1}}>Enable MFA on remote access</span>
+                <span style={{fontSize:12,fontWeight:700,color:C.green}}>+6 posture</span>
+              </div>
+            </div>
+          </div>
+          <div style={{padding:"12px 24px",borderTop:`1px solid ${line}`,fontSize:12,color:dim}}>
+            Every point traces to a specific control — the evidence insurers and auditors trust.
           </div>
         </div>
       </Section>
@@ -3024,14 +5464,15 @@ function MarketingPage({ onEnterApp, onLogin }) {
           </h2>
           <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
             {[
-              { stat:"47%", label:"of small businesses have no cybersecurity budget at all." },
-              { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most." },
-              { stat:"43%", label:"of all cyberattacks target small businesses." },
+              { stat:"47%", label:"of businesses under 50 employees have no cybersecurity budget at all.", src:"StrongDM, 2025" },
+              { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most.", src:"Industry salary benchmarks" },
+              { stat:"43%", label:"of all cyberattacks target small businesses.", src:"Verizon DBIR" },
             ].map((b,i)=>(
               <div key={i} style={{flex:"1 1 240px",background:C.card,border:`1px solid ${line}`,
                 borderRadius:14,padding:"26px 24px"}}>
                 <div style={{fontSize:40,fontWeight:800,color:cyan,lineHeight:1,marginBottom:10}}>{b.stat}</div>
-                <div style={{fontSize:14,color:dim,lineHeight:1.5}}>{b.label}</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.5,marginBottom:10}}>{b.label}</div>
+                <div style={{fontSize:11,color:C.textMut,letterSpacing:0.3}}>Source: {b.src}</div>
               </div>
             ))}
           </div>
@@ -3045,19 +5486,121 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 40px",maxWidth:620}}>
           From assessment to managed program in four steps.
         </h2>
-        <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
           {steps.map((s,i)=>(
-            <div key={i} style={{flex:"1 1 220px",position:"relative"}}>
-              <div style={{fontSize:13,fontWeight:800,color:cyan,marginBottom:10,letterSpacing:1}}>{s.n}</div>
-              <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>{s.t}</div>
-              <div style={{fontSize:14,color:dim,lineHeight:1.6}}>{s.d}</div>
+            <div key={i} style={{flex:"1 1 220px",position:"relative",display:"flex",flexDirection:"column",
+              padding:"22px 20px 20px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+              {/* Step rail — a thin accent that fades along the sequence */}
+              <div style={{position:"absolute",top:0,left:20,right:20,height:2,borderRadius:2,
+                background:`linear-gradient(90deg,${cyan}${i===0?"CC":"66"},${cyan}${i===steps.length-1?"22":"55"})`}}/>
+              <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:12}}>
+                <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",
+                  justifyContent:"center",background:`${cyan}18`,border:`1px solid ${cyan}33`,
+                  fontSize:11,fontWeight:800,color:cyan,letterSpacing:0.5}}>{s.n}</div>
+                <div style={{fontSize:17,fontWeight:700}}>{s.t}</div>
+              </div>
+              <div style={{fontSize:13.5,color:dim,lineHeight:1.6,flex:1}}>{s.d}</div>
+              <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${line}`,
+                fontSize:11.5,fontWeight:600,color:C.green,letterSpacing:0.2}}>
+                {s.out}
+              </div>
             </div>
           ))}
         </div>
       </Section>
 
+      {/* PLATFORM CAPABILITIES — the working feature set, kept honest: these are
+          all live in the product, not roadmap. Mirrors what a demo visitor
+          actually sees inside the client dashboard. */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"56px 0"}}>
+        <Section>
+          <Eyebrow>Inside the platform</Eyebrow>
+          <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 10px",maxWidth:640}}>
+            A complete security program, not a report you file and forget.
+          </h2>
+          <p style={{fontSize:15,color:dim,lineHeight:1.6,maxWidth:620,margin:"0 0 34px"}}>
+            Every capability below is live in the product today — the same views a client or investor
+            sees when they enter the demo.
+          </p>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14}}>
+            {[
+              { icon:"🔍", t:"Real threat intelligence",
+                d:"Live CVE matching against your actual software via the NVD feed, plus breach exposure from Have I Been Pwned. Real data — nothing fabricated." },
+              { icon:"🛠️", t:"Prioritized remediation",
+                d:"Gaps ranked by how much each fix moves your NIST posture score. Turn any gap into a tracked task; completing it re-scores you automatically." },
+              { icon:"📎", t:"Evidence & audit readiness",
+                d:"Attach proof to completed work and see a live audit-coverage score — the evidence insurers and auditors ask for, ready when they do." },
+              { icon:"✅", t:"Compliance tracking",
+                d:"Six real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace." },
+              { icon:"🔔", t:"Notifications & review",
+                d:"When your analyst approves a policy or requests changes, you know immediately — with a direct link to what changed." },
+              { icon:"🤝", t:"A human vCISO in the loop",
+                d:"AI drafts and monitors; a dedicated analyst reviews and advises at every stage. AI advises, humans act — by design." },
+            ].map((f,i)=>(
+              <div key={i} style={{padding:"20px 22px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+                <div style={{fontSize:26,marginBottom:11}}>{f.icon}</div>
+                <div style={{fontSize:15.5,fontWeight:700,marginBottom:7}}>{f.t}</div>
+                <div style={{fontSize:13,color:dim,lineHeight:1.6}}>{f.d}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:26,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontSize:13,color:dim}}>Also available for MSPs:</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>White-label branding</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Analyst console with client isolation</span>
+            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
+              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Read-only endpoint monitoring</span>
+          </div>
+        </Section>
+      </div>
+      {/* Deliberately does not name model vendors. Naming them invites the
+          "you're just a wrapper" objection, and would tie the pitch to
+          providers we may swap. The differentiator is the boundary, not the
+          brand of the model. */}
+      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"52px 0"}}>
+        <Section>
+          <div style={{display:"flex",gap:40,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{flex:"1 1 380px",minWidth:280}}>
+              <Eyebrow>The engine</Eyebrow>
+              <h2 style={{fontSize:26,fontWeight:800,letterSpacing:-0.5,margin:"0 0 12px",maxWidth:460}}>
+                A multi-model engine. Every output human-reviewed.
+              </h2>
+              <p style={{fontSize:14.5,color:dim,lineHeight:1.65,maxWidth:480,margin:0}}>
+                ShieldAI routes each task to the model best suited to it, with automatic
+                failover so the platform keeps working when a provider doesn't. The AI
+                drafts, maps, and monitors — but it never acts on your systems, and a
+                security engineer reviews what reaches you.
+              </p>
+            </div>
+            <div style={{flex:"0 1 380px",minWidth:280,display:"flex",flexDirection:"column",gap:10}}>
+              {[
+                { t:"AI advises, humans act",
+                  d:"The AI is advisory only. It has no ability to change your systems." },
+                { t:"Read-only monitoring",
+                  d:"Our endpoint agent reports posture. It accepts no inbound commands." },
+                { t:"Provider-independent",
+                  d:"Multiple engines behind one layer — no single vendor is a dependency." },
+              ].map((x,i)=>(
+                <div key={i} style={{display:"flex",gap:11,alignItems:"flex-start",padding:"12px 14px",
+                  background:C.card,border:`1px solid ${line}`,borderRadius:10}}>
+                  <div style={{width:16,height:16,borderRadius:5,flexShrink:0,marginTop:1,
+                    background:`${C.green}1A`,border:`1px solid ${C.green}44`,display:"flex",
+                    alignItems:"center",justifyContent:"center",fontSize:9,color:C.green,fontWeight:800}}>✓</div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,marginBottom:3}}>{x.t}</div>
+                    <div style={{fontSize:12,color:dim,lineHeight:1.5}}>{x.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      </div>
+
       {/* WHY NOW */}
-      <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+      <div style={{background:deep,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
         <Section>
           <Eyebrow>Why now</Eyebrow>
           <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px",maxWidth:680}}>
@@ -3101,7 +5644,8 @@ function MarketingPage({ onEnterApp, onLogin }) {
                   background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
               )}
               <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
-              <div style={{fontSize:22,fontWeight:800,marginBottom:18}}>{t.name}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:4}}>{t.name}</div>
+              <div style={{fontSize:14,color:t.featured?cyan:C.green,fontWeight:600,marginBottom:16}}>{t.price}</div>
               <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
                 {t.points.map((p,j)=>(
                   <div key={j} style={{display:"flex",gap:9,fontSize:14,color:dim,lineHeight:1.4}}>
@@ -3221,8 +5765,13 @@ function MarketingPage({ onEnterApp, onLogin }) {
         <Section style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"center"}}>
           <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
           <span style={{fontSize:12,color:dim}}>Virtual CISO for small business</span>
-          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center"}}>
-            <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer"}}>Client Login</button>
+          <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+            <a href="/legal/privacy.pdf" target="_blank" rel="noreferrer"
+              style={{color:dim,fontSize:13,textDecoration:"none"}}>Privacy</a>
+            <a href="/legal/terms.pdf" target="_blank" rel="noreferrer"
+              style={{color:dim,fontSize:13,textDecoration:"none"}}>Terms</a>
+            <button onClick={onOpenInvestor} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
+            <button onClick={onLogin} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Client Login</button>
             <span style={{fontSize:12,color:dim}}>© 2026 Xandu Ltd</span>
           </div>
         </Section>
@@ -3305,7 +5854,22 @@ function Landing({ onStart }) {
 // ─────────────────────────────────────────────────────────────
 //  STRUCTURED SECURITY CHECKLIST
 // ─────────────────────────────────────────────────────────────
-const SECURITY_CHECKLIST = [
+// Fallback only — the real checklist comes from GET /api/tasks/controls.
+//
+// This was a hardcoded duplicate of the backend's securityChecklist.js, frozen
+// at the original 13 scoring questions. The backend now has 35: those 13 plus 22
+// evidence-only questions covering access reviews, encryption, vendor diligence,
+// media disposal, physical security, and privacy rights.
+//
+// Those 22 are what make ISO's cryptography controls assessable, what let State
+// Privacy exist at all, and what the agent corroborates against. They unlocked
+// +187 controls across the frameworks — and none of it mattered, because this
+// list is what the client actually sees, and it never asked them.
+//
+// A duplicated catalogue in the frontend silently rots the moment the backend
+// moves. useSecurityChecklist() fetches the live set; this array renders only if
+// that request fails.
+const SECURITY_CHECKLIST_FALLBACK = [
   { id:"mfa", nistFunction:"Protect", question:"Does your organization use multi-factor authentication (MFA)?",
     options:["Yes, required on all accounts","Yes, but only on some accounts (e.g., admin)","No, but planning to add it","No / not sure"] },
   { id:"endpoint", nistFunction:"Protect", question:"What endpoint/antivirus protection is on your computers?",
@@ -3342,7 +5906,17 @@ const NIST_COLORS = {
 // Compliance frameworks the user can select in the assessment. These flow
 // into the AI-generated compliance mapping. CIS Controls additionally offers
 // an Implementation Group choice (IG1/IG2/IG3).
-const COMPLIANCE_FRAMEWORKS = [
+// Fallback only — the real list comes from GET /api/compliance/frameworks.
+//
+// This was the framework picker's hardcoded source: 7 frameworks, last edited
+// when that was true. The backend now serves 12 (NIST 800-53, 800-171, CMMC,
+// FTC Safeguards and State Privacy were all built and then unreachable at the
+// one place a client selects them). A hardcoded product catalogue in the UI
+// silently rots every time the backend ships something.
+//
+// useFrameworkCatalog() fetches the live list. This array is what renders if the
+// request fails — better a stale picker than an empty one.
+const COMPLIANCE_FRAMEWORKS_FALLBACK = [
   { id:"nist-csf", name:"NIST CSF",      desc:"NIST Cybersecurity Framework — always applied as the scoring baseline.", always:true },
   { id:"cis",      name:"CIS Controls v8.1", desc:"18 prioritized controls for small & mid-sized businesses.", hasIG:true },
   { id:"hipaa",    name:"HIPAA",         desc:"Health data privacy & security (US healthcare)." },
@@ -3358,22 +5932,228 @@ const CIS_IG_OPTIONS = [
   { id:"IG3", label:"IG3", sub:"Full set — high-value / targeted-threat orgs (153)" },
 ];
 
-function ChecklistScreen({ onComplete, onBack }) {
+// The live checklist — all 35 questions, straight from the engine that scores
+// them.
+//
+// Two kinds come back, distinguished by `affectsPostureScore`:
+//   true  — the 13 NIST-weighted questions that drive the posture score.
+//   false — 22 evidence questions that frameworks read but scoring ignores.
+//
+// The split matters and must be preserved in the UI. The posture score is
+// normalised across only the scoring questions; if the evidence answers ever
+// leaked into that calculation, every historical client's score would shift.
+// The backend enforces this (SCORING_CHECKLIST vs SECURITY_CHECKLIST), so the
+// UI just needs to collect all 35 and let the server sort it out.
+let _checklistCache = null;
+function useSecurityChecklist() {
+  const [list, setList] = useState(_checklistCache);
+  useEffect(() => {
+    if (_checklistCache) return;
+    let live = true;
+    fetch(`${API_BASE}/api/tasks/controls`, {
+      headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => {
+        const rows = (Array.isArray(d) ? d : []).map(q => ({
+          id: q.id,
+          question: q.question,
+          nistFunction: q.nistFunction,
+          factor: q.factor,
+          options: q.options,
+          section: q.section || q.nistFunction,
+          affectsPostureScore: q.affectsPostureScore !== false,
+        }));
+        if (live && rows.length) { _checklistCache = rows; setList(rows); }
+      })
+      .catch(() => { /* fall back to the static 13 */ });
+    return () => { live = false; };
+  }, []);
+  return list || SECURITY_CHECKLIST_FALLBACK;
+}
+// The live framework catalogue, straight from the registry that actually
+// assesses them. Depth ("control-mapped" vs "ai-assisted") comes through so the
+// picker can be honest about which frameworks get a real control walkthrough and
+// which get an AI gap analysis — a client choosing GDPR should know before they
+// pick it, not after.
+let _fwCatalogCache = null;
+function useFrameworkCatalog() {
+  const [list, setList] = useState(_fwCatalogCache);
+  useEffect(() => {
+    if (_fwCatalogCache) return;
+    let live = true;
+    fetch(`${API_BASE}/api/compliance/frameworks`, {
+      headers: getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {},
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => {
+        const rows = (Array.isArray(d) ? d : []).map(f => ({
+          id: f.id,
+          name: f.short || f.name,
+          desc: f.description || "",
+          depth: f.depth,
+          // Carried through so the picker can show what a client is choosing:
+          // "93 controls" vs "AI gap analysis" is the difference between a
+          // control-by-control walkthrough and the model's interpretation.
+          requirementCount: f.requirementCount,
+          note: f.note || null,
+          legalReviewRequired: f.legalReviewRequired || false,
+          always: f.id === "nist-csf",
+          hasIG: f.id === "cis",
+        }));
+        if (live && rows.length) { _fwCatalogCache = rows; setList(rows); }
+      })
+      .catch(() => { /* fall back to the static list */ });
+    return () => { live = false; };
+  }, []);
+  return list || COMPLIANCE_FRAMEWORKS_FALLBACK;
+}
+
+// ── Framework foundation: NIST, CIS, or both ──────────────────
+// Shown once, before the checklist. The client picks the lens their posture
+// score and program are framed in. This is a real choice with real
+// consequences (it changes how the score is grouped and labelled), so it gets
+// its own screen with an honest explanation rather than being buried as a
+// checkbox — most SMB owners have heard "NIST" and "CIS" and don't know the
+// difference, and guessing costs them nothing to fix but shapes everything that
+// follows.
+function FrameworkFoundationScreen({ onComplete, onBack, initial = "nist" }) {
+  const [choice, setChoice] = useState(initial);
+
+  const options = [
+    {
+      id: "nist",
+      name: "NIST Cybersecurity Framework",
+      tag: "Most widely recognized",
+      body: "The framework insurers, auditors, and government contracts ask about most often. Organizes security into five functions — Identify, Protect, Detect, Respond, Recover. A safe default if you're not sure.",
+      best: "Best if you want the most portable, widely-understood score.",
+    },
+    {
+      id: "cis",
+      name: "CIS Controls v8.1",
+      tag: "Most actionable for SMBs",
+      body: "A prioritized, practical checklist built from real attack data. Its Implementation Group 1 is designed specifically for small businesses with limited IT resources — it tells you what to do first.",
+      best: "Best if you want a concrete, do-this-next roadmap.",
+    },
+    {
+      id: "both",
+      name: "Both",
+      tag: "Most complete",
+      body: "Score and track against both. Your headline posture number stays in NIST terms (so it's comparable everywhere), with the full CIS view alongside. More to work through, but nothing left out.",
+      best: "Best if you're pursuing certification or answering to multiple parties.",
+    },
+  ];
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", background: C.bg, fontFamily: "Inter,system-ui,sans-serif", padding: "32px 24px" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <h2 style={{ color: C.text, fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Choose your framework foundation</h2>
+        <p style={{ color: C.textSec, fontSize: 13, lineHeight: 1.7, margin: "0 0 4px" }}>
+          Security frameworks are different lenses on the same question: is this business protected?
+          Your answers won't change — this decides how your posture score is grouped and which
+          standard your program is framed in. You can change it later; it isn't locked in.
+        </p>
+        <p style={{ color: C.textMut, fontSize: 12, lineHeight: 1.6, margin: "0 0 22px" }}>
+          Whatever you pick, all 12 compliance frameworks (HIPAA, PCI, SOC 2, and the rest) remain
+          available to assess against — this choice is only about your core posture score.
+        </p>
+
+        <div style={{ display: "grid", gap: 12 }}>
+          {options.map(o => {
+            const sel = choice === o.id;
+            return (
+              <button key={o.id} onClick={() => setChoice(o.id)}
+                style={{
+                  textAlign: "left", padding: "18px 20px", borderRadius: 12, cursor: "pointer",
+                  background: sel ? `${C.accent}14` : C.card,
+                  border: `1.5px solid ${sel ? C.accent : C.border}`,
+                  transition: "all .12s",
+                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: "50%", flexShrink: 0,
+                    border: `2px solid ${sel ? C.accent : C.borderHi}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    {sel && <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent }} />}
+                  </div>
+                  <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>{o.name}</span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: 0.4, padding: "2px 8px", borderRadius: 999,
+                    background: `${C.accent}1A`, color: C.accent, marginLeft: "auto",
+                  }}>{o.tag}</span>
+                </div>
+                <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 6px", paddingLeft: 28 }}>{o.body}</p>
+                <p style={{ color: sel ? C.accent : C.textMut, fontSize: 11.5, margin: 0, paddingLeft: 28, fontWeight: 500 }}>{o.best}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
+          <button onClick={onBack} style={{
+            padding: "10px 18px", borderRadius: 8, cursor: "pointer",
+            background: "transparent", border: `1px solid ${C.border}`, color: C.textSec, fontSize: 13,
+          }}>← Back</button>
+          <button onClick={() => onComplete(choice)} style={{
+            padding: "10px 22px", borderRadius: 8, cursor: "pointer", border: "none",
+            background: `linear-gradient(135deg,${C.accent},${C.accentDm})`, color: C.bg, fontSize: 13, fontWeight: 700,
+            marginLeft: "auto",
+          }}>Continue →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
+  // Live catalogue, not the stale 7-item constant.
+  const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  // All 35 questions, not the frozen 13. The 22 evidence questions are what
+  // make most of the framework catalogue assessable — without them the backend
+  // scores what it can and reports "not yet assessed" for the rest.
+  const SECURITY_CHECKLIST = useSecurityChecklist();
   const [answers, setAnswers] = useState({});
-  // Selected compliance frameworks (NIST CSF is always on). Stored as a set of ids.
-  const [frameworks, setFrameworks] = useState(["nist-csf"]);
+  // Foundation frameworks come from the lens the client chose on the previous
+  // screen: NIST → nist-csf, CIS → cis, both → both. These are the posture
+  // foundation and can't be toggled off here (that choice was already made);
+  // additional compliance frameworks stack on top.
+  const foundationIds =
+    frameworkLens === "cis" ? ["cis"]
+    : frameworkLens === "both" ? ["nist-csf", "cis"]
+    : ["nist-csf"];
+  const [frameworks, setFrameworks] = useState(foundationIds);
+  const isFoundation = (id) => foundationIds.includes(id);
   const [cisIG, setCisIG] = useState("IG1");
+  // The gate is the 13 SCORING questions, not all 35.
+  //
+  // The posture score needs all 13 — it's normalised across them, and a missing
+  // answer would silently reweight the rest. The 22 evidence questions are
+  // different: the engine reports an unanswered one as "not yet assessed"
+  // rather than assuming it met or failed, so a partial answer set produces a
+  // partial assessment, which is honest and useful.
+  //
+  // Blocking submission on all 35 would turn a 13-question intake into a
+  // 35-question wall. People abandon those, and an abandoned assessment scores
+  // nothing at all. Answer what you can; every extra answer makes more of the
+  // framework catalogue assessable, and the UI says so.
+  const required = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore !== false);
+  const optional = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore === false);
   const total = SECURITY_CHECKLIST.length;
   const answered = Object.keys(answers).length;
-  const allAnswered = answered === total;
+  const requiredAnswered = required.filter(q => answers[q.id] !== undefined).length;
+  const optionalAnswered = optional.filter(q => answers[q.id] !== undefined).length;
+  const allAnswered = requiredAnswered === required.length;
 
   function selectAnswer(qId, option) {
     setAnswers(prev => ({ ...prev, [qId]: option }));
   }
 
   function toggleFramework(id) {
-    const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id);
-    if (fw?.always) return; // NIST CSF can't be turned off
+    // Foundation frameworks (the lens the client picked) can't be toggled off
+    // here — that decision was made on the previous screen. Everything else
+    // stacks freely.
+    if (isFoundation(id)) return;
     setFrameworks(prev =>
       prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
     );
@@ -3389,8 +6169,15 @@ function ChecklistScreen({ onComplete, onBack }) {
     });
   }
 
+  // Scoring questions group under their NIST function; evidence questions under
+  // their own section (Access & Identity, Data Protection, Vendors, Governance,
+  // Privacy). Grouping evidence questions by nistFunction would file them all
+  // under "undefined" — they deliberately have no NIST weight.
   const grouped = SECURITY_CHECKLIST.reduce((acc, q) => {
-    (acc[q.nistFunction] = acc[q.nistFunction] || []).push(q);
+    const key = q.affectsPostureScore === false
+      ? (q.section || "Additional detail")
+      : q.nistFunction;
+    (acc[key] = acc[key] || []).push(q);
     return acc;
   }, {});
 
@@ -3420,19 +6207,21 @@ function ChecklistScreen({ onComplete, onBack }) {
               textTransform:"uppercase"}}>Compliance Frameworks</span>
           </div>
           <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 14px"}}>
-            Select the frameworks your business needs to map against. We'll generate a
-            tailored gap analysis for each. NIST CSF is always included as the scoring baseline.
+            Your posture foundation is locked in from your framework choice. Add any
+            compliance frameworks your business needs to map against — we'll generate a
+            tailored gap analysis for each.
           </p>
 
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {COMPLIANCE_FRAMEWORKS.map(fw => {
               const on = frameworks.includes(fw.id);
+              const locked = isFoundation(fw.id);
               return (
                 <button key={fw.id} onClick={() => toggleFramework(fw.id)}
-                  title={fw.desc}
-                  disabled={fw.always}
+                  title={locked ? "Your posture foundation — chosen on the previous screen" : fw.desc}
+                  disabled={locked}
                   style={{textAlign:"left",padding:"9px 13px",borderRadius:9,
-                    cursor: fw.always ? "default" : "pointer",
+                    cursor: locked ? "default" : "pointer",
                     background: on ? `${C.accent}18` : C.surface,
                     border:`1px solid ${on ? C.accent : C.border}`,
                     color: on ? C.text : C.textSec,
@@ -3446,8 +6235,17 @@ function ChecklistScreen({ onComplete, onBack }) {
                   </span>
                   <span>
                     <span style={{fontSize:13,fontWeight:600,display:"block"}}>{fw.name}</span>
-                    {fw.always &&
-                      <span style={{fontSize:10,color:C.textSec}}>baseline</span>}
+                    {/* What the client is actually choosing. "AI-assisted" means
+                        a contextual gap analysis, not a control-by-control
+                        walkthrough — they should know that before they pick it,
+                        not discover it in the report. */}
+                    {locked ? (
+                      <span style={{fontSize:10,color:C.accent,fontWeight:600}}>your foundation</span>
+                    ) : fw.depth === "ai-assisted" ? (
+                      <span style={{fontSize:10,color:C.amber}}>AI gap analysis</span>
+                    ) : typeof fw.requirementCount === "number" ? (
+                      <span style={{fontSize:10,color:C.textMut}}>{fw.requirementCount} controls</span>
+                    ) : null}
                   </span>
                 </button>
               );
@@ -3496,20 +6294,35 @@ function ChecklistScreen({ onComplete, onBack }) {
         <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,
           padding:"10px 0 14px",marginBottom:6}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <span style={{color:C.textSec,fontSize:12}}>{answered} of {total} answered</span>
+            <span style={{color:C.textSec,fontSize:12}}>
+              {requiredAnswered} of {required.length} required
+              {optionalAnswered > 0 && <span style={{color:C.textMut}}> · {optionalAnswered} of {optional.length} optional</span>}
+            </span>
             <span style={{color:C.accent,fontSize:12,fontWeight:700}}>
-              {Math.round((answered/total)*100)}%
+              {Math.round((requiredAnswered/required.length)*100)}%
             </span>
           </div>
-          <ProgressBar value={(answered/total)*100} color={C.accent}/>
+          <ProgressBar value={(requiredAnswered/required.length)*100} color={C.accent}/>
         </div>
 
-        {Object.entries(grouped).map(([fn, questions]) => (
+        {Object.entries(grouped).map(([fn, questions]) => {
+          // Evidence sections have no NIST colour because they carry no NIST
+          // weight — that's the point. They're marked optional and told why:
+          // a client skipping them isn't failing, they're leaving controls
+          // unassessed, and they should know which trade they're making.
+          const isEvidence = questions[0]?.affectsPostureScore === false;
+          const color = isEvidence ? C.textSec : NIST_COLORS[fn];
+          return (
           <div key={fn} style={{marginBottom:24}}>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-              <div style={{width:10,height:10,borderRadius:"50%",background:NIST_COLORS[fn]}}/>
-              <span style={{color:NIST_COLORS[fn],fontSize:12,fontWeight:700,
+              <div style={{width:10,height:10,borderRadius:"50%",background:color}}/>
+              <span style={{color,fontSize:12,fontWeight:700,
                 letterSpacing:1.5,textTransform:"uppercase"}}>{fn}</span>
+              {isEvidence && (
+                <span style={{fontSize:10,color:C.textMut,textTransform:"none",letterSpacing:0}}>
+                  optional — doesn't change your posture score, but makes more compliance controls assessable
+                </span>
+              )}
             </div>
 
             {questions.map(q => (
@@ -3545,7 +6358,7 @@ function ChecklistScreen({ onComplete, onBack }) {
               </div>
             ))}
           </div>
-        ))}
+        ); })}
 
         <div style={{position:"sticky",bottom:0,background:C.bg,padding:"16px 0",
           borderTop:`1px solid ${C.border}`,marginTop:8}}>
@@ -3555,10 +6368,461 @@ function ChecklistScreen({ onComplete, onBack }) {
               color: allAnswered ? C.bg : C.textMut,
               fontSize:15,fontWeight:700,
               cursor: allAnswered ? "pointer" : "not-allowed"}}>
-            {allAnswered ? "Generate Security Program →" : `Answer all questions (${total-answered} remaining)`}
+            {allAnswered
+              ? (optionalAnswered < optional.length
+                  ? `Generate Security Program → (${optional.length - optionalAnswered} optional left)`
+                  : "Generate Security Program →")
+              : `Answer the required questions (${required.length - requiredAnswered} remaining)`}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ADMIN — HIBP domain enrollment queue
+// ─────────────────────────────────────────────────────────────
+// HIBP has no API to enroll a domain: a human must add it at
+// haveibeenpwned.com/DomainSearch and complete their verification. This queue
+// is the bridge between that manual step and ShieldAI's state — it shows what
+// is actionable right now and records what happened.
+//
+// The backend refuses to mark a domain "verified" until the client has proved
+// ownership via DNS, so this UI can't be used to switch monitoring on for a
+// domain nobody proved they control.
+// ─────────────────────────────────────────────────────────────
+//  ADMIN — threat intelligence service status
+// ─────────────────────────────────────────────────────────────
+// Shows which external intel services are wired up and, more usefully, what
+// each gap actually costs. Distinguishes a BLOCKER (no HIBP key = no breach
+// data at all) from an ADVISORY (no NVD key = slow, but still accurate) —
+// because treating those the same would train you to ignore both.
+//
+// The probe button really calls each API. A key being set is not proof the
+// service answers, and during a demo "configured" is a much weaker claim than
+// "responded in 240ms".
+// Admin / Mastermind fleet-wide training snapshot across all clients.
+function AdminTrainingOverview() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/training-program/overview`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load training overview.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <Spinner/>;
+  if (error) return <div style={{padding:"9px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
+    borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>;
+
+  const per = data?.perClient || [];
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <SectionLabel text="Training — Fleet Overview"/>
+        <button onClick={load} style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>↻ Refresh</button>
+      </div>
+
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:18}}>
+        {[
+          ["Learners", data?.totalLearners ?? 0, C.accent],
+          ["Assignments", data?.totalAssignments ?? 0, C.text],
+          ["Completed", data?.completed ?? 0, C.green],
+          ["Overdue", data?.overdue ?? 0, data?.overdue ? C.red : C.textSec],
+        ].map(([l,v,t],i)=>(
+          <div key={i} style={{flex:"1 1 150px",padding:"16px 18px",background:C.card,
+            border:`1px solid ${C.border}`,borderRadius:12}}>
+            <div style={{fontSize:28,fontWeight:800,color:t,lineHeight:1}}>{v}</div>
+            <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginTop:5}}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <SectionLabel text="By Client"/>
+      <div style={{marginTop:10}}>
+        {per.length === 0 ? (
+          <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No training activity across the fleet yet.</div>
+        ) : per.map((c,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
+            background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.text}}>{c.company}</div>
+              <div style={{fontSize:11,color:C.textMut}}>{c.assigned} assigned · {c.completed} completed{c.overdue?` · ${c.overdue} overdue`:""}</div>
+            </div>
+            <div style={{width:110,height:7,borderRadius:6,background:C.surface,overflow:"hidden"}}>
+              <div style={{width:`${c.completionRate}%`,height:"100%",
+                background:c.completionRate>=80?C.green:c.completionRate>=50?C.amber:C.red}}/>
+            </div>
+            <span style={{fontSize:12,fontWeight:700,minWidth:44,textAlign:"right",
+              color:c.completionRate>=80?C.green:c.completionRate>=50?C.amber:C.red}}>{c.completionRate}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminThreatIntelStatus() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [probes, setProbes] = useState(null);
+  const [probing, setProbing] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/threat-intel/status`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load service status.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function probe() {
+    setProbing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/threat-intel/probe`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Probe failed.");
+      setProbes(d.probes);
+    } catch (e) { setError(e.message); }
+    finally { setProbing(false); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  const s = data?.summary || {};
+
+  return (
+    <div>
+      {error && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,fontSize:13}}>{error}</div>
+      )}
+
+      {/* Blockers — things that mean a feature is simply off */}
+      {(s.blockers || []).map((b,i)=>(
+        <div key={i} style={{marginBottom:10,padding:"11px 14px",background:`${C.red}12`,
+          border:`1px solid ${C.red}38`,borderRadius:8,color:C.red,fontSize:12.5,lineHeight:1.55}}>
+          ⛔ {b}
+        </div>
+      ))}
+      {/* Advisories — degraded, not broken */}
+      {(s.advisories || []).map((a,i)=>(
+        <div key={i} style={{marginBottom:10,padding:"11px 14px",background:`${C.amber}12`,
+          border:`1px solid ${C.amber}38`,borderRadius:8,color:C.amber,fontSize:12.5,lineHeight:1.55}}>
+          ⚠️ {a}
+        </div>
+      ))}
+      {!(s.blockers||[]).length && !(s.advisories||[]).length && (
+        <div style={{marginBottom:10,padding:"11px 14px",background:`${C.green}12`,
+          border:`1px solid ${C.green}38`,borderRadius:8,color:C.green,fontSize:12.5}}>
+          ✓ All threat-intelligence services are configured.
+        </div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+        <button onClick={probe} disabled={probing}
+          style={{padding:"8px 15px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:7,color:C.accent,fontSize:12,fontWeight:700,
+            cursor:probing?"default":"pointer",opacity:probing?0.6:1}}>
+          {probing ? "Probing live services…" : "Run live probe"}
+        </button>
+      </div>
+
+      {(data?.services || []).map(svc => {
+        const p = probes?.[svc.id];
+        const tone = svc.configured ? (svc.required ? C.green : C.accent) : (svc.required ? C.red : C.amber);
+        return (
+          <Card key={svc.id} style={{marginBottom:12,borderColor:`${tone}33`}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12}}>
+              <div style={{flex:"1 1 280px",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
+                  <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{svc.name}</span>
+                  <Badge label={svc.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
+                  <Badge label={svc.required ? "REQUIRED" : "OPTIONAL"}
+                    color={svc.required ? C.purple : C.textMut}/>
+                </div>
+                <div style={{fontSize:12,color:C.textSec,lineHeight:1.55}}>{svc.purpose}</div>
+              </div>
+              {!svc.configured && (
+                <a href={svc.keyUrl} target="_blank" rel="noopener noreferrer"
+                  style={{padding:"7px 13px",background:`${tone}15`,border:`1px solid ${tone}44`,
+                    borderRadius:6,color:tone,fontSize:11.5,fontWeight:700,textDecoration:"none",
+                    whiteSpace:"nowrap"}}>
+                  Get a key ↗
+                </a>
+              )}
+            </div>
+
+            <div style={{padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:7,marginBottom:10}}>
+              <div style={{fontSize:12,color:C.text,marginBottom:5}}>{svc.impact}</div>
+              <div style={{fontSize:11,color:C.textMut,lineHeight:1.5}}>{svc.degradesTo}</div>
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
+              <IntelStat label="Env var" value={svc.envVar} mono/>
+              <IntelStat label="Rate limit" value={`${(svc.minIntervalMs/1000).toFixed(1)}s / request`}/>
+              <IntelStat label="Cached" value={`${svc.cacheEntries} (${svc.cacheTtlHours}h TTL)`}/>
+              {svc.id === "nvd" && (
+                <IntelStat label="Full refresh" value={`~${svc.worstCaseRefreshSec}s`}
+                  color={svc.configured ? C.green : C.amber}/>
+              )}
+              {svc.id === "hibp" && (
+                <IntelStat label="Domains live" value={`${svc.domainsMonitored} / ${svc.domainsRegistered}`}
+                  color={svc.domainsMonitored ? C.green : C.textMut}/>
+              )}
+            </div>
+
+            {p && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <Badge label={p.ok ? "RESPONDING" : p.reachable === null ? "NOT PROBED" : "FAILED"}
+                  color={p.ok ? C.green : p.reachable === null ? C.textMut : C.red}/>
+                <span style={{fontSize:12,color:C.textSec,flex:"1 1 200px"}}>{p.detail}</span>
+                {p.latencyMs > 0 && (
+                  <span style={{fontSize:11.5,color:C.textMut,fontFamily:"monospace"}}>{p.latencyMs}ms</span>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+
+      <div style={{fontSize:11,color:C.textMut,lineHeight:1.6,marginTop:4}}>
+        Keys are read from the environment at startup. After changing one on Railway,
+        redeploy for it to take effect.
+      </div>
+    </div>
+  );
+}
+
+// Small labelled figure used by the threat-intel status cards. Named distinctly
+// because AnalystConsole defines its own local `Stat` with a different API —
+// relying on shadowing to keep them apart would be a trap for the next edit.
+function IntelStat({ label, value, color, mono }) {
+  return (
+    <div style={{padding:"9px 11px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7}}>
+      <div style={{fontSize:10,color:C.textMut,fontWeight:600,letterSpacing:0.3,marginBottom:4}}>
+        {label.toUpperCase()}
+      </div>
+      <div style={{fontSize:12.5,fontWeight:700,color:color||C.text,
+        fontFamily:mono?"monospace":"inherit",wordBreak:"break-word"}}>{value}</div>
+    </div>
+  );
+}
+
+function AdminDomainQueue() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [noteFor, setNoteFor] = useState(null);
+  const [noteText, setNoteText] = useState("");
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load domains.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function setStatus(userId, status, note = "") {
+    setBusy(userId + status); setError(null); setNotice(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/hibp-status`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, note }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not update status.");
+      setNotice(`${d.domain} → ${status.replace("_"," ")}`);
+      setNoteFor(null); setNoteText("");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function recheck(userId) {
+    setBusy(userId + "recheck"); setError(null); setNotice(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/recheck`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Recheck failed.");
+      setNotice(`DNS recheck: ${d.ownership}`);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  if (loading) return <Spinner/>;
+
+  const c = data?.counts || {};
+  const stats = [
+    { label:"Ready to enroll",  value:c.readyToEnroll||0, color:C.green },
+    { label:"Awaiting HIBP",    value:c.awaitingHibp||0,  color:C.amber },
+    { label:"Awaiting client",  value:c.awaitingClient||0,color:C.accent },
+    { label:"Monitored",        value:c.monitored||0,     color:C.purple },
+  ];
+
+  const ownershipBadge = (o) =>
+    o === "verified" ? { label:"OWNERSHIP VERIFIED", color:C.green }
+    : o === "failed"  ? { label:"DNS CHECK FAILED",   color:C.red }
+    : { label:"AWAITING DNS", color:C.textMut };
+
+  const hibpBadge = (h) => ({
+    verified:      { label:"MONITORING LIVE", color:C.green },
+    submitted:     { label:"SUBMITTED",       color:C.amber },
+    rejected:      { label:"REJECTED",        color:C.red },
+    not_submitted: { label:"NOT ENROLLED",    color:C.textMut },
+  }[h] || { label:h, color:C.textMut });
+
+  return (
+    <div>
+      {!data?.serviceConfigured && (
+        <div style={{marginBottom:16,padding:"11px 14px",background:`${C.amber}15`,
+          border:`1px solid ${C.amber}38`,borderRadius:8,color:C.amber,fontSize:12.5,lineHeight:1.55}}>
+          ⚠️ <strong>HIBP_API_KEY isn't set on this deployment.</strong> Breach monitoring stays
+          inactive for every client regardless of the statuses below.
+        </div>
+      )}
+      {notice && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.green}15`,
+          border:`1px solid ${C.green}33`,borderRadius:8,color:C.green,fontSize:13}}>{notice}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.red,fontSize:13}}>{error}</div>
+      )}
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+        {stats.map((s,i)=>(
+          <div key={i} style={{flex:"1 1 120px",padding:"12px 14px",background:C.card,
+            border:`1px solid ${C.border}`,borderRadius:9}}>
+            <div style={{fontSize:22,fontWeight:800,color:s.color,lineHeight:1}}>{s.value}</div>
+            <div style={{fontSize:11,color:C.textSec,marginTop:5}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{marginBottom:16,padding:"11px 14px",background:C.surface,
+        border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.textSec,lineHeight:1.6}}>
+        {data?.note}{" "}
+        <a href={data?.dashboardUrl} target="_blank" rel="noopener noreferrer"
+          style={{color:C.accent,fontWeight:600,textDecoration:"none"}}>
+          Open HIBP Domain Search ↗
+        </a>
+      </div>
+
+      {(data?.domains || []).length === 0 ? (
+        <Card><div style={{color:C.textSec,fontSize:13,padding:"8px 0"}}>
+          No client has registered a company domain yet.
+        </div></Card>
+      ) : (data.domains).map(d => {
+        const ob = ownershipBadge(d.ownership);
+        const hb = hibpBadge(d.hibpStatus);
+        return (
+          <Card key={d.id} style={{marginBottom:10,
+            borderColor: d.actionable ? `${C.green}44` : C.border}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+              <div style={{flex:"1 1 260px",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
+                  <span style={{fontSize:14,fontWeight:700,color:C.text,fontFamily:"monospace"}}>{d.domain}</span>
+                  {d.actionable && <Badge label="READY TO ENROLL" color={C.green}/>}
+                </div>
+                <div style={{fontSize:12,color:C.textSec,marginBottom:8}}>
+                  {d.companyName} · {d.email}
+                </div>
+                <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                  <Badge label={ob.label} color={ob.color}/>
+                  <Badge label={hb.label} color={hb.color}/>
+                </div>
+                {d.lastCheckError && d.ownership !== "verified" && (
+                  <div style={{fontSize:11,color:C.textMut,marginTop:8,lineHeight:1.5}}>
+                    {d.lastCheckError}
+                  </div>
+                )}
+                {d.hibpNote && (
+                  <div style={{fontSize:11,color:C.textMut,marginTop:6,fontStyle:"italic"}}>
+                    Note: {d.hibpNote}
+                  </div>
+                )}
+              </div>
+
+              <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"flex-start"}}>
+                <button onClick={()=>recheck(d.userId)} disabled={!!busy}
+                  style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:6,color:C.textSec,fontSize:11.5,cursor:busy?"default":"pointer"}}>
+                  {busy===d.userId+"recheck" ? "Checking…" : "Recheck DNS"}
+                </button>
+
+                {d.ownership === "verified" && d.hibpStatus === "not_submitted" && (
+                  <button onClick={()=>setStatus(d.userId,"submitted","added to HIBP dashboard")} disabled={!!busy}
+                    style={{padding:"7px 12px",background:`${C.amber}18`,border:`1px solid ${C.amber}55`,
+                      borderRadius:6,color:C.amber,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
+                    Mark submitted
+                  </button>
+                )}
+                {d.ownership === "verified" && d.hibpStatus === "submitted" && (
+                  <button onClick={()=>setStatus(d.userId,"verified")} disabled={!!busy}
+                    style={{padding:"7px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                      borderRadius:6,color:C.green,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
+                    Mark verified — go live
+                  </button>
+                )}
+                {d.hibpStatus !== "rejected" && d.ownership === "verified" && (
+                  <button onClick={()=>{ setNoteFor(noteFor===d.userId?null:d.userId); setNoteText(""); }}
+                    style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
+                      borderRadius:6,color:C.textMut,fontSize:11.5,cursor:"pointer"}}>
+                    Reject
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {noteFor === d.userId && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                display:"flex",gap:8,flexWrap:"wrap"}}>
+                <input value={noteText} onChange={e=>setNoteText(e.target.value)}
+                  placeholder="Why is monitoring not possible for this domain?"
+                  style={{flex:"1 1 260px",padding:"9px 11px",background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5,
+                    fontFamily:"Inter,system-ui,sans-serif"}}/>
+                <button onClick={()=>setStatus(d.userId,"rejected",noteText)} disabled={!!busy||!noteText.trim()}
+                  style={{padding:"9px 14px",background:`${C.red}18`,border:`1px solid ${C.red}55`,
+                    borderRadius:7,color:C.red,fontSize:12,fontWeight:600,
+                    cursor:busy||!noteText.trim()?"default":"pointer",opacity:!noteText.trim()?0.5:1}}>
+                  Confirm reject
+                </button>
+              </div>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }
@@ -3695,9 +6959,10 @@ function AdminPanel({ onClose }) {
 
   const TIER_LIST = [
     { id:"free", name:"Free", price:"$0" },
-    { id:"starter", name:"Starter", price:"$99/mo" },
-    { id:"pro", name:"Pro", price:"$299/mo" },
-    { id:"enterprise", name:"Enterprise", price:"Custom" },
+    { id:"starter", name:"Starter", price:"$159/mo" },
+    { id:"growth", name:"Growth", price:"$349/mo" },
+    { id:"guided", name:"Guided", price:"$699/mo" },
+    { id:"managed", name:"Managed vCISO", price:"$1,950/mo" },
   ];
 
   // Load the rich account-control record for a user.
@@ -3830,6 +7095,32 @@ function AdminPanel({ onClose }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Approve a lead → mint an access code (investor or client) and mark the lead
+  // qualified. Returns the generated code so the admin can send it to the person.
+  async function approveLead(id, type) {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/leads/${id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not approve.");
+      const code = data.accessCode?.code;
+      const expiresAt = data.accessCode?.expiresAt;
+      const ttlHours = data.accessCode?.ttlHours;
+      setLeads(prev => prev.map(l => l.id === id
+        ? { ...l, status: "qualified", accessCode: code, accessType: type, accessExpiresAt: expiresAt, accessTtlHours: ttlHours } : l));
+      setNotice(`Approved · ${type} code ${code} (valid ${ttlHours||""}h)`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -4057,11 +7348,6 @@ function AdminPanel({ onClose }) {
   }
 
   // ── USER DETAIL VIEW ────────────────────────────────────
-  if (view === "workspace" && userDetail) {
-    return <WorkspaceViewer client={{ id:userDetail.id, name:userDetail.companyName||userDetail.email, email:userDetail.email, tier:userDetail.tier }}
-             onBack={()=>setView("user")}/>;
-  }
-
   if (view === "user") {
     const u = userDetail;
     return (
@@ -4088,11 +7374,6 @@ function AdminPanel({ onClose }) {
                   </div>
                   {!u.isAdmin && (
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                      <button onClick={() => setView("workspace")}
-                        style={{padding:"6px 14px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
-                          borderRadius:6,color:C.green,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
-                        View Workspace →
-                      </button>
                       <button onClick={() => { setResetFor(resetFor===u.id?null:u.id); setNewPw(""); }}
                         style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
                           borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -4415,6 +7696,9 @@ function AdminPanel({ onClose }) {
             { id:"accounts", label:"Accounts" },
             { id:"billing", label:"Billing" },
             { id:"assignments", label:"Assignments" },
+            { id:"domains", label:"Domains" },
+            { id:"intel", label:"Threat Intel" },
+            { id:"training", label:"Training" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"audit", label:"Audit Log" },
           ].map(t => {
@@ -4550,6 +7834,12 @@ function AdminPanel({ onClose }) {
           </>
         )}
 
+        {listTab === "domains" && <AdminDomainQueue/>}
+
+        {listTab === "intel" && <AdminThreatIntelStatus/>}
+
+        {listTab === "training" && <AdminTrainingOverview/>}
+
         {listTab === "leads" && (
           <LeadsPanel
             leads={leads}
@@ -4557,6 +7847,7 @@ function AdminPanel({ onClose }) {
             busy={busy}
             onRefresh={loadLeads}
             onSetStatus={setLeadStatus}
+            onApprove={approveLead}
             onDelete={deleteLead}
           />
         )}
@@ -4651,8 +7942,8 @@ function AdminPanel({ onClose }) {
                 <SectionLabel text="Per-Client Billing"/>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
                   {billing.rows.sort((a,b)=>b.priceCents-a.priceCents).map(r=>{
-                    const tierColor = r.tier==="enterprise"?C.purple:r.tier==="pro"?C.accent
-                      :r.tier==="starter"?C.green:C.textMut;
+                    const tierColor = r.tier==="managed"?C.purple:r.tier==="guided"?C.purple
+                      :r.tier==="growth"?C.accent:r.tier==="starter"?C.green:C.textMut;
                     const stColor = ["active","manual","trialing"].includes(r.status)?C.green
                       :r.status==="past_due"?C.amber:r.status==="free"?C.textMut:C.red;
                     return (
@@ -4779,7 +8070,7 @@ const LEAD_STATUSES = [
   { id:"closed",    label:"Closed",    color:C.textMut },
 ];
 
-function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) {
+function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, onDelete }) {
   const [filter, setFilter] = useState("all");
 
   const counts = leads.reduce((acc,l)=>{ const s=l.status||"new"; acc[s]=(acc[s]||0)+1; return acc; }, {});
@@ -4882,6 +8173,24 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) 
                         );
                       })}
                     </div>
+                    {/* Approve → mint access code. Investor = client+analyst
+                        tour; Client = client views only. */}
+                    <div style={{display:"flex",gap:5,justifyContent:"flex-end"}}>
+                      <button onClick={()=>onApprove(l.id, "investor")} disabled={busy===l.id}
+                        title="Approve as investor (client + analyst views)"
+                        style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:600,
+                          background:`${C.purple}18`,border:`1px solid ${C.purple}55`,color:C.purple,
+                          cursor:busy===l.id?"wait":"pointer"}}>
+                        ✓ Investor
+                      </button>
+                      <button onClick={()=>onApprove(l.id, "client")} disabled={busy===l.id}
+                        title="Approve as client demo (client views only)"
+                        style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:600,
+                          background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent,
+                          cursor:busy===l.id?"wait":"pointer"}}>
+                        ✓ Client
+                      </button>
+                    </div>
                     <button onClick={()=>onDelete(l.id, l.email)} disabled={busy===l.id}
                       style={{padding:"5px 12px",background:`${C.red}12`,border:`1px solid ${C.red}33`,
                         borderRadius:6,color:C.red,fontSize:11,fontWeight:600,
@@ -4890,6 +8199,30 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onDelete }) 
                     </button>
                   </div>
                 </div>
+
+                {/* Issued access code (after approval) */}
+                {l.accessCode && (
+                  <div style={{marginTop:12,padding:"10px 14px",background:`${C.green}10`,
+                    border:`1px solid ${C.green}33`,borderRadius:8,display:"flex",
+                    alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <span style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600}}>
+                      {(l.accessType||"").toUpperCase()} ACCESS CODE
+                    </span>
+                    <code style={{fontSize:15,fontWeight:700,color:C.green,letterSpacing:1.5,
+                      fontFamily:"ui-monospace,Menlo,monospace"}}>{l.accessCode}</code>
+                    <button onClick={()=>{ try { navigator.clipboard.writeText(l.accessCode); } catch { /* ignore */ } }}
+                      style={{padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,
+                        background:C.surface,color:C.textSec,fontSize:11,cursor:"pointer"}}>
+                      Copy
+                    </button>
+                    <span style={{fontSize:11,color:C.textMut}}>Send this to {l.email} — it's their only credential.</span>
+                    {l.accessExpiresAt && (
+                      <span style={{fontSize:11,color:C.amber,fontWeight:600,width:"100%"}}>
+                        Expires {new Date(l.accessExpiresAt).toLocaleString()} ({l.accessTtlHours||( l.accessType==="investor"?96:48)}h window)
+                      </span>
+                    )}
+                  </div>
+                )}
               </Card>
             );
           })}
@@ -5348,6 +8681,9 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
 //  EDIT ASSESSMENT — revise company info + checklist, optionally regenerate
 // ─────────────────────────────────────────────────────────────
 function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate }) {
+  // Live catalogue, not the stale 7-item constant.
+  const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  const SECURITY_CHECKLIST = useSecurityChecklist();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -5452,8 +8788,15 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
     }
   }
 
+  // Scoring questions group under their NIST function; evidence questions under
+  // their own section (Access & Identity, Data Protection, Vendors, Governance,
+  // Privacy). Grouping evidence questions by nistFunction would file them all
+  // under "undefined" — they deliberately have no NIST weight.
   const grouped = SECURITY_CHECKLIST.reduce((acc, q) => {
-    (acc[q.nistFunction] = acc[q.nistFunction] || []).push(q);
+    const key = q.affectsPostureScore === false
+      ? (q.section || "Additional detail")
+      : q.nistFunction;
+    (acc[key] = acc[key] || []).push(q);
     return acc;
   }, {});
 
@@ -5527,7 +8870,17 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                           display:"flex",alignItems:"center",justifyContent:"center"}}>
                           {on && <span style={{color:C.bg,fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
                         </span>
-                        {fw.name}
+                        <span style={{display:"flex",flexDirection:"column",alignItems:"flex-start",lineHeight:1.25}}>
+                          <span>{fw.name}</span>
+                          {/* Same honesty as the intake picker: an AI-assisted
+                              framework is a gap analysis, not a control
+                              walkthrough, and the client picks with that known. */}
+                          {fw.depth === "ai-assisted" ? (
+                            <span style={{fontSize:9.5,color:C.amber,fontWeight:400}}>AI gap analysis</span>
+                          ) : typeof fw.requirementCount === "number" ? (
+                            <span style={{fontSize:9.5,color:C.textMut,fontWeight:400}}>{fw.requirementCount} controls</span>
+                          ) : null}
+                        </span>
                       </button>
                     );
                   })}
@@ -5681,6 +9034,11 @@ const SOC = {
 };
 
 function pColor(s) {
+  // null/undefined means we haven't scored this client. It must NOT fall through
+  // to the red branch — an unscored client is not a critical one, and painting
+  // it red is as much a fabrication as painting it green. Neutral says "unknown",
+  // which is the truth and prompts someone to go and look.
+  if (typeof s !== "number") return SOC.textMut;
   return s >= 80 ? SOC.green : s >= 60 ? "#7ED957" : s >= 40 ? SOC.amber : SOC.red;
 }
 
@@ -5699,149 +9057,16 @@ function agentMeta(status) {
 }
 
 // 12 months of posture history per client (trend story)
-const SAMPLE_CLIENTS = [
-  {
-    id: "c1", name: "Meridian Dental Group", industry: "Healthcare", employees: "45",
-    posture: 53, level: "Developing", plan: "Managed vCISO", mrr: 1800,
-    status: "needs_review", lastActivity: "2h ago", compliance: ["HIPAA"],
-    weakest: ["Identify", "Respond"], openItems: 3,
-    history: [31, 34, 38, 38, 41, 44, 44, 47, 49, 49, 51, 53],
-    agent: { status: "healthy", endpoints: 38, lastSeen: "3 min ago", coverage: 84 },
-    compliancePct: { current: 62, target: 90, framework: "HIPAA" },
-    alerts: [
-      { sev: "high", title: "Phishing email reported by 2 staff", time: "18 min ago", detail: "Spoofed invoice from 'billing@meridian-dental.co' — quarantined." },
-      { sev: "medium", title: "Outdated OS on 3 endpoints", time: "2h ago", detail: "Workstations running unsupported Windows build." },
-      { sev: "low", title: "New device joined network", time: "5h ago", detail: "Unmanaged tablet on guest VLAN." },
-    ],
-    reviewQueue: [
-      { type: "Incident Response Policy", status: "awaiting_review", generated: "2h ago" },
-      { type: "Q2 Risk Reassessment", status: "awaiting_review", generated: "2h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Dr. Patel", text: "We had a staff member click something suspicious — should we be worried?", time: "20 min ago" },
-      { from: "analyst", who: "You", text: "Saw the alert come through — it was quarantined before any payload ran. I'm resetting that account's credentials as a precaution and will send a short refresher to the team.", time: "12 min ago" },
-      { from: "client", who: "Dr. Patel", text: "Thank you, that's a relief.", time: "8 min ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 71, enrolled: 45, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 38, avgScore: 84 },
-        { name: "Passwords & MFA", done: 41, avgScore: 91 },
-        { name: "Device & Mobile Security", done: 28, avgScore: 78 },
-        { name: "Incident Reporting", done: 25, avgScore: 73 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 45, clicked: 6, reported: 22, date: "Jun 12" },
-        { name: "Q1 Phishing Simulation", status: "complete", sent: 45, clicked: 11, reported: 14, date: "Mar 10" },
-      ] },
-  },
-  {
-    id: "c2", name: "Lakeside Financial Advisors", industry: "Finance", employees: "28",
-    posture: 91, level: "Strong", plan: "Managed vCISO", mrr: 2400,
-    status: "on_track", lastActivity: "1d ago", compliance: ["SEC", "SOC 2"],
-    weakest: ["Respond"], openItems: 1,
-    history: [68, 70, 72, 74, 77, 79, 81, 83, 85, 87, 89, 91],
-    agent: { status: "healthy", endpoints: 26, lastSeen: "1 min ago", coverage: 96 },
-    compliancePct: { current: 88, target: 95, framework: "SOC 2" },
-    alerts: [
-      { sev: "low", title: "Impossible-travel login flagged & cleared", time: "6h ago", detail: "VP logged in from two cities; confirmed VPN, no action needed." },
-    ],
-    reviewQueue: [
-      { type: "Backup & Recovery Policy", status: "approved", generated: "1d ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "Your SOC 2 evidence package is 88% complete — we're on track for the audit window.", time: "1d ago" },
-      { from: "client", who: "Sandra Kim", text: "Excellent. The board will be pleased.", time: "1d ago" },
-    ],
-    training: { active: "Annual Security Refresher", completion: 96, enrolled: 28, nextDue: "Complete",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 28, avgScore: 95 },
-        { name: "Business Email Compromise", done: 27, avgScore: 92 },
-        { name: "Data Protection & Privacy", done: 28, avgScore: 97 },
-        { name: "Secure Payment Verification", done: 26, avgScore: 90 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 28, clicked: 1, reported: 26, date: "Jun 5" },
-        { name: "Wire-Fraud Drill", status: "complete", sent: 28, clicked: 0, reported: 27, date: "May 2" },
-      ] },
-  },
-  {
-    id: "c3", name: "Apex Manufacturing", industry: "Manufacturing", employees: "120",
-    posture: 24, level: "At Risk", plan: "Assessment + Roadmap", mrr: 950,
-    status: "attention", lastActivity: "4h ago", compliance: ["CMMC"],
-    weakest: ["Protect", "Identify"], openItems: 7,
-    history: [18, 18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24],
-    agent: { status: "offline", endpoints: 0, lastSeen: "never", coverage: 0 },
-    compliancePct: { current: 19, target: 80, framework: "CMMC L2" },
-    alerts: [
-      { sev: "high", title: "No MFA on email — active brute-force attempts", time: "1h ago", detail: "47 failed logins on shared mailbox in past hour." },
-      { sev: "high", title: "Unpatched VPN appliance (critical CVE)", time: "3h ago", detail: "Internet-facing device vulnerable to known exploit." },
-      { sev: "medium", title: "Local admin rights on all workstations", time: "4h ago", detail: "Standard users can install software / disable controls." },
-    ],
-    reviewQueue: [
-      { type: "Initial Security Program", status: "awaiting_review", generated: "4h ago" },
-      { type: "Access Control Policy", status: "awaiting_review", generated: "4h ago" },
-      { type: "Data Classification Policy", status: "draft", generated: "5h ago" },
-    ],
-    chat: [
-      { from: "analyst", who: "You", text: "We've finished your initial assessment — there are a few urgent items I'd like to walk you through. Do you have 15 minutes tomorrow?", time: "3h ago" },
-      { from: "client", who: "Mike Torres", text: "Yeah, mornings are best. How bad is it?", time: "2h ago" },
-      { from: "analyst", who: "You", text: "Fixable, but we should move quickly on MFA and the VPN patch. I'll prep a prioritized list.", time: "2h ago" },
-    ],
-    training: { active: "Not yet deployed", completion: 0, enrolled: 0, nextDue: "—",
-      modules: [], campaigns: [] },
-  },
-  {
-    id: "c4", name: "BrightPath Marketing", industry: "Professional Services", employees: "16",
-    posture: 84, level: "Strong", plan: "Self-Serve + Quarterly Review", mrr: 450,
-    status: "on_track", lastActivity: "3d ago", compliance: ["GDPR"],
-    weakest: ["Detect"], openItems: 0,
-    history: [70, 72, 73, 75, 76, 78, 79, 80, 81, 82, 83, 84],
-    agent: { status: "degraded", endpoints: 14, lastSeen: "8 min ago", coverage: 64 },
-    compliancePct: { current: 80, target: 90, framework: "GDPR" },
-    alerts: [],
-    reviewQueue: [],
-    chat: [
-      { from: "client", who: "Jordan Lee", text: "Quick one — is it safe to use that new AI tool with client data?", time: "3d ago" },
-      { from: "analyst", who: "You", text: "Let me review their data-handling terms and get back to you with a recommendation.", time: "3d ago" },
-    ],
-    training: { active: "Data Privacy Essentials", completion: 88, enrolled: 16, nextDue: "Jul 15",
-      modules: [
-        { name: "Data Protection & Privacy", done: 15, avgScore: 89 },
-        { name: "Phishing & Social Engineering", done: 14, avgScore: 86 },
-        { name: "Remote Work & Wi-Fi Security", done: 13, avgScore: 82 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "complete", sent: 16, clicked: 2, reported: 12, date: "Jun 8" },
-      ] },
-  },
-  {
-    id: "c5", name: "Coastal Property Mgmt", industry: "Real Estate", employees: "33",
-    posture: 61, level: "Moderate", plan: "Managed vCISO", mrr: 1600,
-    status: "needs_review", lastActivity: "6h ago", compliance: ["State Privacy"],
-    weakest: ["Respond"], openItems: 2,
-    history: [44, 46, 47, 49, 51, 52, 54, 55, 57, 58, 60, 61],
-    agent: { status: "healthy", endpoints: 29, lastSeen: "12 min ago", coverage: 79 },
-    compliancePct: { current: 64, target: 85, framework: "State Privacy" },
-    alerts: [
-      { sev: "medium", title: "Shared password detected in cloud drive", time: "6h ago", detail: "Plaintext credentials file found in shared folder." },
-    ],
-    reviewQueue: [
-      { type: "Vendor Risk Policy", status: "awaiting_review", generated: "6h ago" },
-    ],
-    chat: [
-      { from: "client", who: "Rosa Mendes", text: "Got the vendor policy draft — looks good. One question on the cloud storage section.", time: "5h ago" },
-    ],
-    training: { active: "Phishing Awareness Q2", completion: 58, enrolled: 33, nextDue: "Jun 30",
-      modules: [
-        { name: "Phishing & Social Engineering", done: 24, avgScore: 79 },
-        { name: "Passwords & MFA", done: 22, avgScore: 81 },
-        { name: "Data Protection & Privacy", done: 18, avgScore: 75 },
-      ],
-      campaigns: [
-        { name: "Q2 Phishing Simulation", status: "active", sent: 33, clicked: 9, reported: 13, date: "Jun 14" },
-      ] },
-  },
-];
+// SAMPLE_CLIENTS deleted.
+//
+// 143 lines of hardcoded fake clients — "Meridian Dental Group", posture 53,
+// $1,800 MRR, invented phishing alerts — that drove the analyst console's
+// landing page and its KPI tiles, including Monthly Recurring Revenue and
+// Average Posture. Real client data was already being fetched from
+// /api/analyst/clients and rendered only in a secondary tab.
+//
+// The console now reads /api/analyst/portfolio. Every field is real or
+// explicitly null, and null renders as "—".
 
 // ── Small SVG sparkline / trend chart ──
 function TrendChart({ data, color, height = 120 }) {
@@ -5876,6 +9101,690 @@ function TrendChart({ data, color, height = 120 }) {
         i % 2 === 0 ? <text key={i} x={pad+(i/(data.length-1))*(w-pad*2)} y={h+14} fill={SOC.textMut} fontSize="9" textAnchor="middle">{m}</text> : null
       ))}
     </svg>
+  );
+}
+
+// ── Analyst drilldown: read a client's actual assessments, programs, policies ──
+// The portfolio gives posture/alerts/review-queue, but an analyst couldn't open
+// the underlying documents. These read /api/analyst/clients/:id/{assessments,
+// programs,policies} (list) and .../:docId (full detail), all assignment-scoped
+// server-side. Read-only: analysts review, they don't edit client content here.
+function ClientDocuments({ clientId }) {
+  const [tab, setTab] = useState("assessments"); // assessments | programs | policies
+  const [lists, setLists] = useState({ assessments: null, programs: null, policies: null });
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(null);   // { kind, id }
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const endpoints = {
+    assessments: `/api/analyst/clients/${clientId}/assessments`,
+    programs:    `/api/analyst/clients/${clientId}/programs`,
+    policies:    `/api/analyst/clients/${clientId}/policies`,
+  };
+
+  async function loadList(kind) {
+    if (lists[kind] != null) return;
+    try {
+      const res = await authFetch(`${API_BASE}${endpoints[kind]}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || `Could not load ${kind}.`);
+      setLists(prev => ({ ...prev, [kind]: Array.isArray(d) ? d : [] }));
+    } catch (e) { setError(e.message); setLists(prev => ({ ...prev, [kind]: [] })); }
+  }
+  useEffect(() => { loadList(tab); /* eslint-disable-next-line */ }, [tab, clientId]);
+
+  async function openDoc(kind, id) {
+    setOpen({ kind, id }); setDetail(null); setDetailLoading(true); setError(null);
+    const path = kind === "assessments" ? `${endpoints.assessments}/${id}`
+      : kind === "programs" ? `${endpoints.programs}/${id}`
+      : `${endpoints.policies}/${id}`;
+    try {
+      const res = await authFetch(`${API_BASE}${path}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load document.");
+      setDetail(d);
+    } catch (e) { setError(e.message); }
+    finally { setDetailLoading(false); }
+  }
+
+  const rows = lists[tab];
+  const tabs = [["assessments","Assessments"],["programs","Programs"],["policies","Policies"]];
+
+  function reviewChip(status) {
+    if (!status) return null;
+    const m = { approved:{c:SOC.green,l:"Approved"}, awaiting_review:{c:SOC.amber,l:"In Review"},
+      changes_requested:{c:SOC.red,l:"Changes Requested"}, draft:{c:SOC.textMut,l:"Draft"} }[status]
+      || { c:SOC.textMut, l:status };
+    return <span style={{fontSize:9,fontWeight:700,color:m.c,textTransform:"uppercase",
+      padding:"2px 8px",borderRadius:20,background:`${m.c}18`}}>{m.l}</span>;
+  }
+
+  return (
+    <SocPanel title="Client Documents" accent={SOC.purple}
+      action={<span style={{fontSize:9,color:SOC.textMut}}>READ-ONLY · ASSIGNMENT-SCOPED</span>}>
+      {/* tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        {tabs.map(([id,label]) => {
+          const n = lists[id]?.length;
+          return (
+            <button key={id} onClick={()=>{setTab(id);setOpen(null);setDetail(null);}}
+              style={{padding:"6px 14px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",
+                border:`1px solid ${tab===id?SOC.purple:SOC.border}`,
+                background:tab===id?`${SOC.purple}1A`:SOC.bg,
+                color:tab===id?SOC.purple:SOC.textSec}}>
+              {label}{n!=null?` (${n})`:""}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && (
+        <div style={{marginBottom:10,padding:"8px 11px",background:`${SOC.red}15`,
+          border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12}}>{error}</div>
+      )}
+
+      {/* list */}
+      {rows == null ? <Spinner/> : rows.length === 0 ? (
+        <div style={{color:SOC.textSec,fontSize:12,padding:"16px 0",textAlign:"center"}}>
+          No {tab} on file for this client.
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {rows.map(r => {
+            const isOpen = open?.kind === tab && open?.id === r.id;
+            const title = tab === "assessments" ? (r.company || "Security Assessment")
+              : tab === "programs" ? `Program · ${r.postureLevel || "generated"}`
+              : (r.policyName || r.policyId || "Policy");
+            const sub = tab === "assessments" ? (r.compliance || []).join(", ")
+              : tab === "programs" ? (r.postureScore != null ? `Posture ${r.postureScore}` : r.status)
+              : r.policyId;
+            return (
+              <div key={r.id}>
+                <div onClick={()=>isOpen?setOpen(null):openDoc(tab, r.id)}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",cursor:"pointer",
+                    background:isOpen?SOC.panelHi:SOC.bg,borderRadius:8,
+                    border:`1px solid ${isOpen?SOC.purple+"55":SOC.border}`}}>
+                  <span style={{fontSize:15}}>{tab==="assessments"?"📋":tab==="programs"?"🗂️":"📄"}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:SOC.text,fontSize:12.5,fontWeight:600}}>{title}</div>
+                    {sub && <div style={{color:SOC.textMut,fontSize:10,marginTop:1}}>{sub}</div>}
+                  </div>
+                  {reviewChip(r.reviewStatus)}
+                  <span style={{fontSize:10,color:SOC.textMut}}>{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ""}</span>
+                  <span style={{color:SOC.textMut,fontSize:11}}>{isOpen?"▲":"▼"}</span>
+                </div>
+
+                {/* inline detail */}
+                {isOpen && (
+                  <div style={{padding:"12px 14px",background:SOC.bg,borderRadius:8,marginTop:4,
+                    border:`1px solid ${SOC.border}`}}>
+                    {detailLoading ? <Spinner/> : detail ? (
+                      <ClientDocDetail kind={tab} doc={detail}/>
+                    ) : (
+                      <div style={{color:SOC.textSec,fontSize:12}}>Nothing to display.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </SocPanel>
+  );
+}
+
+// Renders the full detail of an opened client document, shaped by kind.
+function ClientDocDetail({ kind, doc }) {
+  const label = { color:SOC.textMut, fontSize:10, letterSpacing:1, fontWeight:600, marginBottom:4 };
+  if (kind === "assessments") {
+    const data = doc.data || {};
+    const checklist = data.checklist || data.securityChecklist || {};
+    const entries = Object.entries(checklist);
+    return (
+      <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+        <div style={label}>COMPANY</div>
+        <div style={{color:SOC.text,marginBottom:10}}>{data.company || "—"}</div>
+        {(data.compliance || []).length > 0 && (
+          <>
+            <div style={label}>FRAMEWORKS</div>
+            <div style={{marginBottom:10,display:"flex",gap:6,flexWrap:"wrap"}}>
+              {data.compliance.map((f,i)=>(
+                <span key={i} style={{padding:"2px 9px",borderRadius:6,background:`${SOC.cyan}15`,
+                  border:`1px solid ${SOC.cyan}33`,color:SOC.cyan,fontSize:11}}>{f}</span>
+              ))}
+            </div>
+          </>
+        )}
+        <div style={label}>RESPONSES ({entries.length})</div>
+        {entries.length === 0 ? <div>No answers recorded.</div> : (
+          <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:4}}>
+            {entries.map(([k,v])=>(
+              <div key={k} style={{display:"flex",gap:8,paddingBottom:5,borderBottom:`1px solid ${SOC.border}`}}>
+                <span style={{color:SOC.textMut,minWidth:150,fontSize:11}}>{k}</span>
+                <span style={{color:SOC.text,fontSize:11.5}}>{String(v)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (kind === "programs") {
+    const sections = doc.sections || {};
+    const keys = Object.keys(sections);
+    return (
+      <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+        <div style={label}>PROGRAM SECTIONS ({keys.length})</div>
+        {keys.length === 0 ? <div>No sections generated.</div> : (
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
+            {keys.map(k => {
+              const sec = sections[k];
+              const preview = typeof sec === "string" ? sec
+                : sec?.summary || sec?.overview
+                || (Array.isArray(sec) ? `${sec.length} item(s)` : JSON.stringify(sec).slice(0,220));
+              return (
+                <div key={k} style={{padding:"8px 10px",background:SOC.panel,borderRadius:7}}>
+                  <div style={{color:SOC.text,fontSize:11.5,fontWeight:600,textTransform:"capitalize",marginBottom:3}}>
+                    {k.replace(/([A-Z])/g," $1").trim()}
+                  </div>
+                  <div style={{fontSize:11,color:SOC.textSec}}>{String(preview).slice(0,260)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+  // policies
+  const content = doc.content || doc.policyText || doc.body || "";
+  return (
+    <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
+      <div style={label}>{doc.policyName || doc.policyId || "POLICY"}</div>
+      {doc.status && <div style={{fontSize:11,color:SOC.textMut,marginBottom:8}}>Status: {doc.status}</div>}
+      {content ? (
+        <div style={{whiteSpace:"pre-wrap",maxHeight:340,overflowY:"auto",padding:"10px 12px",
+          background:SOC.panel,borderRadius:7,color:SOC.text,fontSize:11.5,lineHeight:1.7}}>
+          {typeof content === "string" ? content : JSON.stringify(content, null, 2)}
+        </div>
+      ) : <div>No document content stored.</div>}
+    </div>
+  );
+}
+
+// ── White-label branding manager (analyst/admin) ──
+// Staff edit their own brand (clients inherit it); admins additionally set the
+// platform default and see white-label coverage. All writes go through
+// /api/branding/mine and /api/admin/branding/*; logos become base64 data URIs
+// capped at 512KB to match the backend validator.
+const BRANDING_LOGO_MAX = 512 * 1024;
+const BRAND_FIELDS = { productName: "", companyName: "", tagline: "", primaryColor: "#2E5EAA",
+  accentColor: "#22D3EE", supportEmail: "", supportUrl: "", footerNote: "", logoUrl: null };
+
+function brandInput(v) { return v == null ? "" : v; }
+
+function BrandLivePreview({ b }) {
+  return (
+    <div style={{border:`1px solid ${SOC.border}`,borderRadius:12,overflow:"hidden"}}>
+      <div style={{padding:"14px 18px",background:b.primaryColor||"#2E5EAA",
+        display:"flex",alignItems:"center",gap:12}}>
+        {b.logoUrl
+          ? <img src={b.logoUrl} alt="" style={{height:28,maxWidth:120,objectFit:"contain"}}/>
+          : <span style={{fontSize:17,fontWeight:800,color:"#fff"}}>{b.productName||"ShieldAI"}</span>}
+        <span style={{marginLeft:"auto",fontSize:11,color:"#ffffffcc"}}>{b.tagline||"Virtual CISO Platform"}</span>
+      </div>
+      <div style={{padding:"16px 18px",background:SOC.panel}}>
+        <div style={{fontSize:13,color:SOC.text,fontWeight:700,marginBottom:6}}>{b.companyName||"ShieldAI"}</div>
+        <button style={{padding:"7px 14px",borderRadius:7,border:"none",cursor:"default",
+          background:b.accentColor||"#22D3EE",color:"#04121F",fontSize:12,fontWeight:700}}>
+          Sample Action
+        </button>
+        <div style={{marginTop:12,fontSize:10,color:SOC.textMut}}>
+          {b.footerNote || "Powered by ShieldAI"}
+          {b.supportEmail && <> · {b.supportEmail}</>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrandingManager({ isAdmin }) {
+  const [form, setForm] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [scope, setScope] = useState("mine"); // mine | platform (admin only)
+  const logoRef = useRef(null);
+
+  async function loadMine() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load branding.");
+      setForm({ ...BRAND_FIELDS, ...d, logoUrl: d.logoUrl || null });
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  async function loadOverview() {
+    if (!isAdmin) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/branding`);
+      if (res.ok) setOverview(await res.json());
+    } catch { /* non-fatal */ }
+  }
+  useEffect(() => { loadMine(); loadOverview(); /* eslint-disable-next-line */ }, []);
+
+  function flash(msg, tone = SOC.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3000); }
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  async function onLogo(file) {
+    if (!file) return;
+    if (file.size > BRANDING_LOGO_MAX) { setError(`Logo is ${(file.size/1024).toFixed(0)}KB — the limit is 512KB.`); return; }
+    const okTypes = ["image/png","image/jpeg","image/jpg","image/svg+xml","image/webp"];
+    if (!okTypes.includes(file.type)) { setError("Logo must be PNG, JPEG, SVG, or WebP."); return; }
+    try {
+      const dataUri = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("Could not read the logo."));
+        r.readAsDataURL(file);
+      });
+      set("logoUrl", dataUri);
+      setError(null);
+    } catch (e) { setError(e.message); }
+  }
+
+  function buildPatch() {
+    // Only send the editable fields; empty strings become null server-side.
+    const p = {};
+    for (const k of Object.keys(BRAND_FIELDS)) {
+      let v = form[k];
+      if (typeof v === "string") v = v.trim();
+      p[k] = v === "" ? null : v;
+    }
+    // productName/companyName can't be null on the backend — fall back sensibly.
+    if (!p.productName) p.productName = "ShieldAI";
+    if (!p.companyName) p.companyName = p.productName;
+    return p;
+  }
+
+  async function save() {
+    setBusy(true); setError(null);
+    try {
+      const path = (isAdmin && scope === "platform")
+        ? `/api/admin/branding/platform` : `/api/branding/mine`;
+      const res = await authFetch(`${API_BASE}${path}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPatch()),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Save failed.");
+      setForm({ ...BRAND_FIELDS, ...d, logoUrl: d.logoUrl || null });
+      // Reflect a saved *own* brand in the live app chrome immediately.
+      if (scope !== "platform") setBrand(d);
+      flash(scope === "platform" ? "Platform default brand saved." : "Your brand was saved.");
+      loadOverview();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function reset() {
+    if (scope === "platform") { setError("Platform default can't be deleted — edit its fields instead."); return; }
+    if (!window.confirm("Reset your brand back to the platform/default? Clients will see the default brand.")) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/branding/mine`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Reset failed.");
+      await loadMine();
+      setBrand(DEFAULT_BRAND);
+      if (logoRef.current) logoRef.current.value = "";
+      flash("Brand reset to default.");
+      loadOverview();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  if (loading || !form) return <Spinner/>;
+
+  const lbl = { fontSize:10, color:SOC.textMut, letterSpacing:1, fontWeight:600, marginBottom:5, display:"block" };
+  const inp = { width:"100%", padding:"9px 12px", background:SOC.bg, border:`1px solid ${SOC.border}`,
+    borderRadius:8, color:SOC.text, fontSize:13, boxSizing:"border-box", fontFamily:"Inter,system-ui,sans-serif" };
+
+  return (
+    <div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${SOC.red}15`,
+          border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {isAdmin && (
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {[["mine","My Brand"],["platform","Platform Default"]].map(([id,label]) => (
+            <button key={id} onClick={()=>{setScope(id); if(id==="platform"){ /* keep current form as starting point */ }}}
+              style={{padding:"7px 16px",borderRadius:8,fontSize:12.5,fontWeight:700,cursor:"pointer",
+                border:`1px solid ${scope===id?SOC.cyan:SOC.border}`,
+                background:scope===id?`${SOC.cyan}1A`:SOC.bg,color:scope===id?SOC.cyan:SOC.textSec}}>{label}</button>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+        {/* form */}
+        <SocPanel title={scope==="platform"?"Platform Default Brand":"Your Brand"} accent={SOC.cyan}>
+          <div style={{display:"grid",gap:12}}>
+            <div>
+              <label style={lbl}>PRODUCT NAME</label>
+              <input style={inp} value={brandInput(form.productName)} maxLength={40}
+                onChange={e=>set("productName",e.target.value)} placeholder="ShieldAI"/>
+            </div>
+            <div>
+              <label style={lbl}>COMPANY NAME</label>
+              <input style={inp} value={brandInput(form.companyName)} maxLength={80}
+                onChange={e=>set("companyName",e.target.value)} placeholder="Your MSP, LLC"/>
+            </div>
+            <div>
+              <label style={lbl}>TAGLINE</label>
+              <input style={inp} value={brandInput(form.tagline)} maxLength={90}
+                onChange={e=>set("tagline",e.target.value)} placeholder="Virtual CISO Platform"/>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <label style={lbl}>PRIMARY COLOR</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.primaryColor)?form.primaryColor:"#2E5EAA"}
+                    onChange={e=>set("primaryColor",e.target.value)}
+                    style={{width:38,height:38,border:"none",borderRadius:8,background:"none",cursor:"pointer"}}/>
+                  <input style={{...inp,flex:1}} value={brandInput(form.primaryColor)} maxLength={7}
+                    onChange={e=>set("primaryColor",e.target.value)} placeholder="#2E5EAA"/>
+                </div>
+              </div>
+              <div style={{flex:1}}>
+                <label style={lbl}>ACCENT COLOR</label>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(form.accentColor)?form.accentColor:"#22D3EE"}
+                    onChange={e=>set("accentColor",e.target.value)}
+                    style={{width:38,height:38,border:"none",borderRadius:8,background:"none",cursor:"pointer"}}/>
+                  <input style={{...inp,flex:1}} value={brandInput(form.accentColor)} maxLength={7}
+                    onChange={e=>set("accentColor",e.target.value)} placeholder="#22D3EE"/>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>LOGO (PNG/JPEG/SVG/WebP · max 512KB)</label>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <input ref={logoRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                  onChange={e=>onLogo(e.target.files?.[0])} style={{fontSize:12,color:SOC.textSec}}/>
+                {form.logoUrl && (
+                  <button onClick={()=>{set("logoUrl",null); if(logoRef.current) logoRef.current.value="";}}
+                    style={{padding:"5px 10px",borderRadius:6,border:`1px solid ${SOC.border}`,
+                      background:SOC.bg,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>Remove</button>
+                )}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <div style={{flex:1}}>
+                <label style={lbl}>SUPPORT EMAIL</label>
+                <input style={inp} value={brandInput(form.supportEmail)} maxLength={120}
+                  onChange={e=>set("supportEmail",e.target.value)} placeholder="support@yourmsp.com"/>
+              </div>
+              <div style={{flex:1}}>
+                <label style={lbl}>SUPPORT URL (https)</label>
+                <input style={inp} value={brandInput(form.supportUrl)} maxLength={200}
+                  onChange={e=>set("supportUrl",e.target.value)} placeholder="https://yourmsp.com/support"/>
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>FOOTER NOTE</label>
+              <input style={inp} value={brandInput(form.footerNote)} maxLength={200}
+                onChange={e=>set("footerNote",e.target.value)} placeholder="© Your MSP. All rights reserved."/>
+            </div>
+
+            <div style={{display:"flex",gap:10,marginTop:4}}>
+              <button onClick={save} disabled={busy}
+                style={{padding:"10px 20px",borderRadius:8,border:"none",background:SOC.cyan,color:SOC.bg,
+                  fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                {busy ? "Saving…" : (scope==="platform" ? "Save Platform Default" : "Save Brand")}
+              </button>
+              {scope !== "platform" && (
+                <button onClick={reset} disabled={busy}
+                  style={{padding:"10px 18px",borderRadius:8,border:`1px solid ${SOC.border}`,
+                    background:SOC.bg,color:SOC.textSec,fontSize:13,cursor:busy?"default":"pointer"}}>
+                  Reset to Default
+                </button>
+              )}
+            </div>
+          </div>
+        </SocPanel>
+
+        {/* preview + coverage */}
+        <div style={{display:"flex",flexDirection:"column",gap:18}}>
+          <SocPanel title="Live Preview" accent={SOC.purple}>
+            <BrandLivePreview b={form}/>
+            <div style={{marginTop:10,fontSize:11,color:SOC.textMut}}>
+              {scope==="platform"
+                ? "Clients with no assigned analyst brand see this."
+                : "Clients assigned to you see this brand instead of ShieldAI's default."}
+            </div>
+          </SocPanel>
+
+          {isAdmin && overview && (
+            <SocPanel title="White-Label Coverage" accent={SOC.green}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div style={{padding:"10px",background:SOC.bg,borderRadius:8,textAlign:"center"}}>
+                  <div style={{fontSize:22,fontWeight:800,color:SOC.cyan}}>{overview.clientsWhiteLabelled}</div>
+                  <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>WHITE-LABELLED</div>
+                </div>
+                <div style={{padding:"10px",background:SOC.bg,borderRadius:8,textAlign:"center"}}>
+                  <div style={{fontSize:22,fontWeight:800,color:SOC.textSec}}>{overview.clientsOnDefaultBrand}</div>
+                  <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>ON DEFAULT</div>
+                </div>
+              </div>
+              {(overview.brands||[]).map((b,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
+                  background:SOC.bg,borderRadius:7,marginBottom:6}}>
+                  <span style={{width:12,height:12,borderRadius:3,background:b.primaryColor,flexShrink:0}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{b.productName}</div>
+                    <div style={{color:SOC.textMut,fontSize:10}}>{b.owner}</div>
+                  </div>
+                  <span style={{fontSize:11,color:SOC.textSec}}>{b.clientsBranded} client{b.clientsBranded!==1?"s":""}</span>
+                </div>
+              ))}
+            </SocPanel>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Analyst view of a client's training program. Reads/acts via ?clientId=, so
+// the analyst can assign, remind, and track completion for their assigned
+// client. Read + act, assignment-scoped server-side.
+function ClientTrainingPanel({ clientId }) {
+  const [overview, setOverview] = useState(null);
+  const [assignments, setAssignments] = useState([]);
+  const [learners, setLearners] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [showAssign, setShowAssign] = useState(false);
+  const [pickLearners, setPickLearners] = useState([]);
+  const [pickTopics, setPickTopics] = useState([]);
+
+  const q = `?clientId=${encodeURIComponent(clientId)}`;
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [o, a, l, c] = await Promise.all([
+        authFetch(`${API_BASE}/api/training-program/overview${q}`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/assignments${q}`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/learners${q}`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/training-program/catalog`).then(r => r.json()),
+      ]);
+      setOverview(o && !o.error ? o : null);
+      setAssignments(Array.isArray(a) ? a : []);
+      setLearners(Array.isArray(l) ? l : []);
+      setCatalog(Array.isArray(c) ? c : []);
+    } catch (e) { setError("Could not load training."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, [clientId]);
+
+  async function assign() {
+    if (!pickLearners.length || !pickTopics.length) { setError("Pick learners and topics."); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, learnerIds: pickLearners, topicIds: pickTopics }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Assign failed.");
+      setShowAssign(false); setPickLearners([]); setPickTopics([]);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function act(a, kind) {
+    setBusy(true); setError(null);
+    try {
+      if (kind === "remind") {
+        const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}/remind`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error || "Failed.");
+      } else if (kind === "waive") {
+        const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}${q}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, status: "waived" }),
+        });
+        if (!res.ok) throw new Error((await res.json()).error || "Failed.");
+        await loadAll();
+      }
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function tog(list, set, id) { set(list.includes(id) ? list.filter(x => x !== id) : [...list, id]); }
+  function socTone(s) {
+    return { completed: SOC.green, in_progress: SOC.cyan, overdue: SOC.red, waived: SOC.textMut, assigned: SOC.textSec }[s] || SOC.textSec;
+  }
+
+  return (
+    <SocPanel title="Training Program" accent={SOC.amber}
+      action={
+        <button onClick={()=>setShowAssign(s=>!s)}
+          style={{background:"none",border:`1px solid ${SOC.amber}55`,color:SOC.amber,fontSize:11,
+            fontWeight:700,padding:"4px 10px",borderRadius:6,cursor:"pointer"}}>
+          {showAssign ? "Close" : "+ Assign"}
+        </button>}>
+      {error && <div style={{marginBottom:10,padding:"7px 10px",background:`${SOC.red}15`,
+        border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12}}>{error}</div>}
+
+      {loading ? <Spinner/> : (
+        <>
+          {/* stat strip */}
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:14}}>
+            {[
+              ["Learners", overview?.learnerCount ?? 0, SOC.cyan],
+              ["Completion", `${overview?.completionRate ?? 0}%`, SOC.green],
+              ["Overdue", overview?.overdue ?? 0, overview?.overdue ? SOC.red : SOC.textSec],
+              ["Avg Score", overview?.avgScore != null ? overview.avgScore : "—", SOC.amber],
+            ].map(([l,v,t],i)=>(
+              <div key={i}>
+                <div style={{fontSize:22,fontWeight:800,color:t,lineHeight:1}}>{v}</div>
+                <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginTop:3}}>{String(l).toUpperCase()}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* inline assign */}
+          {showAssign && (
+            <div style={{marginBottom:14,padding:"12px",background:SOC.bg,borderRadius:8,border:`1px solid ${SOC.border}`}}>
+              {learners.length === 0 ? (
+                <div style={{fontSize:12,color:SOC.textSec}}>This client has no learners yet — the client admin adds them from their dashboard.</div>
+              ) : (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                  <div>
+                    <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,fontWeight:600,marginBottom:6}}>LEARNERS</div>
+                    <div style={{maxHeight:150,overflowY:"auto"}}>
+                      {learners.map(l=>(
+                        <label key={l.id} style={{display:"flex",gap:8,alignItems:"center",padding:"4px 0",cursor:"pointer",fontSize:12,color:SOC.text}}>
+                          <input type="checkbox" checked={pickLearners.includes(l.id)} onChange={()=>tog(pickLearners,setPickLearners,l.id)}/>
+                          {l.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,fontWeight:600,marginBottom:6}}>TOPICS</div>
+                    <div style={{maxHeight:150,overflowY:"auto"}}>
+                      {catalog.map(t=>(
+                        <label key={t.id} style={{display:"flex",gap:8,alignItems:"center",padding:"4px 0",cursor:"pointer",fontSize:12,color:SOC.text}}>
+                          <input type="checkbox" checked={pickTopics.includes(t.id)} onChange={()=>tog(pickTopics,setPickTopics,t.id)}/>
+                          {t.title}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {learners.length > 0 && (
+                <button onClick={assign} disabled={busy}
+                  style={{marginTop:10,padding:"8px 16px",borderRadius:7,border:"none",background:SOC.amber,
+                    color:SOC.bg,fontSize:12,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+                  {busy ? "Assigning…" : `Assign to ${pickLearners.length}`}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* assignments */}
+          {assignments.length === 0 ? (
+            <div style={{fontSize:12,color:SOC.textSec,padding:"8px 0"}}>No training assigned yet.</div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {assignments.slice(0,10).map(a=>{
+                const t = socTone(a.status);
+                return (
+                  <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",
+                    background:SOC.bg,borderRadius:7,border:`1px solid ${SOC.border}`}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:600,color:SOC.text}}>{a.learnerName}</div>
+                      <div style={{fontSize:10,color:SOC.textMut}}>{a.title}</div>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:700,color:t,padding:"2px 8px",borderRadius:20,
+                      background:`${t}18`}}>{a.progress}%</span>
+                    {a.status !== "completed" && a.status !== "waived" && (
+                      <>
+                        <button onClick={()=>act(a,"remind")} disabled={busy}
+                          style={{background:"none",border:`1px solid ${SOC.cyan}44`,color:SOC.cyan,fontSize:10,
+                            fontWeight:600,padding:"3px 8px",borderRadius:5,cursor:"pointer"}}>Remind</button>
+                        <button onClick={()=>act(a,"waive")} disabled={busy}
+                          style={{background:"none",border:`1px solid ${SOC.border}`,color:SOC.textMut,fontSize:10,
+                            fontWeight:600,padding:"3px 8px",borderRadius:5,cursor:"pointer"}}>Waive</button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </SocPanel>
   );
 }
 
@@ -6103,386 +10012,6 @@ function mastermindReply(quickId, client) {
 }
 
 
-// ─────────────────────────────────────────────────────────────
-//  WORKSPACE VIEWER — "View as client" drill-in for staff
-//  Works for both admin and analyst: both hit /api/staff/clients/:cid/*
-//  Read the client's assessments, programs, policies, training; edit a
-//  policy or assessment on their behalf; generate a program (respecting the
-//  CLIENT's tier limit — shows an upgrade notice on 402); delete a program.
-// ─────────────────────────────────────────────────────────────
-const PROGRAM_SECTION_LABELS = {
-  riskOverview: "Risk overview & top threats",
-  priorities: "Prioritized roadmap & quick wins",
-  policiesCore: "Core security policies",
-  policiesOps: "Operational security policies",
-  compliance: "Compliance framework gap analysis",
-  workflows: "Incident response workflows",
-  threatIntel: "Threat intelligence",
-  tools: "Recommended tool stack",
-  training: "Awareness training program",
-  execReport: "Executive summary report",
-};
-
-function WorkspaceViewer({ client, onBack }) {
-  const cid = client.id;
-  const [tab, setTab] = useState("overview");     // overview | assessments | programs | policies | training
-  const [overview, setOverview] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [banner, setBanner] = useState(null);     // { kind: "info"|"warn"|"error", text }
-
-  // Detail panes
-  const [openProgram, setOpenProgram] = useState(null);   // full program record
-  const [openPolicy, setOpenPolicy] = useState(null);     // full policy record
-  const [policyEdit, setPolicyEdit] = useState(null);     // editable content string
-  const [savingPolicy, setSavingPolicy] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
-
-  // Generation
-  const [genFor, setGenFor] = useState(null);     // assessmentId currently generating
-  const [genProgress, setGenProgress] = useState(null);
-
-  async function loadOverview() {
-    setLoading(true); setError(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/overview`);
-      if (!res.ok) { setError(`Failed to load workspace (${res.status})`); return; }
-      setOverview(await res.json());
-    } catch { setError("Network error loading workspace."); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { loadOverview(); /* eslint-disable-next-line */ }, [cid]);
-
-  async function openProgramDetail(id) {
-    setDetailLoading(true); setOpenProgram(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/${id}`);
-      if (res.ok) setOpenProgram(await res.json());
-      else setBanner({ kind: "error", text: `Could not open program (${res.status}).` });
-    } catch { setBanner({ kind: "error", text: "Network error opening program." }); }
-    finally { setDetailLoading(false); }
-  }
-
-  async function openPolicyDetail(id) {
-    setDetailLoading(true); setOpenPolicy(null); setPolicyEdit(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/policies/${id}`);
-      if (res.ok) { const rec = await res.json(); setOpenPolicy(rec); }
-      else setBanner({ kind: "error", text: `Could not open policy (${res.status}).` });
-    } catch { setBanner({ kind: "error", text: "Network error opening policy." }); }
-    finally { setDetailLoading(false); }
-  }
-
-  async function savePolicy() {
-    if (openPolicy == null || policyEdit == null) return;
-    setSavingPolicy(true);
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/policies/${openPolicy.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: policyEdit }),
-      });
-      if (res.ok) {
-        const upd = await res.json();
-        setOpenPolicy({ ...openPolicy, content: upd.content });
-        setPolicyEdit(null);
-        setBanner({ kind: "info", text: "Policy saved on behalf of the client." });
-      } else {
-        setBanner({ kind: "error", text: `Save failed (${res.status}).` });
-      }
-    } catch { setBanner({ kind: "error", text: "Network error saving policy." }); }
-    finally { setSavingPolicy(false); }
-  }
-
-  async function deleteProgram(id) {
-    if (!window.confirm("Delete this program on behalf of the client? They can regenerate it.")) return;
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/${id}`, { method: "DELETE" });
-      if (res.ok) { setBanner({ kind: "info", text: "Program deleted." }); if (openProgram?.id === id) setOpenProgram(null); loadOverview(); }
-      else setBanner({ kind: "error", text: `Delete failed (${res.status}).` });
-    } catch { setBanner({ kind: "error", text: "Network error deleting program." }); }
-  }
-
-  async function generateFor(assessmentId) {
-    setGenFor(assessmentId); setGenProgress({ label: "Starting…", status: "running", step: 0, total: 10 }); setBanner(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/programs/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assessmentId }),
-      });
-      if (res.status === 402) {
-        const body = await res.json().catch(() => ({}));
-        setBanner({ kind: "warn", text: body.error || "This client's plan doesn't allow more programs. Upgrade the client from the Admin console." });
-        setGenFor(null); setGenProgress(null);
-        return;
-      }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setBanner({ kind: "error", text: body.error || `Generation failed (${res.status}).` });
-        setGenFor(null); setGenProgress(null);
-        return;
-      }
-      const { programId } = await res.json();
-      // Poll shared status endpoint until complete.
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-        const st = await authFetch(`${API_BASE}/api/programs/${programId}/status`);
-        if (!st.ok) throw new Error(`status ${st.status}`);
-        const p = await st.json();
-        setGenProgress(p);
-        if (p.status === "complete") break;
-        if (p.status === "error") throw new Error(p.error || "Pipeline failed");
-      }
-      setBanner({ kind: "info", text: "Program generated on behalf of the client." });
-      setGenFor(null); setGenProgress(null);
-      loadOverview();
-    } catch (e) {
-      setBanner({ kind: "error", text: `Generation error: ${e.message}` });
-      setGenFor(null); setGenProgress(null);
-    }
-  }
-
-  const bannerColor = banner?.kind === "error" ? SOC.red : banner?.kind === "warn" ? SOC.amber : SOC.cyan;
-  const tabs = [
-    ["overview", "Overview"],
-    ["assessments", "Assessments"],
-    ["programs", "Programs"],
-    ["policies", "Policies"],
-    ["training", "Training"],
-  ];
-
-  const wrap = { minHeight:"100vh", background:SOC.bg, fontFamily:"Inter,system-ui,sans-serif", color:SOC.text };
-  const panel = { background:SOC.panel, border:`1px solid ${SOC.border}`, borderRadius:10 };
-  const chip = (active) => ({
-    padding:"7px 14px", borderRadius:7, fontSize:12, fontWeight:600, cursor:"pointer",
-    background: active ? `${SOC.cyan}18` : "transparent",
-    border: `1px solid ${active ? SOC.cyan+"55" : SOC.border}`,
-    color: active ? SOC.cyan : SOC.textSec,
-  });
-
-  return (
-    <div style={wrap}>
-      <Header title={`Workspace · ${client.name || client.email}`}/>
-      <div style={{maxWidth:1000, margin:"0 auto", padding:"20px"}}>
-        <button onClick={onBack}
-          style={{marginBottom:14, padding:"6px 14px", background:SOC.panelHi, border:`1px solid ${SOC.border}`,
-            borderRadius:6, color:SOC.textSec, fontSize:12, cursor:"pointer"}}>← Back to clients</button>
-
-        <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:6, flexWrap:"wrap"}}>
-          <span style={{fontSize:15, fontWeight:700, color:SOC.text}}>{client.name || client.email}</span>
-          <span style={{padding:"2px 8px", borderRadius:5, fontSize:10, fontWeight:700, background:`${SOC.purple}22`, color:SOC.purple}}>
-            {(overview?.client?.tier || client.tier || "free").toUpperCase()}
-          </span>
-          <span style={{fontSize:11, color:SOC.textMut}}>Acting on behalf of the client — changes are logged.</span>
-        </div>
-
-        {banner && (
-          <div style={{...panel, borderColor:`${bannerColor}55`, background:`${bannerColor}12`,
-            padding:"10px 14px", marginBottom:12, color:bannerColor, fontSize:13, display:"flex", justifyContent:"space-between", gap:10}}>
-            <span>{banner.text}</span>
-            <span onClick={()=>setBanner(null)} style={{cursor:"pointer", opacity:.7}}>✕</span>
-          </div>
-        )}
-
-        <div style={{display:"flex", gap:8, marginBottom:16, flexWrap:"wrap"}}>
-          {tabs.map(([id, label]) => (
-            <button key={id} onClick={()=>{ setTab(id); setOpenProgram(null); setOpenPolicy(null); }} style={chip(tab===id)}>
-              {label}{overview?.counts?.[id] != null ? ` (${overview.counts[id]})` : ""}
-            </button>
-          ))}
-        </div>
-
-        {loading ? <div style={{color:SOC.textMut, padding:24}}>Loading workspace…</div> :
-         error ? <div style={{...panel, padding:20, color:SOC.red}}>{error}</div> :
-         !overview ? null : (
-          <>
-            {/* OVERVIEW */}
-            {tab==="overview" && (
-              <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10}}>
-                {[
-                  ["Assessments", overview.counts.assessments, SOC.cyan],
-                  ["Programs", overview.counts.programs, SOC.green],
-                  ["Policies", overview.counts.policies, SOC.purple],
-                  ["Training", overview.counts.training, SOC.amber],
-                  ["Endpoints", overview.counts.endpoints, SOC.blue],
-                  ["Open recs", overview.counts.openRecommendations, SOC.red],
-                ].map(([label, n, col]) => (
-                  <div key={label} style={{...panel, padding:"16px"}}>
-                    <div style={{fontSize:26, fontWeight:800, color:col}}>{n}</div>
-                    <div style={{fontSize:11, color:SOC.textMut, textTransform:"uppercase", letterSpacing:1, marginTop:2}}>{label}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* ASSESSMENTS */}
-            {tab==="assessments" && (
-              <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                {overview.assessments.length===0 ? (
-                  <div style={{...panel, padding:30, textAlign:"center", color:SOC.textMut}}>No assessments yet.</div>
-                ) : overview.assessments.map(a => (
-                  <div key={a.id} style={{...panel, padding:"14px 16px"}}>
-                    <div style={{display:"flex", alignItems:"center", gap:12}}>
-                      <div style={{flex:1, minWidth:0}}>
-                        <div style={{color:SOC.text, fontWeight:600, fontSize:14}}>{a.company?.name || "Untitled assessment"}</div>
-                        <div style={{color:SOC.textMut, fontSize:12, marginTop:2}}>
-                          {a.company?.industry || "—"} · created {new Date(a.createdAt).toLocaleDateString()}
-                          {a.updatedAt ? ` · edited ${new Date(a.updatedAt).toLocaleDateString()}` : ""}
-                        </div>
-                      </div>
-                      {genFor===a.id ? (
-                        <span style={{fontSize:12, color:SOC.cyan}}>
-                          {genProgress?.label || "Generating…"} {genProgress?.total ? `(${genProgress.step}/${genProgress.total})` : ""}
-                        </span>
-                      ) : (
-                        <button onClick={()=>generateFor(a.id)}
-                          style={{padding:"7px 14px", background:`${SOC.green}18`, border:`1px solid ${SOC.green}55`,
-                            borderRadius:7, color:SOC.green, fontSize:12, fontWeight:600, cursor:"pointer"}}>
-                          Generate Program →
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* PROGRAMS */}
-            {tab==="programs" && (
-              openProgram ? (
-                <div style={{...panel, padding:"18px"}}>
-                  <button onClick={()=>setOpenProgram(null)}
-                    style={{marginBottom:12, padding:"5px 12px", background:SOC.panelHi, border:`1px solid ${SOC.border}`,
-                      borderRadius:6, color:SOC.textSec, fontSize:12, cursor:"pointer"}}>← All programs</button>
-                  <div style={{fontSize:12, color:SOC.textMut, marginBottom:14}}>
-                    Program {openProgram.id.slice(0,8)} · {openProgram.status}
-                    {openProgram.generatedByRole ? ` · generated by ${openProgram.generatedByRole}` : ""}
-                  </div>
-                  {Object.keys(openProgram.sections || {}).length===0 ? (
-                    <div style={{color:SOC.textMut}}>No sections (program may still be running or errored).</div>
-                  ) : Object.entries(openProgram.sections).map(([key, val]) => (
-                    <div key={key} style={{marginBottom:18}}>
-                      <div style={{fontSize:12, fontWeight:700, color:SOC.cyan, textTransform:"uppercase", letterSpacing:1, marginBottom:6}}>
-                        {PROGRAM_SECTION_LABELS[key] || key}
-                      </div>
-                      <div style={{background:SOC.bg, border:`1px solid ${SOC.border}`, borderRadius:8, padding:"12px 14px"}}>
-                        <MarkdownDocLight text={typeof val === "string" ? val : (val?.content || JSON.stringify(val, null, 2))}/>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                  {detailLoading && <div style={{color:SOC.textMut}}>Loading…</div>}
-                  {overview.programs.length===0 ? (
-                    <div style={{...panel, padding:30, textAlign:"center", color:SOC.textMut}}>
-                      No programs yet. Generate one from the Assessments tab.
-                    </div>
-                  ) : overview.programs.map(p => {
-                    const col = p.status==="complete"?SOC.green : p.status==="error"?SOC.red : SOC.amber;
-                    return (
-                      <div key={p.id} style={{...panel, padding:"14px 16px", display:"flex", alignItems:"center", gap:12}}>
-                        <div style={{flex:1, minWidth:0}}>
-                          <div style={{color:SOC.text, fontWeight:600, fontSize:14}}>Program {p.id.slice(0,8)}</div>
-                          <div style={{color:SOC.textMut, fontSize:12, marginTop:2}}>
-                            created {new Date(p.createdAt).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <span style={{padding:"2px 8px", borderRadius:5, fontSize:10, fontWeight:700, background:`${col}22`, color:col}}>{p.status}</span>
-                        <button onClick={()=>openProgramDetail(p.id)}
-                          style={{padding:"6px 12px", background:`${SOC.cyan}18`, border:`1px solid ${SOC.cyan}55`,
-                            borderRadius:7, color:SOC.cyan, fontSize:12, fontWeight:600, cursor:"pointer"}}>Open</button>
-                        <button onClick={()=>deleteProgram(p.id)}
-                          style={{padding:"6px 12px", background:`${SOC.red}14`, border:`1px solid ${SOC.red}44`,
-                            borderRadius:7, color:SOC.red, fontSize:12, fontWeight:600, cursor:"pointer"}}>Delete</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )
-            )}
-
-            {/* POLICIES */}
-            {tab==="policies" && (
-              openPolicy ? (
-                <div style={{...panel, padding:"18px"}}>
-                  <button onClick={()=>{setOpenPolicy(null); setPolicyEdit(null);}}
-                    style={{marginBottom:12, padding:"5px 12px", background:SOC.panelHi, border:`1px solid ${SOC.border}`,
-                      borderRadius:6, color:SOC.textSec, fontSize:12, cursor:"pointer"}}>← All policies</button>
-                  <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:12, flexWrap:"wrap"}}>
-                    <span style={{fontSize:15, fontWeight:700}}>{openPolicy.policyName}</span>
-                    {policyEdit==null ? (
-                      <button onClick={()=>setPolicyEdit(openPolicy.content || "")}
-                        style={{padding:"6px 12px", background:`${SOC.amber}18`, border:`1px solid ${SOC.amber}55`,
-                          borderRadius:7, color:SOC.amber, fontSize:12, fontWeight:600, cursor:"pointer"}}>Edit</button>
-                    ) : (
-                      <>
-                        <button onClick={savePolicy} disabled={savingPolicy}
-                          style={{padding:"6px 12px", background:`${SOC.green}18`, border:`1px solid ${SOC.green}55`,
-                            borderRadius:7, color:SOC.green, fontSize:12, fontWeight:600, cursor:"pointer"}}>
-                          {savingPolicy?"Saving…":"Save"}</button>
-                        <button onClick={()=>setPolicyEdit(null)} disabled={savingPolicy}
-                          style={{padding:"6px 12px", background:SOC.panelHi, border:`1px solid ${SOC.border}`,
-                            borderRadius:7, color:SOC.textSec, fontSize:12, cursor:"pointer"}}>Cancel</button>
-                      </>
-                    )}
-                  </div>
-                  {policyEdit==null ? (
-                    <div style={{background:SOC.bg, border:`1px solid ${SOC.border}`, borderRadius:8, padding:"12px 14px"}}>
-                      <MarkdownDocLight text={openPolicy.content || ""}/>
-                    </div>
-                  ) : (
-                    <textarea value={policyEdit} onChange={e=>setPolicyEdit(e.target.value)}
-                      style={{width:"100%", minHeight:420, background:SOC.bg, color:SOC.text, border:`1px solid ${SOC.borderHi||SOC.border}`,
-                        borderRadius:8, padding:"12px 14px", fontFamily:"ui-monospace,Menlo,monospace", fontSize:13, lineHeight:1.5, resize:"vertical"}}/>
-                  )}
-                </div>
-              ) : (
-                <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                  {detailLoading && <div style={{color:SOC.textMut}}>Loading…</div>}
-                  {overview.policies.length===0 ? (
-                    <div style={{...panel, padding:30, textAlign:"center", color:SOC.textMut}}>No policy documents yet.</div>
-                  ) : overview.policies.map(p => (
-                    <div key={p.id} style={{...panel, padding:"14px 16px", display:"flex", alignItems:"center", gap:12}}>
-                      <div style={{flex:1, minWidth:0}}>
-                        <div style={{color:SOC.text, fontWeight:600, fontSize:14}}>{p.policyName}</div>
-                        <div style={{color:SOC.textMut, fontSize:12, marginTop:2}}>
-                          created {new Date(p.createdAt).toLocaleDateString()}
-                          {p.updatedAt ? ` · edited ${new Date(p.updatedAt).toLocaleDateString()}` : ""}
-                        </div>
-                      </div>
-                      <button onClick={()=>openPolicyDetail(p.id)}
-                        style={{padding:"6px 12px", background:`${SOC.cyan}18`, border:`1px solid ${SOC.cyan}55`,
-                          borderRadius:7, color:SOC.cyan, fontSize:12, fontWeight:600, cursor:"pointer"}}>Open / Edit</button>
-                    </div>
-                  ))}
-                </div>
-              )
-            )}
-
-            {/* TRAINING */}
-            {tab==="training" && (
-              <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                {overview.training.length===0 ? (
-                  <div style={{...panel, padding:30, textAlign:"center", color:SOC.textMut}}>No training programs yet.</div>
-                ) : overview.training.map(t => (
-                  <div key={t.id} style={{...panel, padding:"14px 16px"}}>
-                    <div style={{color:SOC.text, fontWeight:600, fontSize:14}}>{t.companyContext?.name || "Training program"}</div>
-                    <div style={{color:SOC.textMut, fontSize:12, marginTop:2}}>
-                      {t.moduleCount} module(s) · created {new Date(t.createdAt).toLocaleDateString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -6499,7 +10028,6 @@ function AnalystConsole({ user, onExit }) {
   const [myClients, setMyClients] = useState(null);
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
   const [actionsLoading, setActionsLoading] = useState(false);
-  const [workspaceClient, setWorkspaceClient] = useState(null); // client whose full workspace is open
 
   async function loadMyClients() {
     try {
@@ -6591,18 +10119,71 @@ function AnalystConsole({ user, onExit }) {
     }, 650);
   }
 
-  const clients = SAMPLE_CLIENTS;
-  const totalMRR = clients.reduce((s, c) => s + c.mrr, 0);
-  const avgPosture = Math.round(clients.reduce((s, c) => s + c.posture, 0) / clients.length);
-  const reviewCount = clients.reduce((s, c) => s + c.reviewQueue.filter(r => r.status === "awaiting_review").length, 0);
-  const highAlerts = clients.reduce((s, c) => s + c.alerts.filter(a => a.sev === "high").length, 0);
-  const agentsOnline = clients.filter(c => c.agent.status === "healthy").length;
+  // Real clients from /api/analyst/portfolio — scoped server-side to the ones
+  // assigned to this analyst.
+  //
+  // This replaced `const clients = SAMPLE_CLIENTS`: 143 lines of hardcoded fake
+  // clients ("Meridian Dental Group", posture 53, $1,800 MRR, invented phishing
+  // alerts) that rendered on the landing page an analyst sees first. The KPI
+  // tiles — including Monthly Recurring Revenue and Average Posture — were
+  // computed from that array. Real client data was already being fetched and was
+  // only shown in a secondary tab.
+  //
+  // Every field is now real or explicitly null, and null renders as "—". A
+  // fabricated posture score on a triage dashboard is worse than a blank one,
+  // because a blank prompts a question and a number gets acted on.
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioErr, setPortfolioErr] = useState(null);
+  useEffect(() => {
+    let live = true;
+    authFetch(`${API_BASE}/api/analyst/portfolio`)
+      .then(async r => {
+        if (!r.ok) throw new Error(r.status === 403 ? "Analyst access required." : `Couldn't load portfolio (${r.status}).`);
+        return r.json();
+      })
+      .then(d => { if (live) setPortfolio(Array.isArray(d) ? d : (d.clients || [])); })
+      .catch(e => { if (live) setPortfolioErr(e.message); });
+    return () => { live = false; };
+  }, []);
+  const clients = portfolio || [];
+  // KPIs computed from real data, with null meaning "we don't have this".
+  //
+  // MRR is null on every row because there is no billing integration yet
+  // (Stripe deferred). The tile stays — an analyst expects it — and renders "—"
+  // until billing is wired. Summing nulls to $0.0k would state that the book of
+  // business earns nothing, which is a claim we can't make; inventing a figure
+  // would be worse.
+  const mrrKnown = clients.filter(c => typeof c.mrr === "number");
+  const totalMRR = mrrKnown.length ? mrrKnown.reduce((s, c) => s + c.mrr, 0) : null;
+
+  // Average posture over clients we've actually SCORED. Treating an unscored
+  // client as 0 would drag the average toward alarm; treating them as average
+  // would hide them. They're excluded, and the tile says how many counted.
+  const scored = clients.filter(c => typeof c.posture === "number");
+  const avgPosture = scored.length
+    ? Math.round(scored.reduce((s, c) => s + c.posture, 0) / scored.length)
+    : null;
+
+  const reviewCount = clients.reduce((s, c) =>
+    s + (c.reviewQueue || []).filter(r => r.status === "awaiting_review").length, 0);
+  const highAlerts = clients.reduce((s, c) =>
+    s + (c.alerts || []).filter(a => a.sev === "high" || a.sev === "critical").length, 0);
+  const agentsOnline = clients.filter(c => c.agent?.status === "healthy").length;
+  const withAgents = clients.filter(c => (c.agent?.endpoints || 0) > 0).length;
+  const openConflicts = clients.reduce((s, c) => s + (c.conflicts || 0), 0);
+  const unscoredCount = clients.length - scored.length;
 
   const statusMeta = {
     on_track: { label: "On Track", color: SOC.green },
     needs_review: { label: "Needs Review", color: SOC.amber },
     attention: { label: "Attention", color: SOC.red },
+    // New state. The backend used to fall through to "on_track" when a client
+    // had no posture, painting a green badge on someone we'd never scored —
+    // which is the one thing a triage view must never do, because it tells a
+    // human to look away. "Unknown" is a gap in coverage, not a pass.
+    unknown: { label: "Unknown", color: SOC.purple },
   };
+  const metaFor = s => statusMeta[s] || statusMeta.unknown;
 
   const Header = ({ title, backTo }) => (
     <div style={{padding:"13px 22px",background:SOC.panel,borderBottom:`1px solid ${SOC.border}`,
@@ -6626,6 +10207,12 @@ function AnalystConsole({ user, onExit }) {
             color:view==="livefleet"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🖥️ Live Fleet
+        </button>
+        <button onClick={()=>setView(view==="branding"?"portfolio":"branding")}
+          style={{padding:"6px 14px",background:view==="branding"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="branding"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          🎨 Branding
         </button>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
@@ -6730,10 +10317,6 @@ function AnalystConsole({ user, onExit }) {
   );
 
   // ═══ CLIENT COMMAND CENTER ═══
-  if (workspaceClient) {
-    return <WorkspaceViewer client={workspaceClient} onBack={()=>setWorkspaceClient(null)}/>;
-  }
-
   if (view === "myclients") {
     const list = myClients || [];
     return (
@@ -6804,11 +10387,6 @@ function AnalystConsole({ user, onExit }) {
                           {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
                         </div>
                       </div>
-                      <button onClick={()=>setWorkspaceClient(c)}
-                        style={{padding:"7px 14px",background:`${SOC.green}18`,border:`1px solid ${SOC.green}55`,
-                          borderRadius:7,color:SOC.green,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                        View Workspace →
-                      </button>
                       <button onClick={()=>loadClientActions(c.id)}
                         style={{padding:"7px 14px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
                           borderRadius:7,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
@@ -6820,6 +10398,18 @@ function AnalystConsole({ user, onExit }) {
               )}
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "branding") {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="White-Label Branding"/>
+        <Mastermind/>
+        <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
+          <BrandingManager isAdmin={!!user.isAdmin}/>
         </div>
       </div>
     );
@@ -7002,7 +10592,11 @@ function AnalystConsole({ user, onExit }) {
     const c = active;
     const clr = pColor(c.posture);
     const chatLog = [...(c.chat || []), ...((localChats[c.id]) || [])];
-    const trend = c.history[c.history.length-1] - c.history[0];
+    // Empty history (never scored) must not produce NaN. null means "no trend
+    // to show" — a client with one data point has no trend, and inventing a
+    // flat line would imply stability we haven't observed.
+    const hist = c.history || [];
+    const trend = hist.length > 1 ? hist[hist.length-1] - hist[0] : null;
 
     function sendChat() {
       if (!chatDraft.trim()) return;
@@ -7020,7 +10614,7 @@ function AnalystConsole({ user, onExit }) {
           {/* Top band: posture + agent + compliance + plan */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:16}}>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:36,fontWeight:800,color:clr,lineHeight:1}}>{c.posture}</div>
+              <div style={{fontSize:36,fontWeight:800,color:typeof c.posture==="number"?clr:SOC.textMut,lineHeight:1}}>{typeof c.posture==="number" ? c.posture : "—"}</div>
               <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1,marginTop:3}}>POSTURE / 100</div>
               <div style={{marginTop:6,fontSize:10,color:trend>=0?SOC.green:SOC.red}}>
                 {trend>=0?"▲":"▼"} {Math.abs(trend)} pts / 12mo
@@ -7036,7 +10630,7 @@ function AnalystConsole({ user, onExit }) {
                     {am.label}
                   </div>
                   <div style={{fontSize:22,fontWeight:800,color:SOC.text,marginTop:6}}>{c.agent.endpoints}</div>
-                  <div style={{fontSize:9,color:SOC.textMut}}>endpoints · {c.agent.coverage}% coverage</div>
+                  <div style={{fontSize:9,color:SOC.textMut}}>{c.agent?.endpoints ? `${c.agent.healthy}/${c.agent.endpoints} healthy` : "no agent enrolled"}</div>
                   {c.agent.status === "offline" && (
                     <button style={{marginTop:8,width:"100%",padding:"6px",background:`${SOC.red}18`,
                       border:`1px solid ${SOC.red}44`,borderRadius:6,color:SOC.red,fontSize:10,fontWeight:600,cursor:"pointer"}}>
@@ -7050,16 +10644,16 @@ function AnalystConsole({ user, onExit }) {
               ); })()}
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
-              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct.framework} READINESS</div>
-              <div style={{fontSize:28,fontWeight:800,color:SOC.cyan,marginTop:4}}>{c.compliancePct.current}%</div>
+              <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>{c.compliancePct ? `${c.compliancePct.framework} READINESS` : "COMPLIANCE"}</div>
+              <div style={{fontSize:28,fontWeight:800,color:c.compliancePct?SOC.cyan:SOC.textMut,marginTop:4}}>{c.compliancePct ? `${c.compliancePct.current}%` : "—"}</div>
               <div style={{height:5,background:SOC.grid,borderRadius:3,marginTop:8,overflow:"hidden"}}>
-                <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:SOC.cyan}}/>
+                <div style={{width:`${c.compliancePct?.current ?? 0}%`,height:"100%",background:SOC.cyan}}/>
               </div>
-              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>target {c.compliancePct.target}%</div>
+              <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.compliancePct ? `across ${c.compliancePct.frameworks} framework(s)` : "no assessment on file"}</div>
             </div>
             <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,padding:"16px",textAlign:"center"}}>
               <div style={{fontSize:9,color:SOC.textMut,letterSpacing:1}}>MONTHLY VALUE</div>
-              <div style={{fontSize:24,fontWeight:800,color:SOC.green,marginTop:6}}>${c.mrr.toLocaleString()}</div>
+              <div style={{fontSize:24,fontWeight:800,color:typeof c.mrr==="number"?SOC.green:SOC.textMut,marginTop:6}}>{typeof c.mrr==="number" ? `$${c.mrr.toLocaleString()}` : "—"}</div>
               <div style={{fontSize:9,color:SOC.textMut,marginTop:4}}>{c.plan}</div>
             </div>
           </div>
@@ -7075,13 +10669,13 @@ function AnalystConsole({ user, onExit }) {
             <SocPanel title="Live Threat Feed" accent={SOC.red}
               action={<span style={{fontSize:9,color:SOC.green,display:"flex",alignItems:"center",gap:5}}>
                 <span style={{width:6,height:6,borderRadius:"50%",background:SOC.green,boxShadow:`0 0 6px ${SOC.green}`}}/>LIVE</span>}>
-              {c.alerts.length === 0 ? (
+              {(c.alerts || []).length === 0 ? (
                 <div style={{color:SOC.textSec,fontSize:12,padding:"20px 0",textAlign:"center"}}>
                   No active threats. All clear. ✓
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:150,overflowY:"auto"}}>
-                  {c.alerts.map((a,i)=>(
+                  {(c.alerts || []).map((a,i)=>(
                     <div key={i} style={{display:"flex",gap:10,padding:"8px 10px",background:SOC.bg,
                       borderRadius:8,borderLeft:`3px solid ${sevColor(a.sev)}`}}>
                       <div style={{flex:1}}>
@@ -7130,13 +10724,13 @@ function AnalystConsole({ user, onExit }) {
 
             {/* Review & approval queue */}
             <SocPanel title="Review & Approval Queue" accent={SOC.amber}>
-              {c.reviewQueue.length === 0 ? (
+              {(c.reviewQueue || []).length === 0 ? (
                 <div style={{color:SOC.textSec,fontSize:12,padding:"20px 0",textAlign:"center"}}>
                   Nothing pending — client is up to date. ✓
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {c.reviewQueue.map((item,i)=>{
+                  {(c.reviewQueue || []).map((item,i)=>{
                     const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, draft:{label:"Draft",color:SOC.textMut} }[item.status];
                     return (
                       <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
@@ -7159,50 +10753,94 @@ function AnalystConsole({ user, onExit }) {
             </SocPanel>
           </div>
 
+          {/* Client document drilldown — read the actual assessments,
+              programs, and policies behind the posture number. */}
+          <div style={{marginBottom:14}}>
+            <ClientDocuments clientId={c.id}/>
+          </div>
+
+          {/* Training program — assign, track completion, act on the client's
+              security-awareness training. Scoped to this client via clientId. */}
+          <div style={{marginBottom:14}}>
+            <ClientTrainingPanel clientId={c.id}/>
+          </div>
+
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-            {/* Weekly program status */}
-            <SocPanel title="Weekly Program Health" accent={SOC.blue}>
+            {/* Program health — from the client's actual answers, not inferred.
+                These four rows previously read:
+                  { label:"Patch compliance", val: c.posture>50?78:34 }
+                  { label:"MFA adoption",     val: c.posture>50?85:20 }
+                  { label:"Backup health",    val: c.posture>50?92:40 }
+                — three security metrics invented by a ternary on the posture
+                score and rendered as progress bars. An analyst reading "MFA
+                adoption 85%" would reasonably believe someone measured it.
+                Nobody did. The assessment answers these questions directly, and
+                the agent corroborates some of them, so we show that instead.
+                A control with no answer shows "not assessed", not a number. */}
+            <SocPanel title="Program Health" accent={SOC.blue}>
               <div style={{display:"flex",flexDirection:"column",gap:9}}>
                 {[
-                  { label:"Endpoint protection", val: c.agent.coverage, },
-                  { label:"Patch compliance", val: c.posture>50?78:34 },
-                  { label:"MFA adoption", val: c.posture>50?85:20 },
-                  { label:"Backup health", val: c.posture>50?92:40 },
+                  { label:"Endpoint protection", val: c.agent?.endpoints ? Math.round((c.agent.healthy / c.agent.endpoints) * 100) : null,
+                    note: c.agent?.endpoints ? `${c.agent.healthy}/${c.agent.endpoints} agents healthy` : "No agent enrolled" },
+                  { label:"Compliance readiness", val: c.compliancePct?.current ?? null,
+                    note: c.compliancePct ? `weakest: ${c.compliancePct.framework}` : "No assessment on file" },
+                  { label:"Posture", val: typeof c.posture === "number" ? c.posture : null,
+                    note: c.level || "Not scored" },
                 ].map((r,i)=>(
                   <div key={i}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
                       <span style={{color:SOC.textSec}}>{r.label}</span>
-                      <span style={{color:pColor(r.val),fontWeight:700}}>{r.val}%</span>
+                      <span style={{color:r.val===null?SOC.textMut:pColor(r.val),fontWeight:700}}>
+                        {r.val===null ? "—" : `${r.val}%`}
+                      </span>
                     </div>
                     <div style={{height:4,background:SOC.grid,borderRadius:2,overflow:"hidden"}}>
-                      <div style={{width:`${r.val}%`,height:"100%",background:pColor(r.val)}}/>
+                      <div style={{width:`${r.val ?? 0}%`,height:"100%",background:r.val===null?SOC.grid:pColor(r.val)}}/>
                     </div>
+                    <div style={{fontSize:9.5,color:SOC.textMut,marginTop:2}}>{r.note}</div>
                   </div>
                 ))}
               </div>
-              <button style={{marginTop:12,width:"100%",padding:"8px",background:SOC.panelHi,
-                border:`1px solid ${SOC.border}`,borderRadius:7,color:SOC.textSec,fontSize:11,cursor:"pointer"}}>
-                Generate Weekly Report →
-              </button>
             </SocPanel>
 
-            {/* Compliance progress */}
-            <SocPanel title="Compliance Progress" accent={SOC.purple}>
-              <div style={{textAlign:"center",padding:"6px 0"}}>
-                <div style={{fontSize:11,color:SOC.textSec}}>{c.compliancePct.framework}</div>
-                <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
-                <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
-                  <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+            {/* Compliance progress — real readiness per framework.
+                This panel previously rendered c.compliancePct.target, a number
+                that existed only in SAMPLE_CLIENTS, and concluded "On track for
+                certification window" by comparing against it. That's a
+                compliance claim derived from a fabricated target. There is no
+                target in the real data because nobody has set one — so we show
+                what we actually computed: readiness per framework, weakest
+                first, and the gap count that drives it. */}
+            <SocPanel title="Compliance Readiness" accent={SOC.purple}>
+              {!c.compliancePct ? (
+                <div style={{textAlign:"center",padding:"14px 0",color:SOC.textMut,fontSize:11,lineHeight:1.6}}>
+                  No assessment on file.<br/>Nothing here is a pass — we haven't asked yet.
                 </div>
-                <div style={{fontSize:10,color:SOC.textMut}}>
-                  {c.compliancePct.target - c.compliancePct.current}% to target ({c.compliancePct.target}%)
-                </div>
-              </div>
-              <div style={{marginTop:8,fontSize:10,color:SOC.textSec,lineHeight:1.6}}>
-                {c.compliancePct.current >= c.compliancePct.target - 10
-                  ? "On track for certification window."
-                  : "Remediation roadmap in progress."}
-              </div>
+              ) : (
+                <>
+                  <div style={{textAlign:"center",padding:"6px 0"}}>
+                    <div style={{fontSize:11,color:SOC.textSec}}>Weakest: {c.compliancePct.framework}</div>
+                    <div style={{fontSize:32,fontWeight:800,color:SOC.purple,margin:"4px 0"}}>{c.compliancePct.current}%</div>
+                    <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden",margin:"8px 0"}}>
+                      <div style={{width:`${c.compliancePct.current}%`,height:"100%",background:`linear-gradient(90deg,${SOC.purple},${SOC.cyan})`}}/>
+                    </div>
+                    <div style={{fontSize:10,color:SOC.textMut}}>
+                      readiness over assessed controls · {c.compliancePct.frameworks} framework(s)
+                    </div>
+                  </div>
+                  <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
+                    {(c.compliancePct.detail || []).slice(0,6).map((f,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:10}}>
+                        <span style={{color:SOC.textSec,flex:1}}>{f.short}</span>
+                        {f.gaps > 0 && <span style={{color:SOC.amber}}>{f.gaps} gap{f.gaps>1?"s":""}</span>}
+                        <span style={{color:f.readinessPct===null?SOC.textMut:pColor(f.readinessPct),fontWeight:700,minWidth:32,textAlign:"right"}}>
+                          {f.readinessPct===null ? "—" : `${f.readinessPct}%`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </SocPanel>
 
             {/* Training program */}
@@ -7247,6 +10885,40 @@ function AnalystConsole({ user, onExit }) {
   }
 
   // ═══ PORTFOLIO OVERVIEW ═══
+  // Loading / error / empty states exist because the console never needed them
+  // before: SAMPLE_CLIENTS was always there, always populated, always cheerful.
+  // Real data can be absent, and each absence means something different.
+  if (portfolioErr || portfolio === null || clients.length === 0) {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="Portfolio Command Center"/>
+        <div style={{maxWidth:1180,margin:"0 auto",padding:"40px 20px"}}>
+          <div style={{background:SOC.panel,border:`1px solid ${portfolioErr?SOC.red+"44":SOC.border}`,
+            borderRadius:12,padding:"28px 24px",textAlign:"center"}}>
+            {portfolioErr ? (
+              <>
+                <div style={{color:SOC.red,fontSize:14,fontWeight:700,marginBottom:6}}>{portfolioErr}</div>
+                <div style={{color:SOC.textSec,fontSize:12}}>
+                  If you're an analyst and seeing this, your account may not have the analyst role yet.
+                </div>
+              </>
+            ) : portfolio === null ? (
+              <div style={{color:SOC.textSec,fontSize:13}}>Loading your portfolio…</div>
+            ) : (
+              <>
+                <div style={{color:SOC.text,fontSize:14,fontWeight:700,marginBottom:6}}>No clients assigned to you</div>
+                <div style={{color:SOC.textSec,fontSize:12,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>
+                  An admin assigns clients to analysts. You see only your own — that scoping is
+                  enforced server-side, not here.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
       <Header title="Portfolio Command Center"/>
@@ -7257,11 +10929,18 @@ function AnalystConsole({ user, onExit }) {
         <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:18}}>
           {[
             { label:"Active Clients", value:clients.length, color:SOC.cyan },
-            { label:"Monthly Recurring", value:`$${(totalMRR/1000).toFixed(1)}k`, color:SOC.green },
-            { label:"Avg Posture", value:avgPosture, color:pColor(avgPosture) },
-            { label:"Agents Online", value:`${agentsOnline}/${clients.length}`, color:SOC.blue },
+            // "—" until billing is wired. Not $0.0k, which would be a claim.
+            { label:"Monthly Recurring", value: totalMRR === null ? "—" : `$${(totalMRR/1000).toFixed(1)}k`,
+              color: totalMRR === null ? SOC.textMut : SOC.green,
+              hint: totalMRR === null ? "No billing integration yet — nothing to report." : null },
+            { label:"Avg Posture", value: avgPosture === null ? "—" : avgPosture,
+              color: avgPosture === null ? SOC.textMut : pColor(avgPosture),
+              hint: unscoredCount > 0 ? `${scored.length} of ${clients.length} scored` : null },
+            { label:"Agents Online", value:`${agentsOnline}/${withAgents || 0}`, color:SOC.blue,
+              hint: withAgents < clients.length ? `${clients.length - withAgents} without an agent` : null },
             { label:"Pending Reviews", value:reviewCount, color:reviewCount>0?SOC.amber:SOC.green },
-            { label:"High Alerts", value:highAlerts, color:highAlerts>0?SOC.red:SOC.green },
+            { label:"Conflicts", value:openConflicts, color:openConflicts>0?SOC.amber:SOC.green,
+              hint: openConflicts > 0 ? "Agent telemetry disagrees with client answers" : null },
           ].map((k,i)=>(
             <div key={i} style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"14px",textAlign:"center"}}>
               <div style={{fontSize:24,fontWeight:800,color:k.color}}>{k.value}</div>
@@ -7297,9 +10976,9 @@ function AnalystConsole({ user, onExit }) {
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {clients.map(c=>{
                 const clr = pColor(c.posture);
-                const sm = statusMeta[c.status];
-                const pend = c.reviewQueue.filter(r=>r.status==="awaiting_review").length;
-                const highA = c.alerts.filter(a=>a.sev==="high").length;
+                const sm = metaFor(c.status);
+                const pend = (c.reviewQueue || []).filter(r=>r.status==="awaiting_review").length;
+                const highA = (c.alerts || []).filter(a=>a.sev==="high"||a.sev==="critical").length;
                 return (
                   <div key={c.id} onClick={()=>{setActive(c);setView("client");}}
                     style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:10,
@@ -7308,7 +10987,7 @@ function AnalystConsole({ user, onExit }) {
                       background:`conic-gradient(${clr} ${c.posture*3.6}deg, ${SOC.grid} 0deg)`,
                       display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <div style={{width:36,height:36,borderRadius:"50%",background:SOC.panel,
-                        display:"flex",alignItems:"center",justifyContent:"center",color:clr,fontWeight:700,fontSize:13}}>{c.posture}</div>
+                        display:"flex",alignItems:"center",justifyContent:"center",color:typeof c.posture==="number"?clr:SOC.textMut,fontWeight:700,fontSize:13}}>{typeof c.posture==="number" ? c.posture : "—"}</div>
                     </div>
                     <div style={{flex:1}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -8284,33 +11963,80 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 //  UPGRADE PROMPT (shown when a tier gate blocks an action)
 // ─────────────────────────────────────────────────────────────
 function UpgradeModal({ info, onClose }) {
+  const [addonBusy, setAddonBusy] = useState(false);
+  const [addonMsg, setAddonMsg] = useState(null);
   if (!info) return null;
   const isLimit = info.code === "LIMIT_REACHED";
+  const isTrainingAddon = info.addon === "training_delivery";
+
+  async function buyTrainingAddon() {
+    setAddonBusy(true); setAddonMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/checkout-addon`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addon: "training_delivery" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      // Billing not yet live (Stripe price unset) or add-on unavailable — explain gracefully.
+      setAddonMsg(data.error || "Training add-on checkout isn't available yet. Contact your ShieldAI admin to enable it.");
+    } catch {
+      setAddonMsg("Couldn't start checkout. Contact your ShieldAI admin to add training delivery.");
+    } finally { setAddonBusy(false); }
+  }
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
       display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.accent}55`,
-        borderRadius:14,maxWidth:420,width:"100%",padding:"26px 28px",textAlign:"center"}}>
-        <div style={{fontSize:30,marginBottom:10}}>{isLimit ? "📦" : "🔒"}</div>
+        borderRadius:14,maxWidth:440,width:"100%",padding:"26px 28px",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:10}}>{isTrainingAddon ? "🎓" : isLimit ? "📦" : "🔒"}</div>
         <h2 style={{color:C.text,fontSize:19,margin:"0 0 8px"}}>
-          {isLimit ? "Plan limit reached" : "Upgrade to unlock"}
+          {isTrainingAddon ? "Add employee training delivery" : isLimit ? "Plan limit reached" : "Upgrade to unlock"}
         </h2>
         <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 18px"}}>
           {info.error || "This feature isn't included in your current plan."}
           {info.currentTier && <><br/><span style={{color:C.textMut,fontSize:12}}>Current plan: {info.currentTier}</span></>}
         </p>
+
+        {isTrainingAddon && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:14}}>Training Delivery add-on</span>
+              <span style={{color:C.green,fontWeight:800,fontSize:15}}>$40<span style={{fontSize:11,color:C.textMut}}>/mo</span></span>
+            </div>
+            <div style={{color:C.textMut,fontSize:12,lineHeight:1.5}}>
+              Tokenized learner links, assignments, quarterly scheduling, completion tracking, and reports.
+              Bundled free on Growth and higher.
+            </div>
+          </div>
+        )}
+        {addonMsg && <div style={{color:C.amber,fontSize:12,marginBottom:12,lineHeight:1.5}}>{addonMsg}</div>}
+
         <div style={{display:"flex",gap:8,justifyContent:"center"}}>
           <button onClick={onClose}
             style={{padding:"9px 18px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>Maybe later</button>
-          <button onClick={onClose}
-            style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-            View plans
-          </button>
+          {isTrainingAddon ? (
+            <button onClick={buyTrainingAddon} disabled={addonBusy}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.green},${C.accent})`,
+                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                cursor:addonBusy?"default":"pointer",opacity:addonBusy?0.7:1}}>
+              {addonBusy ? "Starting…" : "Add for $40/mo"}
+            </button>
+          ) : (
+            <button onClick={onClose}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              View plans
+            </button>
+          )}
         </div>
         <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
-          Contact your ShieldAI admin to change your subscription tier.
+          {isTrainingAddon
+            ? "Or upgrade to Growth or higher, where training delivery is included."
+            : "Contact your ShieldAI admin to change your subscription tier."}
         </div>
       </div>
     </div>
@@ -8396,7 +12122,8 @@ export default function ShieldAI() {
   const [assessment, setAssessment] = useState(null);
   const [results, setResults] = useState(null);
   const [consoleTarget, setConsoleTarget] = useState(null); // {assessmentId, programId}
-  const [publicView, setPublicView] = useState("marketing"); // marketing | auth (when logged out)
+  const [publicView, setPublicView] = useState("marketing"); // marketing | investor | auth (when logged out)
+  const [pendingCodeEntry, setPendingCodeEntry] = useState(false); // open the code modal on marketing mount
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
   const [showEndpoints, setShowEndpoints] = useState(false);
@@ -8407,7 +12134,14 @@ export default function ShieldAI() {
 
   // Frontend analyst detection for the mockup (matches the analyst email).
   // Later this becomes a real role flag from the backend.
-  const isAnalyst = user && (user.isAnalyst || user.email === ANALYST_EMAIL);
+  // Analyst-console access. For a demo session, this is governed strictly by the
+  // access-code type: only an "investor" code unlocks the analyst console. A
+  // "client" code never does — those visitors see a "Your vCISO" panel instead.
+  const isAnalyst = user && (
+    user.isDemo
+      ? user.accessType === "investor"
+      : (user.isAnalyst || user.email === ANALYST_EMAIL)
+  );
 
   // Tier-gate upgrade prompt (fired by authFetch on any HTTP 402).
   const [upgradePrompt, setUpgradePrompt] = useState(null);
@@ -8415,6 +12149,10 @@ export default function ShieldAI() {
     setUpgradeHandler((data) => setUpgradePrompt(data || { error: "Upgrade required." }));
     return () => setUpgradeHandler(null);
   }, []);
+
+  // Resolve the white-label brand for the logged-in user (their MSP's brand,
+  // platform default, or ShieldAI). Re-runs on login/logout and role change.
+  useEffect(() => { refreshBrandForUser(user); }, [user?.id]);
 
   // Capability helper for gating UI (mirrors backend; backend remains the real gate).
   const can = (cap) => {
@@ -8430,15 +12168,33 @@ export default function ShieldAI() {
       // Force a password change before granting access to anything else.
       return;
     }
-    // Analysts land directly in their console
-    if (userObj && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
+    // Real analysts land directly in their console. An investor-code demo
+    // session is different: it should start in the CLIENT experience (that's
+    // what a prospect sees) with the analyst console one click away, so the
+    // investor sees both sides. So we skip the auto-jump for demo sessions.
+    if (userObj && !userObj.isDemo && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
       setShowAnalyst(true);
     }
+  }
+
+  // Enter the read-only sandbox. Reuses the normal authenticated flow — the
+  // demo token simply binds every request to the demo store on the backend.
+  async function handleStartDemo(persona) {
+    const demoUser = await startDemoSession(persona);
+    handleAuthenticated(demoUser);
+  }
+
+  // Redeem an access code → scoped demo session. accessType ("investor" |
+  // "client") rides on the user object and gates which consoles are reachable.
+  async function handleRedeemCode(code) {
+    const demoUser = await redeemAccessCode(code);
+    handleAuthenticated(demoUser);
   }
 
   function signOut() {
     setAuthToken(null);
     setUser(null);
+    setPublicView("marketing");
     setAssessment(null);
     setResults(null);
     setShowAnalyst(false);
@@ -8483,14 +12239,32 @@ export default function ShieldAI() {
     setPhase("analysis");
   }
 
-  // Not logged in → marketing front page, then auth
+  // Standalone learner training page — token in the URL, no login. This is the
+  // public face of the Training product; it renders on its own with no app
+  // chrome and never requires an account.
+  const trainMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/train\/([^/?#]+)/);
+  if (trainMatch) {
+    return <LearnerPage token={decodeURIComponent(trainMatch[1])}/>;
+  }
+
+  // Not logged in → marketing front page, investor page, or auth
   if (!user) {
     if (publicView === "auth") {
       return <AuthScreen onAuthenticated={handleAuthenticated} onBack={() => setPublicView("marketing")}/>;
     }
+    if (publicView === "investor") {
+      return <InvestorPage
+        onBack={() => setPublicView("marketing")}
+        onOpenCode={() => { setPublicView("marketing"); setTimeout(() => setPendingCodeEntry(true), 0); }}/>;
+    }
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
-      onLogin={() => setPublicView("auth")}/>;
+      onLogin={() => setPublicView("auth")}
+      onStartDemo={handleStartDemo}
+      onRedeemCode={handleRedeemCode}
+      onOpenInvestor={() => setPublicView("investor")}
+      openCodeEntry={pendingCodeEntry}
+      onCodeEntryOpened={() => setPendingCodeEntry(false)}/>;
   }
 
   // Forced first-login password change — blocks everything until done.
@@ -8513,19 +12287,29 @@ export default function ShieldAI() {
     return <MastermindConsole onClose={() => setShowMastermind(false)}/>;
   }
 
+  // Sandbox marker rides above every authenticated view, including the analyst
+  // console and Mastermind — there is no screen where a visitor can forget
+  // they're in the demo.
+  async function exitDemo() {
+    await endDemoSession();
+    signOut();
+  }
+  const demoBanner = user.isDemo ? <DemoBanner onExit={exitDemo}/> : null;
+
   // Client-facing Mastermind (Enterprise clients only; staff use admin console)
   if (showClientMastermind && !user.isAdmin && !user.isAnalyst) {
-    return <ClientMastermind onClose={() => setShowClientMastermind(false)}/>;
+    return <>{demoBanner}<ClientMastermind onClose={() => setShowClientMastermind(false)}/></>;
   }
 
   // Analyst console (analyst accounts only)
   if (showAnalyst && isAnalyst) {
-    return <AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/>;
+    return <>{demoBanner}<AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/></>;
   }
 
   // Top bar showing the logged-in company + sign out
   const TopBar = () => (
     <>
+    {demoBanner}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
@@ -8545,8 +12329,8 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermind")
               ? setShowClientMastermind(true)
-              : setUpgradePrompt({ error:"Mastermind assistant is available on the Enterprise plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
-            title={can("mastermind") ? "" : "Enterprise plan feature"}
+              : setUpgradePrompt({ error:"Mastermind assistant is available on the Managed vCISO plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
+            title={can("mastermind") ? "" : "Managed vCISO plan feature"}
             style={{padding:"5px 12px",
               background: can("mastermind") ? `${C.purple}22` : C.surface,
               border:`1px solid ${can("mastermind") ? C.purple+"55" : C.border}`,borderRadius:6,
@@ -8662,8 +12446,31 @@ export default function ShieldAI() {
           </button>
         </div>
         <div style={{flex:1,overflow:"hidden"}}>
-          <IntakeChat onComplete={data => { setAssessment(data); setPhase("checklist"); }}/>
+          <IntakeChat onComplete={data => { setAssessment(data); setPhase("framework"); }}/>
         </div>
+      </div>
+    );
+  }
+
+  if (phase === "framework") {
+    return (
+      <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
+        <TopBar/>
+        <div style={{padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
+          display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontWeight:600,color:C.text}}>Security Assessment</span>
+          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 2 of 4 — Framework Foundation</span>
+        </div>
+        <FrameworkFoundationScreen
+          initial={assessment?.frameworkLens || "nist"}
+          onComplete={(frameworkLens) => {
+            // The lens rides on the assessment; riskEngine reads it when scoring,
+            // so every downstream consumer gets the chosen framing for free.
+            setAssessment(prev => ({ ...prev, frameworkLens }));
+            setPhase("checklist");
+          }}
+          onBack={() => setPhase("intake")}
+        />
       </div>
     );
   }
@@ -8675,14 +12482,15 @@ export default function ShieldAI() {
         <div style={{padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
           display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontWeight:600,color:C.text}}>Security Assessment</span>
-          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 2 of 3 — Security Checklist</span>
+          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 3 of 4 — Security Checklist</span>
         </div>
         <ChecklistScreen
+          frameworkLens={assessment?.frameworkLens || "nist"}
           onComplete={(checklist, selectedFrameworks) => {
             setAssessment(prev => ({ ...prev, checklist, selectedFrameworks }));
             setPhase("analysis");
           }}
-          onBack={() => setPhase("intake")}
+          onBack={() => setPhase("framework")}
         />
       </div>
     );
