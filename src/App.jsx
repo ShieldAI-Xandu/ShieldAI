@@ -2005,6 +2005,33 @@ async function downloadEvidence(ev) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Download a generated report (branded .doc) as a blob. The endpoint requires
+// the Authorization header, so a bare href won't work — we fetch and trigger
+// a download from the blob, exactly like evidence downloads.
+async function downloadReport(report) {
+  const res = await authFetch(`${API_BASE}/api/reports/${report.id}/download`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = report.filename || "ShieldAI_Report.doc";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// Shared metadata for the report types (icons, labels, one-line descriptions).
+const REPORT_TYPE_META = {
+  status:     { icon: "📋", label: "Status Report",      blurb: "Plain-language snapshot of where you stand today." },
+  update:     { icon: "🔄", label: "Update Report",      blurb: "What has changed and what happened this period." },
+  compliance: { icon: "✅", label: "Compliance Report",  blurb: "Framework-by-framework control posture for auditors/regulators." },
+  insurance:  { icon: "🛡️", label: "Insurance Report",   blurb: "Attestable controls for a cyber-insurance application or renewal." },
+  legal:      { icon: "⚖️", label: "Legal Record",       blurb: "Defensible record of what was assessed, advised, and acted on." },
+};
+
 function EvidenceSection() {
   const [coverage, setCoverage] = useState(null);
   const [items, setItems] = useState([]);
@@ -4110,6 +4137,182 @@ function MarkdownDocLight({ text }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  REPORTS (client-facing)
+//  Clients self-generate Status and Update reports, and see/download any
+//  Compliance / Insurance / Legal reports their analyst has delivered.
+// ─────────────────────────────────────────────────────────────
+function ReportsSection() {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);   // which action is running
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [since, setSince] = useState("");   // optional "changed since" date for updates
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load reports.");
+      setReports(Array.isArray(d) ? d : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function generate(type) {
+    setBusy(type); setError(null);
+    try {
+      const body = { type };
+      if (type === "update" && since) body.since = new Date(since).toISOString();
+      const res = await authFetch(`${API_BASE}/api/reports/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not generate report.");
+      flash(`${REPORT_TYPE_META[type]?.label || "Report"} generated.`);
+      await load();
+      // Immediately offer the freshly generated document.
+      try { await downloadReport(d); } catch { /* user can click Download */ }
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function doDownload(r) {
+    setBusy(r.id); setError(null);
+    try { await downloadReport(r); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function remove(r) {
+    if (!window.confirm(`Delete "${r.filename}"? This removes the document; your underlying data is untouched.`)) return;
+    setBusy(r.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports/${r.id}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Delete failed.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  const selfCards = ["status", "update"];
+
+  return (
+    <div>
+      <SectionLabel text="Reports"/>
+      <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px",maxWidth:680}}>
+        Generate a plain-language status or update report anytime. Compliance,
+        insurance, and legal reports are prepared by your ShieldAI analyst and
+        appear here once delivered.
+      </p>
+
+      {toast && (
+        <div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,fontSize:13,
+          background:`${toast.tone}18`,border:`1px solid ${toast.tone}44`,color:toast.tone}}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Self-serve generators */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:12}}>
+        {selfCards.map(type => {
+          const m = REPORT_TYPE_META[type];
+          return (
+            <Card key={type} style={{padding:"18px 20px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+                <span style={{fontSize:22}}>{m.icon}</span>
+                <span style={{color:C.text,fontWeight:700,fontSize:15}}>{m.label}</span>
+              </div>
+              <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.55,margin:"0 0 14px"}}>{m.blurb}</p>
+              {type === "update" && (
+                <div style={{marginBottom:12}}>
+                  <label style={{display:"block",color:C.textMut,fontSize:11,marginBottom:4}}>
+                    Show changes since (optional)
+                  </label>
+                  <input type="date" value={since} onChange={e=>setSince(e.target.value)}
+                    style={{padding:"7px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:8,color:C.text,fontSize:12.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+                </div>
+              )}
+              <button onClick={()=>generate(type)} disabled={busy===type}
+                style={{padding:"9px 18px",background:busy===type?C.border:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color:busy===type?C.textMut:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+                  cursor:busy===type?"wait":"pointer"}}>
+                {busy===type ? "Generating…" : `Generate ${m.label}`}
+              </button>
+            </Card>
+          );
+        })}
+      </div>
+
+      {error && <div style={{margin:"12px 0",color:C.red,fontSize:13}}>{error}</div>}
+
+      <SectionLabel text={`Your Reports (${reports.length})`}/>
+      {loading ? <Spinner/> : reports.length === 0 ? (
+        <Card style={{textAlign:"center",padding:"36px 24px"}}>
+          <div style={{fontSize:30,marginBottom:8}}>📋</div>
+          <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:5}}>No reports yet</div>
+          <p style={{color:C.textSec,fontSize:13,margin:0,lineHeight:1.6}}>
+            Generate a status or update report above, or ask your analyst for a
+            compliance, insurance, or legal report.
+          </p>
+        </Card>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {reports.map(r => {
+            const m = REPORT_TYPE_META[r.type] || { icon:"📄", label:r.type };
+            const mine = r.createdByRole === "client_admin";
+            return (
+              <Card key={r.id} style={{padding:"14px 18px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                  <span style={{fontSize:20}}>{m.icon}</span>
+                  <div style={{flex:"1 1 240px",minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span style={{color:C.text,fontWeight:600,fontSize:14}}>{m.label}</span>
+                      {!mine && <Badge label="From your analyst" color={C.purple}/>}
+                    </div>
+                    <div style={{color:C.textMut,fontSize:11.5,marginTop:3}}>
+                      {new Date(r.createdAt).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}
+                      {" · "}{r.filename}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>doDownload(r)} disabled={busy===r.id}
+                      style={{padding:"7px 15px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                        borderRadius:7,color:C.accent,fontSize:12.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
+                      {busy===r.id ? "…" : "Download"}
+                    </button>
+                    {mine && (
+                      <button onClick={()=>remove(r)} disabled={busy===r.id}
+                        style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.textSec,fontSize:12.5,cursor:busy===r.id?"wait":"pointer"}}>
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <p style={{color:C.textMut,fontSize:11,lineHeight:1.6,margin:"16px 0 0",maxWidth:680}}>
+        Reports open in Microsoft Word and can be printed or saved as PDF. Each
+        carries a review note — these documents summarize your ShieldAI data and
+        are not a substitute for a licensed auditor, attorney, or signed attestation.
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  POLICY LIBRARY
 // ─────────────────────────────────────────────────────────────
 
@@ -4550,6 +4753,7 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"training",    icon:"🎓", label:"Training",          badge:results?.training?.trainingProgram?.modules?.length },
     { id:"trainingmgr", icon:"👥", label:"Training Program",  badge:null },
     { id:"report",      icon:"📋", label:"Exec Report",       badge:null },
+    { id:"reports",     icon:"📑", label:"Reports",           badge:null },
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
   ];
 
@@ -4572,6 +4776,7 @@ function Dashboard({ assessment, results, onReset }) {
     training:   <TrainingSection results={results} assessment={assessment}/>,
     trainingmgr: <TrainingProgramSection/>,
     report:     <ExecReportSection assessment={assessment} results={results}/>,
+    reports:    <ReportsSection/>,
     library:    <PolicyLibrarySection assessment={assessment}/>,
   };
 
@@ -9621,6 +9826,157 @@ function BrandingManager({ isAdmin }) {
   );
 }
 
+// Analyst/admin report generator for one client. Produces compliance,
+// insurance, and legal reports, and delivers them to the client. Reads/acts
+// via ?clientId= / clientId in the body; the server enforces assignment scope.
+function ClientReportsPanel({ clientId }) {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports?clientId=${encodeURIComponent(clientId)}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load reports.");
+      setReports(Array.isArray(d) ? d : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [clientId]);
+
+  function flash(msg, tone = SOC.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function generate(type) {
+    setBusy(type); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, clientId }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not generate report.");
+      flash(`${REPORT_TYPE_META[type]?.label || "Report"} generated — not yet delivered.`);
+      await load();
+      try { await downloadReport(d); } catch { /* can download from the list */ }
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function deliver(r) {
+    setBusy(r.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports/${r.id}/deliver`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Delivery failed.");
+      flash("Delivered to the client.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function doDownload(r) {
+    setBusy(r.id); setError(null);
+    try { await downloadReport(r); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  const staffTypes = ["compliance", "insurance", "legal"];
+
+  return (
+    <SocPanel title="Reports" accent={SOC.cyan}>
+      {toast && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:7,color:toast.tone,fontSize:12.5,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${SOC.red}15`,
+          border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <p style={{color:SOC.textSec,fontSize:12.5,lineHeight:1.55,margin:"0 0 14px"}}>
+        Generate a report from this client's live data, then deliver it. Delivered
+        reports appear in the client's own Reports area. Each document carries a
+        qualified-review disclaimer.
+      </p>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:16}}>
+        {staffTypes.map(type => {
+          const m = REPORT_TYPE_META[type];
+          return (
+            <div key={type} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:9,padding:"13px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                <span style={{fontSize:18}}>{m.icon}</span>
+                <span style={{color:SOC.text,fontSize:13,fontWeight:700}}>{m.label}</span>
+              </div>
+              <p style={{color:SOC.textMut,fontSize:11.5,lineHeight:1.5,margin:"0 0 12px",minHeight:32}}>{m.blurb}</p>
+              <button onClick={()=>generate(type)} disabled={busy===type}
+                style={{width:"100%",padding:"8px",background:busy===type?SOC.border:`${SOC.cyan}1A`,
+                  border:`1px solid ${SOC.cyan}55`,borderRadius:7,color:busy===type?SOC.textMut:SOC.cyan,
+                  fontSize:12,fontWeight:700,cursor:busy===type?"wait":"pointer"}}>
+                {busy===type ? "Generating…" : "Generate"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{fontSize:10,color:SOC.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>
+        GENERATED REPORTS ({reports.length})
+      </div>
+      {loading ? <div style={{color:SOC.textMut,fontSize:12,padding:12}}>Loading…</div> :
+       reports.length === 0 ? (
+        <div style={{color:SOC.textMut,fontSize:12.5,padding:"10px 0"}}>None yet. Generate one above.</div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {reports.map(r => {
+            const m = REPORT_TYPE_META[r.type] || { icon:"📄", label:r.type };
+            const delivered = !!r.deliveredAt;
+            return (
+              <div key={r.id} style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
+                background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:8,padding:"10px 13px"}}>
+                <span style={{fontSize:17}}>{m.icon}</span>
+                <div style={{flex:"1 1 200px",minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{m.label}</span>
+                    <span style={{padding:"1px 7px",borderRadius:5,fontSize:9.5,fontWeight:700,
+                      background: delivered ? `${SOC.green}22` : `${SOC.amber}22`,
+                      color: delivered ? SOC.green : SOC.amber}}>
+                      {delivered ? "DELIVERED" : "DRAFT"}
+                    </span>
+                  </div>
+                  <div style={{color:SOC.textMut,fontSize:10.5,marginTop:2}}>
+                    {new Date(r.createdAt).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
+                    {" · "}{r.filename}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>doDownload(r)} disabled={busy===r.id}
+                    style={{padding:"6px 12px",background:`${SOC.cyan}15`,border:`1px solid ${SOC.cyan}44`,
+                      borderRadius:6,color:SOC.cyan,fontSize:11.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
+                    Download
+                  </button>
+                  {!delivered && (
+                    <button onClick={()=>deliver(r)} disabled={busy===r.id}
+                      style={{padding:"6px 12px",background:`${SOC.green}15`,border:`1px solid ${SOC.green}44`,
+                        borderRadius:6,color:SOC.green,fontSize:11.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
+                      Deliver →
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </SocPanel>
+  );
+}
+
 // Analyst view of a client's training program. Reads/acts via ?clientId=, so
 // the analyst can assign, remind, and track completion for their assigned
 // client. Read + act, assignment-scoped server-side.
@@ -11142,6 +11498,12 @@ function AnalystConsole({ user, onExit }) {
               security-awareness training. Scoped to this client via clientId. */}
           <div style={{marginBottom:14}}>
             <ClientTrainingPanel clientId={c.id}/>
+          </div>
+
+          {/* Reports — generate compliance/insurance/legal reports from the
+              client's live data and deliver them to the client. */}
+          <div style={{marginBottom:14}}>
+            <ClientReportsPanel clientId={c.id}/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>

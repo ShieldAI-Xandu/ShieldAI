@@ -44,6 +44,12 @@ import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+// Reporting: aggregates posture/compliance/tasks/evidence/endpoints/training
+// plus the clientActions trail into four branded, Word-openable report types.
+// Clients self-serve status/update; staff produce compliance/insurance/legal
+// and deliver them to the client. No new dependencies — same .doc export
+// pattern already used for policies and training curricula.
+import { registerReportRoutes } from "./reportRoutes.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -1210,6 +1216,7 @@ registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
+registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND
