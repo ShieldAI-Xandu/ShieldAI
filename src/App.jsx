@@ -11254,8 +11254,8 @@ function AnalystConsole({ user, onExit }) {
           <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
             border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
             <span style={{color:SOC.textSec,fontSize:11}}>
-              Vision mockup — panels show the platform's intended capabilities (live agent telemetry,
-              threat detection, client messaging, automated reporting) with representative data.
+              Panels reflect this client's real data — agent telemetry, compliance readiness, training,
+              and threat exposure. Fields with no data yet show "—" rather than a placeholder.
             </span>
           </div>
         </div>
@@ -11482,7 +11482,7 @@ function AnalystConsole({ user, onExit }) {
         <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
           border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
           <span style={{color:SOC.textSec,fontSize:11}}>
-            Vision mockup with representative data. Click any client to open their full command center.
+            Live portfolio data for your assigned clients. Click any client to open their full command center.
           </span>
         </div>
       </div>
@@ -12706,15 +12706,15 @@ export default function ShieldAI() {
           🖥️ Endpoints
         </button>
         {!user.isAdmin && !user.isAnalyst && (
-          <button onClick={() => can("mastermind")
+          <button onClick={() => can("mastermindChat")
               ? setShowClientMastermind(true)
-              : setUpgradePrompt({ error:"Mastermind assistant is available on the Managed vCISO plan.", code:"UPGRADE_REQUIRED", currentTier:user.tier })}
-            title={can("mastermind") ? "" : "Managed vCISO plan feature"}
+              : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter" })}
+            title={can("mastermindChat") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
-              background: can("mastermind") ? `${C.purple}22` : C.surface,
-              border:`1px solid ${can("mastermind") ? C.purple+"55" : C.border}`,borderRadius:6,
-              color: can("mastermind") ? C.purple : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
-            {can("mastermind") ? "🧠 Mastermind" : "🔒 Mastermind"}
+              background: can("mastermindChat") ? `${C.purple}22` : C.surface,
+              border:`1px solid ${can("mastermindChat") ? C.purple+"55" : C.border}`,borderRadius:6,
+              color: can("mastermindChat") ? C.purple : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            {can("mastermindChat") ? "🧠 Mastermind" : "🔒 Mastermind"}
           </button>
         )}
         {user.isAdmin && (
