@@ -10,7 +10,23 @@ import db from "./db.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import { verifyDemoToken } from "./demoGateway.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "shieldai-test-secret-change-in-production";
+// No hardcoded fallback. This used to be
+//   process.env.JWT_SECRET || "shieldai-test-secret-change-in-production"
+// which meant an unset JWT_SECRET didn't fail — it silently signed every
+// session (including admin sessions) with a fixed string sitting in this file
+// on GitHub. Anyone who read the code could forge a valid token for any user.
+// That is worse than crashing: a crash is loud and gets fixed before launch: a
+// silently-forgeable auth system looks like it works right up until it's
+// exploited. If this throws, JWT_SECRET is missing from the environment —
+// set it in Railway → Variables (or .env locally) before anything else.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error(
+    "JWT_SECRET is not set. Sessions cannot be signed securely without it. " +
+    "Set JWT_SECRET in the environment (Railway → Variables, or .env locally) — " +
+    "see env.example. Refusing to start with a hardcoded fallback secret."
+  );
+}
 const TOKEN_EXPIRY = "7d";
 // Account cap. Set high to effectively disable during the demo/build phase.
 // (Lower this later if you want to re-enforce a limit.)

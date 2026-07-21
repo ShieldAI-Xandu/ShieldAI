@@ -705,6 +705,14 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   app.post("/api/analyst/recommendations/:id/forward", requireAnalyst, async (req, res) => {
     const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
     if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+    // Isolation check that this route was missing: without it, any analyst —
+    // not just one assigned to this client — could forward a draft straight
+    // to the client's dashboard. Creating a recommendation (above) already
+    // checks canSeeClient(); this had no equivalent, even though forwarding is
+    // the action that actually makes the recommendation visible to the client.
+    if (!canSeeClient(req, rec.ownerUserId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
     if (rec.status !== "suggested") {
       return res.status(409).json({ error: "Only a suggested draft can be forwarded." });
     }
@@ -723,6 +731,13 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   app.post("/api/analyst/recommendations/:id/enrich", requireAnalyst, async (req, res) => {
     const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
     if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+    // Same isolation gap as /forward, same fix: without this, any analyst could
+    // rewrite (and later forward) a recommendation belonging to a client that
+    // isn't theirs. Text-only or not, editing a draft that will be shown to
+    // someone else's client is exactly the boundary assignments exist to draw.
+    if (!canSeeClient(req, rec.ownerUserId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
     if (typeof callClaudeText !== "function") {
       return res.status(503).json({ error: "AI enrichment is not configured on this server." });
     }

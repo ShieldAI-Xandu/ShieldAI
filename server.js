@@ -1,9 +1,23 @@
 // server.js
 // ShieldAI backend: auth + AI proxy + database persistence + program pipeline.
 
+// MUST be the first import. ES module imports are evaluated in source order
+// before any other top-level code in this file runs — including the
+// `dotenv.config()` call that used to sit near the bottom of this import
+// block. Every module below that reads process.env at its own top level
+// (auth.js's JWT_SECRET, demoGateway.js's DEMO_JWT_SECRET, billingRoutes.js's
+// Stripe keys) was evaluating BEFORE .env had been loaded whenever this app
+// ran outside Railway — Railway injects variables directly into process.env
+// at process start, so production was never affected, but any local
+// `node server.js` run against a .env file saw every one of those as
+// undefined. That's what let auth.js's hardcoded JWT_SECRET fallback trigger
+// silently in local dev instead of the intended env var. Importing
+// "dotenv/config" here (a side-effecting import that runs dotenv.config()
+// immediately) guarantees .env is loaded first, in every environment.
+import "dotenv/config";
+
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
@@ -68,8 +82,6 @@ import {
   adminDeleteUser,
   MAX_USERS,
 } from "./auth.js";
-
-dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
