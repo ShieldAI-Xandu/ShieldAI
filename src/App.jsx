@@ -493,8 +493,8 @@ function IntakeChat({ onComplete }) {
               <div style={{padding:"12px 16px",borderRadius:m.role==="user"?"16px 16px 4px 16px":"4px 16px 16px 16px",
                 background:m.role==="user"?`${C.accent}18`:C.card,
                 border:`1px solid ${m.role==="user"?C.accent+"33":C.border}`,
-                color:C.text,fontSize:14,lineHeight:1.7,whiteSpace:"pre-wrap"}}>
-                {m.content}
+                color:C.text,fontSize:14,lineHeight:1.7}}>
+                {m.role==="user" ? m.content : <ChatMarkdown text={m.content} color={C.text} mutedColor={C.textSec}/>}
               </div>
               {m.model && m.role==="assistant" && (
                 <div style={{marginTop:4,paddingLeft:4}}><AIChip model={m.model}/></div>
@@ -509,7 +509,7 @@ function IntakeChat({ onComplete }) {
               display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20}/></div>
             <div style={{maxWidth:"75%",padding:"12px 16px",borderRadius:"4px 16px 16px 16px",
               background:C.card,border:`1px solid ${C.border}`,color:C.text,fontSize:14,lineHeight:1.7}}>
-              {streaming || <Spinner/>}
+              {streaming ? <ChatMarkdown text={streaming} color={C.text} mutedColor={C.textSec}/> : <Spinner/>}
             </div>
           </div>
         )}
@@ -4134,6 +4134,72 @@ function MarkdownDocLight({ text }) {
     i++;
   }
   return <div style={{fontFamily:"Georgia,'Times New Roman',serif"}}>{blocks}</div>;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CHAT MARKDOWN — compact renderer for AI chat bubbles
+//  Same basic parsing as MarkdownDoc/MarkdownDocLight (headers, **bold**,
+//  bullets, numbered lists, tables) but sized for a message bubble rather
+//  than a document: smaller type, tighter spacing, no serif font, and a
+//  `color`/`mutedColor` prop so it can sit correctly in bubbles of different
+//  backgrounds (user vs. assistant, light vs. dark console themes).
+//
+//  This exists because every Mastermind/analyst-chat surface was rendering
+//  the AI's raw reply as a single plain-text string — so a response like
+//  "## Summary\n\n**Priority 1:** ..." showed the literal characters
+//  `## Summary` and `**Priority 1:**` in the bubble instead of a heading and
+//  bold text. Claude's replies are always Markdown-formatted prose; a chat
+//  surface has to parse that, not print it.
+// ─────────────────────────────────────────────────────────────
+function ChatMarkdown({ text, color, mutedColor }) {
+  if (!text) return null;
+  const ink = color || "inherit";
+  const sub = mutedColor || color || "inherit";
+  const lines = String(text).split("\n");
+  const blocks = [];
+  let i = 0;
+
+  const renderInline = (s) => {
+    // **bold** only — chat replies don't need italics/code-span handling to
+    // stop looking like raw markup, and over-parsing risks mangling things
+    // like "a**b" in a variable name or an emphasis-free clause.
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, idx) =>
+      /^\*\*[^*]+\*\*$/.test(p)
+        ? <strong key={idx} style={{color:ink,fontWeight:700}}>{p.slice(2,-2)}</strong>
+        : <span key={idx}>{p}</span>
+    );
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const t = line.trim();
+
+    if (/^---+$/.test(t)) {
+      blocks.push(<hr key={i} style={{border:"none",borderTop:`1px solid currentColor`,opacity:0.2,margin:"8px 0"}}/>);
+      i++; continue;
+    }
+    if (/^#{1,3}\s+/.test(t)) {
+      blocks.push(<div key={i} style={{fontSize:"1.05em",fontWeight:700,color:ink,margin:"6px 0 4px"}}>{renderInline(t.replace(/^#{1,3}\s+/,""))}</div>);
+      i++; continue;
+    }
+    if (/^[-*]\s+/.test(t)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) { items.push(lines[i].trim().replace(/^[-*]\s+/,"")); i++; }
+      blocks.push(<ul key={i} style={{margin:"4px 0 8px",paddingLeft:18,color:sub}}>{items.map((it,ii)=><li key={ii} style={{marginBottom:2}}>{renderInline(it)}</li>)}</ul>);
+      continue;
+    }
+    if (/^\d+\.\s+/.test(t)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) { items.push(lines[i].trim().replace(/^\d+\.\s+/,"")); i++; }
+      blocks.push(<ol key={i} style={{margin:"4px 0 8px",paddingLeft:18,color:sub}}>{items.map((it,ii)=><li key={ii} style={{marginBottom:2}}>{renderInline(it)}</li>)}</ol>);
+      continue;
+    }
+    if (t === "") { i++; continue; }
+    blocks.push(<p key={i} style={{margin:"0 0 6px",color:sub}}>{renderInline(t)}</p>);
+    i++;
+  }
+  return <div style={{marginBottom:-6}}>{blocks}</div>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -11148,11 +11214,13 @@ function AnalystConsole({ user, onExit }) {
                 {m.from==="mm" && (
                   <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
                 )}
-                <div style={{padding:"10px 12px",borderRadius:10,fontSize:12,lineHeight:1.6,whiteSpace:"pre-wrap",
+                <div style={{padding:"10px 12px",borderRadius:10,fontSize:12,lineHeight:1.6,
                   background:m.from==="analyst"?SOC.cyan:SOC.bg,
                   color:m.from==="analyst"?SOC.bg:SOC.text,
                   border:m.from==="analyst"?"none":`1px solid ${SOC.border}`}}>
-                  {m.text}
+                  {m.from==="analyst"
+                    ? m.text
+                    : <ChatMarkdown text={m.text} color={SOC.text} mutedColor={SOC.textSec}/>}
                 </div>
               </div>
             ))}
@@ -12583,10 +12651,11 @@ function MastermindConsole({ onClose }) {
               {msgs.map((m,i)=>(
                 <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
                   <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
-                    whiteSpace:"pre-wrap",
                     background:m.role==="user"?`${C.accent}1F`:C.card,
                     border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,
-                    color:C.text}}>{m.content}</div>
+                    color:C.text}}>
+                    {m.role==="user" ? m.content : <ChatMarkdown text={m.content} color={C.text} mutedColor={C.textSec}/>}
+                  </div>
                 </div>
               ))}
               {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
@@ -12993,8 +13062,10 @@ function ClientMastermind({ onClose }) {
           {msgs.map((m,i)=>(
             <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
               <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
-                whiteSpace:"pre-wrap",background:m.role==="user"?`${C.accent}1F`:C.card,
-                border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,color:C.text}}>{m.content}</div>
+                background:m.role==="user"?`${C.accent}1F`:C.card,
+                border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,color:C.text}}>
+                {m.role==="user" ? m.content : <ChatMarkdown text={m.content} color={C.text} mutedColor={C.textSec}/>}
+              </div>
             </div>
           ))}
           {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
