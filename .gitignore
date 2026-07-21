@@ -41,3 +41,13 @@ agent/**/config.json
 agent/**/agent.json
 agent/**/*report*.json
 agent/**/*.token
+# Editor/Office lock and temp files
+~$*
+*.tmp
+
+# Ad-hoc local test payloads (do not commit)
+test.json
+test-gemini.json
+test.gemini.json
+test-assessment.json
+gen-request.json
