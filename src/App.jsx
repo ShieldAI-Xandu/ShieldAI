@@ -7830,6 +7830,9 @@ function AdminPanel({ onClose }) {
 
               <SectionLabel text={`Assessments (${u.assessments?.length || 0})`}/>
               <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+                {(u.assessments || []).length === 0 && (
+                  <div style={{color:C.textMut,fontSize:13,padding:12}}>No assessments completed yet.</div>
+                )}
                 {(u.assessments || []).map(a => (
                   <Card key={a.id} style={{padding:"12px 16px"}}>
                     <div style={{color:C.text,fontSize:13,fontWeight:600}}>
@@ -7844,6 +7847,9 @@ function AdminPanel({ onClose }) {
 
               <SectionLabel text={`Policies (${u.policies?.length || 0})`}/>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {(u.policies || []).length === 0 && (
+                  <div style={{color:C.textMut,fontSize:13,padding:12}}>No policies generated yet.</div>
+                )}
                 {(u.policies || []).map(p => (
                   <Card key={p.id} style={{padding:"10px 16px"}}>
                     <span style={{color:C.text,fontSize:13}}>{p.policyName}</span>
