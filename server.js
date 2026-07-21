@@ -149,6 +149,78 @@ async function callClaudeText({ system, messages, max_tokens }) {
   return data?.content?.map(c => c.text || "").join("") || "";
 }
 
+// Full Anthropic tool-use loop: send messages + tool definitions; if Claude
+// responds with tool_use blocks, execute each via `runTool`, append the
+// results as a tool_result turn, and re-call — repeating until Claude returns
+// a final answer with no further tool calls (or we hit the turn cap).
+//
+// This existed only as an unimplemented parameter before (`callClaudeWithTools`
+// was destructured in mastermindRoutes.js but never passed in from here, so
+// every Mastermind chat silently ran the plain-text branch with a single
+// static snapshot and no ability to look anything up on demand). Wiring this
+// in gives Mastermind — admin and analyst both — genuine on-demand lookups
+// instead of a JSON blob it can only ever reason about statically.
+//
+// `runTool(name, input)` must be async and return a JSON-serializable result.
+// Never throws to the caller — a failing tool call becomes a tool_result the
+// model can see and explain, not a broken response.
+async function callClaudeWithTools({ system, messages, tools, runTool, max_tokens = 1500, maxTurns = 6 }) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
+
+  let convo = messages.map(m => ({ role: m.role, content: m.content }));
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens,
+        system,
+        messages: convo,
+        tools,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
+    }
+    const data = await res.json();
+    const blocks = data?.content || [];
+    const toolCalls = blocks.filter(b => b.type === "tool_use");
+
+    // No tool calls — this is the final answer. Return the text blocks.
+    if (toolCalls.length === 0) {
+      return blocks.map(b => b.text || "").join("");
+    }
+
+    // Otherwise: append Claude's turn (including the tool_use blocks) then
+    // run every requested tool and append a matching tool_result turn.
+    convo.push({ role: "assistant", content: blocks });
+    const resultBlocks = [];
+    for (const call of toolCalls) {
+      let resultContent;
+      try {
+        const result = await runTool(call.name, call.input || {});
+        resultContent = JSON.stringify(result ?? { note: "No result." });
+      } catch (err) {
+        resultContent = JSON.stringify({ error: `Tool failed: ${err.message}` });
+      }
+      resultBlocks.push({ type: "tool_result", tool_use_id: call.id, content: resultContent });
+    }
+    convo.push({ role: "user", content: resultBlocks });
+  }
+
+  // Hit the turn cap without a final text answer — surface this honestly
+  // rather than returning an empty string that looks like a real response.
+  return "Mastermind made several tool calls but didn't reach a final answer in time. Try narrowing the question — for example, ask about one client instead of the whole portfolio.";
+}
+
 function extractJson(text) {
   let clean = text.replace(/```json|```/g, "").trim();
   const start = clean.indexOf("{");
@@ -1203,7 +1275,7 @@ registerDemoRoutes(app, db);
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, extractJson });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });

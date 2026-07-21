@@ -28,6 +28,9 @@ import { logClientAction } from "./assignmentRoutes.js";
 import { computePostureScore } from "./riskEngine.js";
 import { disputes } from "./agentEvidence.js";
 import { toEvidence } from "./securityChecklist.js";
+// Real per-client training rollup — same source the client's own Training tab
+// and the admin fleet overview use. The portfolio row must not invent this.
+import { clientTrainingSummary } from "./trainingProgramRoutes.js";
 import { evaluateAllFrameworks } from "./complianceBridge.js";
 
 const nowIso = () => new Date().toISOString();
@@ -437,6 +440,21 @@ export function registerPortfolioRoutes(
           reviewQueue: reviewItems(cid),
           compliancePct: complianceRollup(cid),
           lastActivity: posture?.scoredAt || null,
+          // Real training rollup — same source the client's own Training tab
+          // uses. `enrolled: 0` when nobody's been added yet; the UI must show
+          // that as "no program set up", not omit the field (which crashed
+          // before this existed) or invent a completion percentage.
+          training: (() => {
+            const t = clientTrainingSummary(db, cid);
+            return {
+              enrolled: t.learners,
+              completion: t.completionRate,
+              overdue: t.overdue,
+              active: t.assignments > 0
+                ? `${t.assignments} assignment${t.assignments === 1 ? "" : "s"}`
+                : "No active program",
+            };
+          })(),
         };
       })
       .filter(Boolean)
@@ -794,6 +812,41 @@ export function registerPortfolioRoutes(
     res.json({ ok: true, kind, id, status: newStatus });
   });
 
+  // ── Analyst → client note ──────────────────────────────────
+  // There is no live two-way chat channel. This is the real, one-directional
+  // mechanism the analyst console's "Direct Client Channel" panel uses instead
+  // of simulating a conversation: it delivers an actual notification to the
+  // client, the same way a review decision does. Replaces a UI that appended
+  // the analyst's message to component state only — nothing was ever sent,
+  // and there was no indication of that to the analyst typing it.
+  // POST body: { message: string }
+  app.post("/api/analyst/clients/:id/note", requireAnalyst, async (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const message = (req.body?.message || "").trim();
+    if (!message) return res.status(400).json({ error: "message is required." });
+    if (message.length > 2000) return res.status(400).json({ error: "message is too long (2000 char max)." });
+
+    pushNotification(db, {
+      userId: clientId,
+      type: "analyst_note",
+      title: "Note from your security analyst",
+      body: message.slice(0, 1000),
+      actorRole: "analyst",
+    });
+    logClientAction(db, {
+      clientUserId: clientId,
+      actorUserId: req.userId,
+      actorRole: "analyst",
+      action: "analyst_note_sent",
+      detail: message.length > 200 ? `${message.slice(0, 200)}…` : message,
+    });
+    await db.write();
+    res.json({ ok: true });
+  });
+
   // ── Client notifications (the recipient's own login) ──
   // Any authenticated user can read + manage THEIR OWN notifications.
   app.get("/api/notifications", requireAuth, (req, res) => {
@@ -804,6 +857,7 @@ export function registerPortfolioRoutes(
     const unread = mine.filter(n => !n.read).length;
     res.json({ unread, notifications: mine });
   });
+
 
   app.post("/api/notifications/:id/read", requireAuth, async (req, res) => {
     const n = (db.data.notifications || []).find(

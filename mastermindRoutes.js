@@ -148,7 +148,7 @@ function portfolioSnapshot(db, depth = "summary") {
   };
 }
 
-export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson }) {
+export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds }) {
   db.data.recommendations ||= [];
 
   function aiAvailable(res) {
@@ -157,6 +157,21 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       return false;
     }
     return true;
+  }
+
+  // Analyst-or-admin gate for the analyst-scoped Mastermind endpoint. Mirrors
+  // the pattern in portfolioRoutes.js: requireAuth populates req.userId, then
+  // this checks the role. An admin using this endpoint sees only clients
+  // assigned to THEM specifically (rare in practice, but keeps the boundary
+  // consistent) — an admin who wants the whole platform uses the admin chat.
+  function requireAnalyst(req, res, next) {
+    requireAuth(req, res, () => {
+      const u = (db.data.users || []).find(x => x.id === req.userId);
+      if (!u || (!u.isAnalyst && !u.isAdmin)) {
+        return res.status(403).json({ error: "Analyst access required." });
+      }
+      next();
+    });
   }
 
   // Module-scope name resolver for tool results (snapshot has its own local one).
@@ -338,18 +353,48 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
   }
 
   // Resolve a client by id or email → the user record (or null).
-  function resolveClient(idOrEmail) {    const key = String(idOrEmail || "").trim().toLowerCase();
-    return (db.data.users || []).find(u =>
-      !u.isAdmin && !u.isAnalyst && (u.id === idOrEmail || (u.email || "").toLowerCase() === key)
+  // `allowedIds`, when provided, restricts resolution to that set — this is
+  // the enforcement point for analyst-scoped Mastermind: even if a tool call
+  // asks about a client outside the analyst's assignments, this returns null
+  // rather than the real record. Isolation lives here, not in what tools we
+  // choose to list — a tool that CAN reach any client is the same leak as one
+  // that's merely not offered.
+  function resolveClientBase(idOrEmail, allowedIds = null) {
+    const key = String(idOrEmail || "").trim().toLowerCase();
+    const u = (db.data.users || []).find(x =>
+      !x.isAdmin && !x.isAnalyst && (x.id === idOrEmail || (x.email || "").toLowerCase() === key)
     ) || null;
+    if (!u) return null;
+    if (allowedIds && !allowedIds.has(u.id)) return null;
+    return u;
   }
 
   // Execute a read-only tool. NEVER writes to the database.
-  async function runMastermindTool(name, input) {
+  //
+  // `allowedClientIds`, when passed (a Set of user ids), scopes every tool
+  // call to that set — this is how the analyst-facing Mastermind endpoint
+  // reuses the same tool implementations as the admin one without being able
+  // to reach a client outside the caller's assignments. The admin endpoint
+  // passes null (no restriction, matching its "sees the whole platform" role).
+  async function runMastermindTool(name, input, allowedClientIds = null) {
+    // Shadow the module-level resolver so every existing `resolveClient(...)`
+    // call in the switch below picks up the scope restriction automatically,
+    // without editing each of the ~15 call sites individually (and risking
+    // missing one).
+    const resolveClient = (idOrEmail) => resolveClientBase(idOrEmail, allowedClientIds);
     switch (name) {
       case "list_clients": {
         const snap = portfolioSnapshot(db, "summary");
-        return { clients: snap.clients, totals: snap.totals };
+        if (!allowedClientIds) return { clients: snap.clients, totals: snap.totals };
+        const clients = snap.clients.filter(c => allowedClientIds.has(c.id));
+        return {
+          clients,
+          totals: {
+            assignedClients: clients.length,
+            endpoints: clients.reduce((s, c) => s + (c.endpointCount || 0), 0),
+            openRecommendations: clients.reduce((s, c) => s + (c.recommendations?.open || 0), 0),
+          },
+        };
       }
       case "get_client_detail": {
         const u = resolveClient(input.clientIdOrEmail);
@@ -364,6 +409,10 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           const u = resolveClient(input.clientIdOrEmail);
           if (!u) return { error: "Client not found." };
           list = list.filter(t => t.ownerUserId === u.id);
+        } else if (allowedClientIds) {
+          // No specific client requested — scope to the analyst's own clients
+          // rather than leaking every client's tasks platform-wide.
+          list = list.filter(t => allowedClientIds.has(t.ownerUserId));
         }
         if (input.status) list = list.filter(t => t.status === input.status);
         if (input.overdueOnly) {
@@ -371,7 +420,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
             !["done","cancelled"].includes(t.status));
         }
         return {
-          summary: taskSummary(db),
+          summary: allowedClientIds ? undefined : taskSummary(db),
           tasks: list.slice(0, 50).map(t => ({
             client: nameOf(t.ownerUserId), title: t.title, status: t.status,
             priority: t.priority, controlId: t.controlId, dueDate: t.dueDate,
@@ -542,6 +591,9 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
             tasksMissingProof: missing.slice(0, 15).map(t => ({ title: t.title, completedAt: t.completedAt })),
           };
         }
+        if (allowedClientIds) {
+          return { note: "Pass a specific client (clientIdOrEmail) — evidence coverage is only available per-client for an analyst, not platform-wide." };
+        }
         return evidenceSummary(db, "summary");
       }
       case "get_branding": {
@@ -558,6 +610,9 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
             },
           };
         }
+        if (allowedClientIds) {
+          return { note: "Pass a specific client (clientIdOrEmail) — platform-wide branding isn't part of an analyst's scope." };
+        }
         return brandingSummary(db);
       }
       case "get_training": {
@@ -565,6 +620,20 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           const u = resolveClient(input.clientIdOrEmail);
           if (!u) return { error: "Client not found." };
           return { client: u.companyName || u.email, ...clientTrainingSummary(db, u.id, true) };
+        }
+        if (allowedClientIds) {
+          // Roll up only this analyst's own clients rather than the platform.
+          const ids = [...allowedClientIds];
+          const per = ids.map(id => {
+            const u = (db.data.users || []).find(x => x.id === id);
+            return { client: u ? (u.companyName || u.email) : "—", ...clientTrainingSummary(db, id) };
+          });
+          return {
+            assignedClients: per.length,
+            totalLearners: per.reduce((s, c) => s + (c.learners || 0), 0),
+            totalAssignments: per.reduce((s, c) => s + (c.assignments || 0), 0),
+            perClient: per,
+          };
         }
         return trainingSummary(db, "full");
       }
@@ -574,6 +643,8 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           const u = resolveClient(input.clientIdOrEmail);
           if (!u) return { error: "Client not found." };
           recs = recs.filter(r => r.ownerUserId === u.id);
+        } else if (allowedClientIds) {
+          recs = recs.filter(r => allowedClientIds.has(r.ownerUserId));
         }
         if (input.status) recs = recs.filter(r => r.status === input.status);
         return { count: recs.length, recommendations: recs.slice(-50).map(r => ({
@@ -599,6 +670,8 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           const u = resolveClient(input.clientIdOrEmail);
           if (!u) return { error: "Client not found." };
           events = events.filter(e => e.ownerUserId === u.id);
+        } else if (allowedClientIds) {
+          events = events.filter(e => allowedClientIds.has(e.ownerUserId));
         }
         const limit = Math.min(input.limit || 20, 50);
         return { events: events.slice(-limit).reverse().map(e => ({
@@ -653,6 +726,68 @@ ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.string
       res.json({ reply: text });
     } catch (err) {
       console.error("Mastermind chat error:", err.message);
+      res.status(500).json({ error: "Mastermind could not respond." });
+    }
+  });
+
+  // ── 1b. ANALYST CHAT ────────────────────────────────────────
+  // Same Mastermind, same tools, but scoped to only the calling analyst's
+  // assigned clients — enforced inside runMastermindTool (see resolveClientBase)
+  // rather than trusted to the tool list alone. body matches the admin chat.
+  app.post("/api/analyst/mastermind/chat", requireAnalyst, async (req, res) => {
+    if (!aiAvailable(res)) return;
+    const { messages, includeContext = true } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages[] required." });
+    }
+    const clean = messages.slice(-20).map(m => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || "").slice(0, 8000),
+    }));
+
+    const isAdmin = !!(db.data.users || []).find(u => u.id === req.userId)?.isAdmin;
+    // Admins hitting the analyst endpoint get the same "everything" scope the
+    // admin endpoint gives them — there's no assignment list to intersect
+    // with. A true analyst is restricted to analystClientIds(db, req.userId).
+    const myClientIds = isAdmin ? null : new Set(analystClientIds(db, req.userId));
+    const scopedSnapshot = () => {
+      if (!includeContext) return null;
+      const snap = portfolioSnapshot(db, "summary");
+      if (!myClientIds) return snap;
+      const clients = snap.clients.filter(c => myClientIds.has(c.id));
+      return { generatedAt: snap.generatedAt, clients,
+        totals: { assignedClients: clients.length,
+          endpoints: clients.reduce((s,c)=>s+(c.endpointCount||0),0),
+          openRecommendations: clients.reduce((s,c)=>s+(c.recommendations?.open||0),0) } };
+    };
+    const snapshot = scopedSnapshot();
+
+    const system = `You are ShieldAI Mastermind, assisting a ShieldAI ANALYST.
+
+You have read-only situational awareness of ONLY this analyst's assigned clients — not the whole platform. If asked about a client that isn't assigned to them, say so plainly rather than guessing; you genuinely cannot see that client's data, by design, the same way the analyst console itself can't. Each client carries a cveExposure object (real NVD-matched CVEs) and a darkWebExposure object (real HIBP breach data). A "Not monitored" or "Not checked" status is a coverage gap, not a clean bill of health.
+
+You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. The analyst acts with the client's permission through the platform's human-gated controls (recommendations, review decisions) — you help them decide what to do and in what order, you don't do it.
+
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand for any client assigned to this analyst — list_clients, get_client_detail, analyze_gaps, check_compliance, check_agent_evidence, and more. These tools only READ data scoped to this analyst's own clients; they never change anything and cannot reach a client outside their assignments.
+
+${snapshot ? `Read-only snapshot of this analyst's assigned clients (current):\n${JSON.stringify(snapshot)}` : "No client context was attached to this message."}`;
+
+    try {
+      let text;
+      if (callClaudeWithTools) {
+        text = await callClaudeWithTools({
+          system,
+          messages: clean,
+          tools: MASTERMIND_TOOLS,
+          runTool: (name, input) => runMastermindTool(name, input, myClientIds),
+          max_tokens: 1500,
+        });
+      } else {
+        text = await callClaudeText({ system, messages: clean, max_tokens: 1500 });
+      }
+      res.json({ reply: text });
+    } catch (err) {
+      console.error("Analyst Mastermind chat error:", err.message);
       res.status(500).json({ error: "Mastermind could not respond." });
     }
   });

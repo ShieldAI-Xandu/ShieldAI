@@ -10400,41 +10400,6 @@ const MASTERMIND_QUICK = [
   { id: "nextsteps",  icon: "🎯", label: "What should I prioritize?", category: "Advisory" },
 ];
 
-function mastermindReply(quickId, client) {
-  const name = client?.name || "this client";
-  const fw = client?.compliancePct?.framework || "the applicable framework";
-  switch (quickId) {
-    case "triage": {
-      const high = (client?.alerts || []).filter(a => a.sev === "high");
-      if (high.length === 0) {
-        return `No high-severity alerts are active for ${name} right now. The feed shows only low/medium items, which I'd handle on the normal weekly cycle. I'd keep an eye on endpoint coverage — anything under ~85% leaves blind spots where alerts simply won't fire.`;
-      }
-      return `I see ${high.length} high-severity alert${high.length>1?"s":""} for ${name}. Recommended response order:\n\n1. **${high[0].title}** — this is your priority. Isolate the affected account/host immediately, then preserve logs before remediating. Likely root cause: ${high[0].detail}\n\n2. Confirm whether any sensitive data was reachable from the affected scope. If ${fw} applies, start your breach-assessment clock now — don't wait for confirmation.\n\n3. Once contained, I can draft the incident timeline and a client-facing summary for your review. Want me to prepare that?`;
-    }
-    case "compliance": {
-      const cur = client?.compliancePct?.current ?? 0;
-      const tgt = client?.compliancePct?.target ?? 90;
-      return `Here's where ${name} stands on ${fw}: currently **${cur}%** against a ${tgt}% target.\n\nThe gaps holding the score down, in priority order:\n\n• **Access control & least privilege** — highest-weighted control family; partial implementation is capping the score.\n• **Audit logging & monitoring** — needs centralized collection with documented review cadence.\n• **Incident response** — plan exists but requires a documented test/tabletop to count as "implemented."\n\nFastest path to the ${tgt}% target: close access-control first (biggest score movement), then formalize logging. I estimate ~6–8 weeks at current pace. I can generate the remediation plan with owner assignments if you'd like.`;
-    }
-    case "troubleshoot": {
-      const a = client?.agent;
-      if (a?.status === "offline") {
-        return `${name}'s agent is showing **No Comms** — here's my diagnostic path:\n\n1. **Connectivity** — confirm the endpoint can reach the ShieldAI cloud on 443 outbound. A new firewall rule or proxy is the most common cause of a sudden offline state.\n2. **Service health** — check whether the agent service is running locally; if it crashed, the watchdog should restart it, so a persistent stop suggests a permissions or AV-conflict issue.\n3. **Deployment** — if endpoints show 0, the agent likely was never fully rolled out here. I'd push the deployment package to a pilot group of 5 first, confirm telemetry, then expand.\n\nUntil comms are restored you have **no detection coverage** on this client, so I'd treat it as urgent. Want a step-by-step rollout checklist?`;
-      }
-      if (a?.status === "degraded") {
-        return `${name}'s agent is **Degraded** at ${a.coverage}% coverage — partial telemetry. Most likely causes:\n\n1. **Uncovered endpoints** — new devices joined without the agent installed. ${a.coverage}% coverage means roughly ${Math.round((1-a.coverage/100)*a.endpoints/(a.coverage/100))||"a few"} machines are dark.\n2. **Intermittent check-ins** — sleeping/roaming laptops reporting irregularly; usually benign but worth confirming.\n\nI'd run a discovery scan to find unmanaged devices, then push the agent to them. Getting above ~90% coverage will clear the degraded state. Want the discovery + deployment steps?`;
-      }
-      return `${name}'s agent is healthy at ${a?.coverage}% coverage — no action needed. If you're troubleshooting a specific error, paste the message or code and I'll diagnose it. Common ones I can walk you through: failed log forwarding, MFA enrollment errors, or backup-job failures.`;
-    }
-    case "nextsteps": {
-      const weak = (client?.weakest || []).join(" and ") || "the weakest NIST areas";
-      return `For ${name}, here's how I'd prioritize this week:\n\n1. **Address ${weak}** — these are the lowest-scoring NIST functions and where you'll get the most posture improvement per hour invested.\n2. **Clear the review queue** — there ${ (client?.reviewQueue||[]).filter(r=>r.status==="awaiting_review").length>0 ? "are items awaiting your sign-off; approving them keeps the client moving" : "is nothing pending, so you're current"}.\n3. **${fw} progress** — keep chipping at the compliance gaps; you're trending the right direction.\n\nIf you want, I can turn this into a dated action plan with owners and drop it in the client's program. Just say the word.`;
-    }
-    default:
-      return "I'm ShieldAI Mastermind — your diagnostic co-pilot. Ask me about active threats, compliance gaps, agent issues, training design, or what to prioritize for this client.";
-  }
-}
-
 
 // ─────────────────────────────────────────────────────────────
 //  WORKSPACE VIEWER — "View as client" drill-in for staff
@@ -10792,11 +10757,95 @@ function WorkspaceViewer({ client, onBack }) {
   );
 }
 
+// Real, one-directional analyst → client messaging. There is no live two-way
+// chat backend, so this does not simulate one. Sending calls a real endpoint
+// that delivers an actual notification to the client's notification bell, and
+// the panel shows real recent activity (via the client's action log) rather
+// than a conversation thread that would imply replies are possible here.
+function ClientNotePanel({ clientId }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+  const [recent, setRecent] = useState(null);
+
+  const loadRecent = useCallback(() => {
+    authFetch(`${API_BASE}/api/analyst/clients/${clientId}/actions`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setRecent(d ? d.actions.slice(0, 6) : []))
+      .catch(() => setRecent([]));
+  }, [clientId]);
+
+  useEffect(() => { setRecent(null); setSent(null); loadRecent(); }, [clientId, loadRecent]);
+
+  async function send() {
+    if (!draft.trim()) return;
+    setSending(true); setSent(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/note`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: draft.trim() }),
+      });
+      if (res.ok) {
+        setDraft("");
+        setSent("Sent — the client will see this in their notifications.");
+        loadRecent();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setSent(d.error || "Could not send.");
+      }
+    } finally { setSending(false); }
+  }
+
+  return (
+    <SocPanel title="Note to Client" accent={SOC.green}>
+      <div style={{color:SOC.textMut,fontSize:10.5,lineHeight:1.5,marginBottom:10}}>
+        Delivered to their notification bell. There's no live reply channel yet, so this is
+        one-directional — for a conversation, use their contact email on file.
+      </div>
+
+      {recent === null ? (
+        <div style={{color:SOC.textMut,fontSize:11,padding:"10px 0"}}>Loading recent activity…</div>
+      ) : recent.length === 0 ? (
+        <div style={{color:SOC.textSec,fontSize:11,padding:"6px 0 12px",textAlign:"center"}}>
+          No data to report — nothing sent to this client yet.
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",marginBottom:10}}>
+          {recent.map(a=>(
+            <div key={a.id} style={{padding:"7px 10px",background:SOC.bg,borderRadius:7,fontSize:11}}>
+              <div style={{color:SOC.text}}>{a.detail}</div>
+              <div style={{color:SOC.textMut,fontSize:9.5,marginTop:2}}>
+                {a.actorRole} · {new Date(a.at).toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:8}}>
+        <input value={draft} onChange={e=>setDraft(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&send()}
+          placeholder="Write a note for this client…"
+          disabled={sending}
+          style={{flex:1,padding:"9px 12px",background:SOC.bg,border:`1px solid ${SOC.border}`,
+            borderRadius:8,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
+        <button onClick={send} disabled={sending || !draft.trim()}
+          style={{padding:"9px 16px",background:draft.trim()?SOC.green:SOC.border,
+            color:draft.trim()?SOC.bg:SOC.textMut,border:"none",borderRadius:8,fontSize:12,fontWeight:700,
+            cursor:draft.trim()&&!sending?"pointer":"default"}}>
+          {sending ? "…" : "Send"}
+        </button>
+      </div>
+      {sent && (
+        <div style={{marginTop:8,fontSize:11,color:sent.startsWith("Sent")?SOC.green:SOC.red}}>{sent}</div>
+      )}
+    </SocPanel>
+  );
+}
+
 function AnalystConsole({ user, onExit }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
-  const [chatDraft, setChatDraft] = useState("");
-  const [localChats, setLocalChats] = useState({});
   const [mmOpen, setMmOpen] = useState(false);
   const [mmThread, setMmThread] = useState([
     { from: "mm", text: "I'm ShieldAI Mastermind — your diagnostic co-pilot. Pick a quick action below or ask me anything about this client: threat triage, compliance gaps, agent issues, or what to prioritize." },
@@ -10809,6 +10858,32 @@ function AnalystConsole({ user, onExit }) {
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
   const [actionsLoading, setActionsLoading] = useState(false);
   const [workspaceClient, setWorkspaceClient] = useState(null); // client whose full workspace is open
+  const [reviewBusy, setReviewBusy] = useState(null);
+
+  // Approve a program/policy from the client-detail Review & Approval Queue.
+  // Calls the same real endpoint the review tab elsewhere in the app uses, then
+  // refetches the portfolio so this client's queue and `active` reflect it —
+  // the button used to have no handler at all.
+  async function approveReviewItem(clientId, item) {
+    const key = item.id + "approve";
+    setReviewBusy(key);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/review-decision`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: item.kind, id: item.id, decision: "approve" }),
+      });
+      if (res.ok) {
+        const refreshed = await authFetch(`${API_BASE}/api/analyst/portfolio`);
+        if (refreshed.ok) {
+          const list = await refreshed.json();
+          const rows = Array.isArray(list) ? list : (list.clients || []);
+          setPortfolio(rows);
+          const updated = rows.find(r => r.id === clientId);
+          if (updated) setActive(updated);
+        }
+      }
+    } finally { setReviewBusy(null); }
+  }
 
   async function loadMyClients() {
     try {
@@ -10883,21 +10958,41 @@ function AnalystConsole({ user, onExit }) {
     } finally { setRecSaving(false); }
   }
 
-  function mmSend(quickId, freeText) {
-    const userMsg = freeText
-      ? { from: "analyst", text: freeText }
-      : { from: "analyst", text: MASTERMIND_QUICK.find(q => q.id === quickId)?.label || "…" };
-    setMmThread(t => [...t, userMsg]);
+  // Real Mastermind chat — calls the analyst-scoped endpoint, which has
+  // genuine read-only tool access to this analyst's assigned clients (see
+  // mastermindRoutes.js). Previously this picked a reply from a hardcoded
+  // switch statement in mastermindReply() after a fake "thinking" delay; the
+  // client-side reply text even said so explicitly ("In the live product, I
+  // analyze this client's real telemetry..."). It now is the live product.
+  async function mmSend(quickId, freeText) {
+    const text = freeText || MASTERMIND_QUICK.find(q => q.id === quickId)?.label || "…";
+    const userMsg = { from: "analyst", text };
+    const nextThread = [...mmThread, userMsg];
+    setMmThread(nextThread);
     setMmDraft("");
     setMmThinking(true);
-    // Simulate the assistant thinking, then reply (scripted)
-    setTimeout(() => {
-      const reply = quickId
-        ? mastermindReply(quickId, active)
-        : "Here's my read: based on this client's current posture and open items, I'd focus on the highest-severity alert first, then close the largest compliance gap. Use a quick action below for a detailed breakdown, or ask me about a specific error or control. (In the live product, I analyze this client's real telemetry and program data to answer.)";
-      setMmThread(t => [...t, { from: "mm", text: reply }]);
+    try {
+      // Give Mastermind which client is in view, if any, so "this client"
+      // in a follow-up question resolves correctly without re-stating it.
+      const contextLine = active ? `[Context: currently viewing client "${active.name}", id ${active.id}]\n` : "";
+      const res = await authFetch(`${API_BASE}/api/analyst/mastermind/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextThread
+            .filter(m => m.from !== "mm" || nextThread.indexOf(m) > 0) // keep the intro line out of the sent history
+            .map((m, i) => i === nextThread.length - 1 && m.from === "analyst"
+              ? { role: "user", content: contextLine + m.text }
+              : { role: m.from === "analyst" ? "user" : "assistant", content: m.text }),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Mastermind could not respond.");
+      setMmThread(t => [...t, { from: "mm", text: data.reply || "(empty response)" }]);
+    } catch (err) {
+      setMmThread(t => [...t, { from: "mm", text: `⚠️ ${err.message}` }]);
+    } finally {
       setMmThinking(false);
-    }, 650);
+    }
   }
 
   // Real clients from /api/analyst/portfolio — scoped server-side to the ones
@@ -10973,8 +11068,6 @@ function AnalystConsole({ user, onExit }) {
       <span style={{fontWeight:700,fontSize:15,color:SOC.text}}>{title}</span>
       <span style={{fontSize:10,color:SOC.cyan,letterSpacing:2,padding:"2px 10px",
         background:`${SOC.cyan}18`,borderRadius:20,border:`1px solid ${SOC.cyan}33`}}>ANALYST CONSOLE</span>
-      <span style={{fontSize:9,color:SOC.textMut,padding:"2px 8px",background:SOC.bg,
-        border:`1px solid ${SOC.border}`,borderRadius:4}}>VISION MOCKUP</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
         <span style={{fontSize:11,color:SOC.textSec}}>{user.email}</span>
         <button onClick={()=>setView(view==="myclients"?"portfolio":"myclients")}
@@ -11381,18 +11474,11 @@ function AnalystConsole({ user, onExit }) {
   if (view === "client" && active) {
     const c = active;
     const clr = pColor(c.posture);
-    const chatLog = [...(c.chat || []), ...((localChats[c.id]) || [])];
     // Empty history (never scored) must not produce NaN. null means "no trend
     // to show" — a client with one data point has no trend, and inventing a
     // flat line would imply stability we haven't observed.
     const hist = c.history || [];
     const trend = hist.length > 1 ? hist[hist.length-1] - hist[0] : null;
-
-    function sendChat() {
-      if (!chatDraft.trim()) return;
-      setLocalChats(prev => ({ ...prev, [c.id]: [...(prev[c.id]||[]), { from:"analyst", who:"You", text:chatDraft, time:"just now" }] }));
-      setChatDraft("");
-    }
 
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
@@ -11484,35 +11570,22 @@ function AnalystConsole({ user, onExit }) {
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-            {/* Direct client chat */}
-            <SocPanel title="Direct Client Channel" accent={SOC.green}>
-              <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:200,overflowY:"auto",marginBottom:10}}>
-                {chatLog.map((m,i)=>(
-                  <div key={i} style={{alignSelf:m.from==="analyst"?"flex-end":"flex-start",maxWidth:"80%"}}>
-                    <div style={{padding:"8px 11px",borderRadius:10,fontSize:12,lineHeight:1.5,
-                      background:m.from==="analyst"?SOC.cyan:SOC.panelHi,
-                      color:m.from==="analyst"?SOC.bg:SOC.text,
-                      border:m.from==="analyst"?"none":`1px solid ${SOC.border}`}}>
-                      {m.text}
-                    </div>
-                    <div style={{fontSize:9,color:SOC.textMut,marginTop:2,textAlign:m.from==="analyst"?"right":"left"}}>
-                      {m.who} · {m.time}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div style={{display:"flex",gap:8}}>
-                <input value={chatDraft} onChange={e=>setChatDraft(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&sendChat()}
-                  placeholder="Message the client…"
-                  style={{flex:1,padding:"9px 12px",background:SOC.bg,border:`1px solid ${SOC.border}`,
-                    borderRadius:8,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
-                <button onClick={sendChat} style={{padding:"9px 16px",background:SOC.green,color:SOC.bg,
-                  border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
-              </div>
-            </SocPanel>
+            {/* Real, one-directional note to the client — delivered as an
+                actual notification via /api/analyst/clients/:id/note, and
+                logged to the same action history the "Action History" button
+                in My Clients reads. This replaced a two-way chat UI that
+                looked functional but only ever wrote to local component state:
+                nothing sent here ever reached the client. */}
+            <ClientNotePanel clientId={c.id}/>
 
-            {/* Review & approval queue */}
+            {/* Review & approval queue — reads reviewItems() from the
+                portfolio API, which returns {id, kind, title, status}. This
+                previously read item.type/item.generated (fields that don't
+                exist in that response, so they always rendered blank) and had
+                an Approve button with no onClick — it looked actionable and
+                did nothing. Both are fixed: real fields, and Approve calls the
+                same /review-decision endpoint the client-detail review tab
+                uses elsewhere in this app. */}
             <SocPanel title="Review & Approval Queue" accent={SOC.amber}>
               {(c.reviewQueue || []).length === 0 ? (
                 <div style={{color:SOC.textSec,fontSize:12,padding:"20px 0",textAlign:"center"}}>
@@ -11521,17 +11594,28 @@ function AnalystConsole({ user, onExit }) {
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {(c.reviewQueue || []).map((item,i)=>{
-                    const meta = { awaiting_review:{label:"Review",color:SOC.amber}, approved:{label:"Approved",color:SOC.green}, draft:{label:"Draft",color:SOC.textMut} }[item.status];
+                    const meta = {
+                      awaiting_review: {label:"Review", color:SOC.amber},
+                      approved: {label:"Approved", color:SOC.green},
+                      changes_requested: {label:"Changes requested", color:SOC.red},
+                    }[item.status] || {label:item.status||"—", color:SOC.textMut};
+                    const busyKey = item.id + "approve";
                     return (
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
+                      <div key={item.id || i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:SOC.bg,borderRadius:8}}>
                         <span style={{fontSize:15}}>📄</span>
                         <div style={{flex:1}}>
-                          <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.type}</div>
-                          <div style={{color:SOC.textMut,fontSize:9}}>AI-generated · {item.generated}</div>
+                          <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{item.title || "Untitled"}</div>
+                          <div style={{color:SOC.textMut,fontSize:9}}>{(item.kind||"item").toUpperCase()}</div>
                         </div>
                         {item.status==="awaiting_review" ? (
-                          <button style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
-                            borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,cursor:"pointer"}}>Approve</button>
+                          <button
+                            disabled={reviewBusy===busyKey}
+                            onClick={()=>approveReviewItem(c.id, item)}
+                            style={{padding:"5px 12px",background:`${SOC.green}1A`,border:`1px solid ${SOC.green}44`,
+                            borderRadius:6,color:SOC.green,fontSize:11,fontWeight:600,
+                            cursor:reviewBusy===busyKey?"wait":"pointer"}}>
+                            {reviewBusy===busyKey ? "…" : "Approve"}
+                          </button>
                         ) : (
                           <span style={{fontSize:9,fontWeight:700,color:meta.color,textTransform:"uppercase"}}>{meta.label}</span>
                         )}
@@ -11542,6 +11626,7 @@ function AnalystConsole({ user, onExit }) {
               )}
             </SocPanel>
           </div>
+
 
           {/* Client document drilldown — read the actual assessments,
               programs, and policies behind the posture number. */}
@@ -11639,33 +11724,49 @@ function AnalystConsole({ user, onExit }) {
               )}
             </SocPanel>
 
-            {/* Training program */}
+            {/* Training program — real rollup from clientTrainingSummary (same
+                source the client's own Training tab and the admin fleet view
+                use). `c.training` guarded with `|| {}` since older cached
+                portfolio rows (or a future schema change) shouldn't crash this
+                view — a missing field renders as "no data", not an exception. */}
             <SocPanel title="Training Program" accent={SOC.cyan}>
-              <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>{c.training.active}</div>
-              {c.training.enrolled > 0 ? (
-                <>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
-                    <span>{c.training.enrolled} enrolled</span><span>Due {c.training.nextDue}</span>
-                  </div>
-                  <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
-                    <div style={{width:`${c.training.completion}%`,height:"100%",
-                      background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
-                  </div>
-                  <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
-                    {c.training.completion}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
-                  </div>
-                </>
-              ) : (
-                <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
-                  No active program. Deploy a tailored awareness campaign for this client.
-                </div>
-              )}
-              <button onClick={()=>setTrainingClient(c)} style={{marginTop:10,width:"100%",padding:"8px",
-                background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,borderRadius:7,
-                color:SOC.cyan,fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                {c.training.enrolled>0?"Manage Training":"Build Training Program"} →
-              </button>
+              {(() => {
+                const t = c.training || {};
+                const enrolled = t.enrolled || 0;
+                return (
+                  <>
+                    <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>
+                      {t.active || "No data to report"}
+                    </div>
+                    {enrolled > 0 ? (
+                      <>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
+                          <span>{enrolled} enrolled</span>
+                          <span>{t.overdue > 0 ? <span style={{color:SOC.amber}}>{t.overdue} overdue</span> : "none overdue"}</span>
+                        </div>
+                        <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
+                          <div style={{width:`${t.completion || 0}%`,height:"100%",
+                            background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
+                        </div>
+                        <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
+                          {t.completion || 0}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
+                        No active program. Deploy a tailored awareness campaign for this client.
+                      </div>
+                    )}
+                    <button onClick={()=>setTrainingClient(c)} style={{marginTop:10,width:"100%",padding:"8px",
+                      background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,borderRadius:7,
+                      color:SOC.cyan,fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                      {enrolled>0?"Manage Training":"Build Training Program"} →
+                    </button>
+                  </>
+                );
+              })()}
             </SocPanel>
+
           </div>
 
           <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
