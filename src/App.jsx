@@ -8018,7 +8018,17 @@ function AdminPanel({ onClose }) {
               </Card>
             )}
 
-            {loading ? <Spinner/> : (
+            {loading ? <Spinner/> : users.length === 0 ? (
+              <Card style={{textAlign:"center",padding:"40px 24px"}}>
+                <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:6}}>
+                  No data to report
+                </div>
+                <p style={{color:C.textSec,fontSize:13,margin:0,lineHeight:1.6}}>
+                  No accounts exist yet. New client, analyst, and admin accounts will appear here
+                  as they're created.
+                </p>
+              </Card>
+            ) : (
               <div style={{display:"flex",flexDirection:"column",gap:12}}>
                 {users.map(u => (
                   <Card key={u.id} style={{padding:"16px 18px",cursor:"pointer"}}
@@ -8455,19 +8465,22 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
 // ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
 //  COMPANY ADMIN CONSOLE
-//  Customer-facing overview of THEIR security program. Pulls the
-//  real posture score & company info from their generated program;
-//  trend, compliance %, analyst chat, and team-training figures are
-//  representative (mockup) until those data layers are live.
+//  Customer-facing overview of THEIR security program. Every figure
+//  below is real or explicitly a "no data yet" state — nothing here
+//  is invented to fill a slot. Posture score and company info come
+//  from the generated program; trend comes from the real posture-
+//  history endpoint; training comes from the real training-program
+//  overview; the analyst channel points at real notifications
+//  rather than simulating a conversation that isn't happening.
 // ─────────────────────────────────────────────────────────────
 function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);   // { company, results }
-  const [chatDraft, setChatDraft] = useState("");
-  const [chatLog, setChatLog] = useState([
-    { from: "analyst", who: "Alex (ShieldAI Analyst)", text: "Welcome to your security console. I'm your assigned analyst — message me anytime with questions about your program.", time: "2d ago" },
-  ]);
+  const [history, setHistory] = useState(null);       // /api/client/posture-history — null while loading
+  const [training, setTraining] = useState(null);      // /api/training-program/overview — null while loading
+  const [notifications, setNotifications] = useState(null); // /api/notifications — null while loading
+  const [compliance, setCompliance] = useState(null);  // /api/compliance/overview — null while loading
 
   useEffect(() => {
     (async () => {
@@ -8482,17 +8495,18 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
         setData({ company: assessment.company || {}, results: program.sections || {} });
       } catch (e) { setError(e.message); } finally { setLoading(false); }
     })();
+    // Real trend, training, and notifications — each independently loaded so a
+    // failure or "nothing yet" on one doesn't block the others. Every one of
+    // these defaults to an explicit empty state, never a fabricated number.
+    authFetch(`${API_BASE}/api/client/posture-history`)
+      .then(r => r.ok ? r.json() : null).then(setHistory).catch(() => setHistory(null));
+    authFetch(`${API_BASE}/api/training-program/overview`)
+      .then(r => r.ok ? r.json() : null).then(setTraining).catch(() => setTraining(null));
+    authFetch(`${API_BASE}/api/notifications`)
+      .then(r => r.ok ? r.json() : null).then(setNotifications).catch(() => setNotifications(null));
+    authFetch(`${API_BASE}/api/compliance/overview`)
+      .then(r => r.ok ? r.json() : null).then(setCompliance).catch(() => setCompliance(null));
   }, [assessmentId, programId]);
-
-  function sendChat() {
-    if (!chatDraft.trim()) return;
-    setChatLog(l => [...l, { from: "client", who: "You", text: chatDraft, time: "just now" }]);
-    setChatDraft("");
-    setTimeout(() => {
-      setChatLog(l => [...l, { from: "analyst", who: "Alex (ShieldAI Analyst)",
-        text: "Thanks — I've got that. I'll review and follow up shortly.", time: "just now" }]);
-    }, 900);
-  }
 
   if (loading) return (
     <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -8513,11 +8527,11 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
   const company = data.company || {};
   const scoreColor = score>=80?C.green:score>=60?"#7ED957":score>=40?C.amber:C.red;
 
-  const trend = (() => {
-    const pts = []; let v = Math.max(8, score - 22);
-    for (let i=0;i<11;i++){ pts.push(Math.round(v)); v += (score - v)/(11-i) + (Math.random()*3-1.5); }
-    pts.push(score); return pts;
-  })();
+  // Real trend points only — from the client's own posture-history endpoint.
+  // No fallback series is generated: fewer than 2 points means there's no
+  // trend to draw yet, and the panel says so instead of showing one.
+  const trendPoints = (history?.points || [])
+    .map(p => p.score).filter(v => typeof v === "number");
 
   const sections = data.results || {};
   const progItems = [
@@ -8574,9 +8588,24 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
                 color:scoreColor,fontSize:12,fontWeight:700,display:"inline-block"}}>{level.toUpperCase()}</div>
             </div>
           </Panel>
-          <Panel title="Posture Trend (12 months)" flex="1 1 400px"
-            action={<span style={{fontSize:11,color:C.green}}>▲ improving</span>}>
-            <TrendChartLight data={trend} color={scoreColor}/>
+          <Panel title="Posture Trend" flex="1 1 400px"
+            action={trendPoints.length >= 2 ? (() => {
+              const delta = trendPoints[trendPoints.length-1] - trendPoints[0];
+              return (
+                <span style={{fontSize:11,color: delta>0?C.green:delta<0?C.red:C.textMut}}>
+                  {delta>0?"▲ improving":delta<0?"▼ declining":"— steady"}
+                </span>
+              );
+            })() : null}>
+            {history === null ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
+            ) : trendPoints.length < 2 ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>
+                Not enough history yet to chart a trend. This builds up as your program is rescored over time.
+              </div>
+            ) : (
+              <TrendChartLight data={trendPoints} color={scoreColor}/>
+            )}
           </Panel>
         </div>
 
@@ -8598,36 +8627,61 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
           </Panel>
 
           <Panel title="Compliance Progress">
-            {(() => {
-              const fw = (company.compliance && company.compliance[0]) ||
-                (data.results?.compliance?.frameworks?.[0]?.name) || "NIST CSF";
-              const cur = Math.min(95, Math.max(20, score - 5));
-              const tgt = 90;
+            {compliance === null ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+            ) : !compliance.hasAssessment || !(compliance.frameworks||[]).length ? (
+              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+                {compliance.note || "No assessment on file. Compliance can't be determined without answers."}
+              </div>
+            ) : (() => {
+              // Lead with the weakest framework — same convention as the
+              // analyst's rollup, so client and analyst never see conflicting
+              // "which framework needs attention" answers.
+              const rows = compliance.frameworks.filter(f => !f.notControlMapped && f.assessed > 0);
+              if (!rows.length) return (
+                <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+              );
+              const worst = [...rows].sort((a,b)=>(a.readinessPct??101)-(b.readinessPct??101))[0];
+              const cur = worst.readinessPct ?? 0;
               return (
                 <div>
-                  <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{fw}</div>
+                  <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{worst.short || worst.name}</div>
                   <div style={{fontSize:28,fontWeight:800,color:C.purple,marginBottom:8}}>{cur}%</div>
                   <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
                     <div style={{width:`${cur}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
                   </div>
-                  <div style={{fontSize:11,color:C.textMut,marginTop:6}}>{tgt-cur > 0 ? `${tgt-cur}% to target (${tgt}%)` : "Target met"}</div>
+                  <div style={{fontSize:11,color:C.textMut,marginTop:6}}>
+                    {rows.length > 1 ? `Weakest of ${rows.length} tracked frameworks` : "readiness"}
+                  </div>
                 </div>
               );
             })()}
           </Panel>
 
           <Panel title="Team Training">
-            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
-              <span style={{fontSize:28,fontWeight:800,color:C.green}}>74%</span>
-              <span style={{fontSize:11,color:C.textMut}}>staff completed</span>
-            </div>
-            <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden",marginBottom:10}}>
-              <div style={{width:"74%",height:"100%",background:`linear-gradient(90deg,${C.accent},${C.green})`}}/>
-            </div>
-            <div style={{fontSize:11,color:C.textSec,lineHeight:1.6}}>
-              Current module: <b style={{color:C.text}}>Phishing Awareness</b><br/>
-              Next due: <b style={{color:C.text}}>end of month</b>
-            </div>
+            {training === null ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+            ) : !training.learnerCount ? (
+              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+                No learners set up yet. Add your team under Training to start tracking completion.
+              </div>
+            ) : (
+              <>
+                <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                  <span style={{fontSize:28,fontWeight:800,color:C.green}}>{training.completionRate}%</span>
+                  <span style={{fontSize:11,color:C.textMut}}>staff completed</span>
+                </div>
+                <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden",marginBottom:10}}>
+                  <div style={{width:`${training.completionRate}%`,height:"100%",background:`linear-gradient(90deg,${C.accent},${C.green})`}}/>
+                </div>
+                <div style={{fontSize:11,color:C.textSec,lineHeight:1.6}}>
+                  {training.assignmentCount} assignment{training.assignmentCount===1?"":"s"} ·{" "}
+                  {training.overdue > 0
+                    ? <span style={{color:C.amber}}>{training.overdue} overdue</span>
+                    : "none overdue"}
+                </div>
+              </>
+            )}
           </Panel>
         </div>
 
@@ -8655,39 +8709,40 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
             })()}
           </Panel>
 
-          <Panel title="Chat With Your Analyst" flex="1 1 380px">
-            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:180,overflowY:"auto",marginBottom:10}}>
-              {chatLog.map((m,i)=>(
-                <div key={i} style={{alignSelf:m.from==="client"?"flex-end":"flex-start",maxWidth:"85%"}}>
-                  <div style={{padding:"8px 11px",borderRadius:10,fontSize:12,lineHeight:1.5,
-                    background:m.from==="client"?C.accent:C.surface,
-                    color:m.from==="client"?C.bg:C.text,
-                    border:m.from==="client"?"none":`1px solid ${C.border}`}}>
-                    {m.text}
+          <Panel title="Analyst Activity" flex="1 1 380px">
+            {/* Real, read-only feed of what your analyst has actually sent —
+                review decisions, notes on your program. There is no live chat
+                channel yet, so this does not simulate one; it shows what's real. */}
+            {notifications === null ? (
+              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
+            ) : !(notifications.notifications||[]).length ? (
+              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,padding:"10px 0"}}>
+                No activity from your analyst yet. Updates on your program and any notes they leave
+                will appear here.
+              </div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:220,overflowY:"auto"}}>
+                {notifications.notifications.slice(0,8).map(n=>(
+                  <div key={n.id} style={{padding:"9px 11px",borderRadius:9,fontSize:12,lineHeight:1.5,
+                    background:C.surface,border:`1px solid ${n.read?C.border:C.accent+"55"}`}}>
+                    <div style={{color:C.text,fontWeight:600,marginBottom:2}}>{n.title}</div>
+                    <div style={{color:C.textSec}}>{n.body}</div>
+                    <div style={{fontSize:10,color:C.textMut,marginTop:4}}>
+                      {new Date(n.createdAt).toLocaleString()}
+                    </div>
                   </div>
-                  <div style={{fontSize:9,color:C.textMut,marginTop:2,textAlign:m.from==="client"?"right":"left"}}>
-                    {m.who} · {m.time}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{display:"flex",gap:8}}>
-              <input value={chatDraft} onChange={e=>setChatDraft(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&sendChat()}
-                placeholder="Message your analyst…"
-                style={{flex:1,padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:8,color:C.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
-              <button onClick={sendChat} style={{padding:"9px 16px",background:C.accent,color:C.bg,
-                border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
-            </div>
+                ))}
+              </div>
+            )}
           </Panel>
         </div>
 
         <div style={{marginTop:18,padding:"11px 16px",background:`${C.accent}0A`,
           border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
           <span style={{color:C.textSec,fontSize:11}}>
-            Your posture score and program status reflect your real assessment. Trend, compliance %,
-            team-training figures, and analyst chat are representative previews of the managed-service experience.
+            Every figure on this page reflects your real data — posture score, trend, compliance,
+            training, and analyst activity. Where something hasn't been set up or scored yet, it says
+            so instead of showing a placeholder number.
           </span>
         </div>
       </div>
