@@ -71,6 +71,7 @@ import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./t
 import { computePostureScore } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { hasCapability, getTier } from "./tiers.js";
+import { callAI, providerStatus } from "./aiProviders.js";
 import {
   registerUser,
   loginUser,
@@ -450,6 +451,63 @@ app.post("/api/claude", requireAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+//  MULTI-PROVIDER AI PROXY (protected) — real Gemini/GPT, not Claude
+//  wearing a different name badge.
+//
+// This replaces a frontend design where every "AI engine" — Claude, Gemini,
+// GPT-4o — silently proxied through Anthropic's API with a system-prompt
+// instruction telling Claude to role-play as the other providers. The model
+// picker, the specialty routing, and the on-screen "🔵 Gemini" / "🟢 GPT-4o"
+// badges were all real UI; the model answering was never anything but Claude.
+// That is a real-vs-fabricated-output problem in a product whose entire pitch
+// is "we don't fabricate security data" — a mislabeled AI provider is the same
+// category of claim as a mislabeled security finding.
+//
+// This route calls the actual provider via aiProviders.js's callAI(), which:
+//   - genuinely calls Gemini or OpenAI's API when requested and configured
+//   - SILENTLY FALLS BACK TO CLAUDE if the requested provider has no API key,
+//     or if the live call fails for any reason — so a Gemini/GPT outage never
+//     breaks the feature, it just quietly answers with Claude instead
+//   - always reports back which provider actually answered (`provider`) and
+//     whether a fallback happened (`fallback`), so the frontend's model badge
+//     reflects the true source rather than the one that was merely requested
+//
+// Non-streaming by design: Gemini and OpenAI's streaming response shapes
+// differ from Anthropic's SSE format (which /api/claude above forwards
+// as-is), and building a correct translator for each is real, separate work.
+// Claude-routed tasks keep their existing live-streaming experience via
+// /api/claude; Gemini/GPT-routed tasks return a single complete response here.
+// body: { provider: "claude"|"gemini"|"gpt4", system, messages, max_tokens? }
+app.post("/api/ai/generate", requireAuth, async (req, res) => {
+  try {
+    const { provider, system, messages, max_tokens } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages[] required." });
+    }
+    const clean = messages.slice(-40).map(m => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || "").slice(0, 16000),
+    }));
+    const result = await callAI({
+      provider,
+      system: system ? String(system).slice(0, 16000) : undefined,
+      messages: clean,
+      max_tokens: Math.min(Math.max(Number(max_tokens) || 1500, 1), 8000),
+    });
+    res.json(result); // { text, provider, fallback }
+  } catch (err) {
+    console.error("Multi-provider AI proxy error:", err.message);
+    res.status(500).json({ error: "The AI request failed. Please try again." });
+  }
+});
+
+// Which providers are actually configured right now (for the frontend to
+// know whether picking Gemini/GPT will do anything other than fall back).
+app.get("/api/ai/providers", requireAuth, (req, res) => {
+  res.json(providerStatus());
+});
+
+// ─────────────────────────────────────────────────────────────
 //  ASSESSMENTS (protected, user-scoped)
 // ─────────────────────────────────────────────────────────────
 app.post("/api/assessments", requireAuth, async (req, res) => {
@@ -604,6 +662,49 @@ app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, r
   }
 });
 
+// Which provider generates which pipeline section, chosen for each model's
+// documented real-world strength rather than an arbitrary or purely cosmetic
+// assignment (see the removed frontend "role-play" badges this replaces):
+//   threatIntel — Gemini: real-time Google Search grounding is the strongest
+//     documented advantage for a current, factual threat/industry landscape.
+//   tools       — GPT-4o: broad, current knowledge of the security-tool
+//     ecosystem; OpenAI's models are the most-cited general-purpose pick here.
+//   execReport  — Claude: consistently the strongest for long-form,
+//     expert-level business writing and the lowest hallucination rate —
+//     exactly what a client-facing executive report needs.
+//   training    — GPT-4o: broad instructional/educational content generation.
+// Every other step keeps calling Claude directly (unchanged) — this mapping
+// only applies to the four sections above.
+const STEP_PROVIDER = {
+  threatIntel: "gemini",
+  tools: "openai",
+  execReport: "claude",
+  training: "openai",
+};
+
+// Generate text for one pipeline step through the right provider, with a
+// REAL fallback to Claude if that provider is unconfigured or its call fails
+// (see aiProviders.js's callAI — the fallback is not simulated, it's what
+// actually happens if Gemini/OpenAI can't answer). Falls back to the plain
+// callClaudeText path for any step not in STEP_PROVIDER, so nothing else in
+// the pipeline changes behavior.
+// Returns { text, provider } — `provider` is who ACTUALLY generated the
+// content (which may differ from STEP_PROVIDER[stepKey] if a fallback
+// happened), so the frontend's model badge can show the truth rather than
+// the originally-requested provider.
+async function genForStep(stepKey, { system, messages, max_tokens }) {
+  const provider = STEP_PROVIDER[stepKey];
+  if (!provider || provider === "claude") {
+    const text = await callClaudeText({ system, messages, max_tokens });
+    return { text, provider: "claude" };
+  }
+  const { text, provider: actual, fallback } = await callAI({ provider, system, messages, max_tokens });
+  if (fallback) {
+    console.warn(`Pipeline step "${stepKey}" requested ${provider} but got a fallback to ${actual} (unconfigured or failed).`);
+  }
+  return { text, provider: actual };
+}
+
 async function runPipeline(programId, assessmentData) {
   const ctx = JSON.stringify(assessmentData, null, 2);
   const program = db.data.programs.find(p => p.id === programId);
@@ -634,7 +735,7 @@ Return ONLY valid JSON, no markdown fences:
 
 Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Keep each description to 1 sentence. Higher score = better security posture.`;
 
-        const text = await callClaudeText({
+        const { text, provider } = await genForStep(step.key, {
           system,
           messages: [{
             role: "user",
@@ -648,6 +749,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
         // Enforce the computed values (defend against the AI drifting)
         aiResult.postureScore = posture.postureScore;
         aiResult.postureLevel = posture.postureLevel;
+        aiResult.generatedBy = provider;
 
         // Attach the full breakdown for the dashboard to render
         aiResult.breakdown = {
@@ -703,28 +805,38 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
 
         let parsed = null;
         try {
-          const text = await callClaudeText({
+          const { text, provider } = await genForStep(step.key, {
             system: step.system,
             messages: [{ role: "user", content: userContent }],
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(text);
+          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         } catch (firstErr) {
           console.warn(`Step "compliance" first attempt failed (${firstErr.message}); retrying…`);
-          const retryText = await callClaudeText({
+          const { text: retryText, provider } = await genForStep(step.key, {
             system: step.system,
             messages: [{ role: "user", content: userContent + " Return strictly valid, minified JSON — no trailing commas, no text before or after." }],
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(retryText);
+          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         }
         program.sections[step.key] = parsed;
       } else {
         // All other steps: try once, and on parse failure retry with a
         // stricter "valid JSON only" nudge before giving up.
+        //
+        // Four of these steps — threatIntel, tools, execReport, training —
+        // route through genForStep to the provider best suited to that
+        // content (see STEP_PROVIDER above), with a real fallback to Claude
+        // baked into aiProviders.js's callAI if that provider is unconfigured
+        // or its call fails. Every other step keeps calling Claude directly,
+        // exactly as before. `generatedBy` on the saved section is who
+        // ACTUALLY answered, so the frontend's model badge is never wrong.
         let parsed = null;
         try {
-          const text = await callClaudeText({
+          const { text, provider } = await genForStep(step.key, {
             system: step.system,
             messages: [{
               role: "user",
@@ -733,9 +845,10 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(text);
+          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         } catch (firstErr) {
           console.warn(`Step "${step.key}" first attempt failed (${firstErr.message}); retrying…`);
-          const retryText = await callClaudeText({
+          const { text: retryText, provider } = await genForStep(step.key, {
             system: step.system,
             messages: [{
               role: "user",
@@ -744,6 +857,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(retryText);
+          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         }
         program.sections[step.key] = parsed;
       }

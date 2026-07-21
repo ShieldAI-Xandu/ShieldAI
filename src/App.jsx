@@ -23,10 +23,19 @@ const C = {
 };
 
 // ─────────────────────────────────────────────────────────────
-//  AI ROUTER  – routes tasks to the right model
-//  In production: Claude = Anthropic API,
-//                 Gemini / GPT = their respective APIs
-//  Here we proxy everything through Claude with role prompting
+//  AI ROUTER — routes tasks to the right model
+//
+//  Claude-routed tasks stream live via /api/claude, unchanged.
+//  Gemini/GPT-routed tasks call /api/ai/generate, which genuinely invokes
+//  that provider's own API through aiProviders.js on the backend — this used
+//  to always be Claude with a system-prompt instruction to role-play as the
+//  other providers ("You are operating as the Gemini engine..."), so every
+//  "🔵 Gemini" / "🟢 GPT-4o" badge in the product was mislabeling Claude's
+//  output. That's now fixed: the badge reflects whichever provider actually
+//  answered, including when a provider is unconfigured or fails and the
+//  backend silently falls back to Claude — the fallback is real, but it's
+//  reported as what it is rather than displayed as the originally-requested
+//  provider.
 // ─────────────────────────────────────────────────────────────
 const AI_MODELS = {
   claude: {
@@ -76,47 +85,63 @@ async function callAI(taskType, messages, systemPrompt, onChunk) {
   const model = routeTask(taskType);
   const modelInfo = AI_MODELS[model];
 
-  // Prepend model persona to system prompt
-  const enrichedSystem = `You are operating as the ${modelInfo.label} engine within ShieldAI, a virtual CISO platform.
-Your specialty: ${modelInfo.specialty}
+  // Claude keeps its existing live-streaming path — no change in behavior.
+  if (model === "claude") {
+    const res = await authFetch(`${API_BASE}/api/claude`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 16384,
+        system: systemPrompt,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        stream: true,
+      }),
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
 
-${systemPrompt}`;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const lines = dec.decode(value).split("\n").filter(l => l.startsWith("data: "));
+      for (const line of lines) {
+        try {
+          const j = JSON.parse(line.slice(6));
+          if (j.type === "content_block_delta" && j.delta?.text) {
+            full += j.delta.text;
+            if (onChunk) onChunk(full, "claude");
+          }
+        } catch {}
+      }
+    }
+    return { text: full, model: "claude" };
+  }
 
-  const res = await authFetch(`${API_BASE}/api/claude`, {
+  // Gemini/GPT: a real call to that provider via /api/ai/generate. No
+  // streaming (see the comment on that route for why), so the full answer
+  // arrives at once — still reported through onChunk for callers that render
+  // progressively, just as a single "chunk" rather than a live stream.
+  const res = await authFetch(`${API_BASE}/api/ai/generate`, {
     method: "POST",
-    headers: { 
-       "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-       model: "claude-sonnet-4-6",
-       max_tokens: 16384,
-       system: enrichedSystem,
-       messages: messages.map(m => ({ role: m.role, content: m.content })),
-    stream: true,
+      provider: model,
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: messages.map(m => ({ role: m.role, content: m.content })),
     }),
   });
-
   if (!res.ok) throw new Error(`API error: ${res.status}`);
-
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let full = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const lines = dec.decode(value).split("\n").filter(l => l.startsWith("data: "));
-    for (const line of lines) {
-      try {
-        const j = JSON.parse(line.slice(6));
-        if (j.type === "content_block_delta" && j.delta?.text) {
-          full += j.delta.text;
-          if (onChunk) onChunk(full, model);
-        }
-      } catch {}
-    }
-  }
-  return { text: full, model };
+  const data = await res.json(); // { text, provider, fallback }
+  const actualModel = data.provider === "openai" ? "gpt4" : (data.provider || model);
+  if (onChunk) onChunk(data.text || "", actualModel);
+  // `data.provider` is who ACTUALLY answered — if Gemini/GPT failed or wasn't
+  // configured, this will correctly read "claude" (the real fallback), not
+  // whatever was originally requested.
+  return { text: data.text || "", model: actualModel, fallback: !!data.fallback };
 }
 
 async function callAIJson(taskType, prompt, systemPrompt) {
@@ -129,6 +154,17 @@ async function callAIJson(taskType, prompt, systemPrompt) {
 //  SYSTEM PROMPTS
 // ─────────────────────────────────────────────────────────────
 const SYS = {
+  // The only prompt actually used by the frontend's callAI(). Every other
+  // "task type" (riskAnalysis, policyDraft, complianceMap, workflows,
+  // threatIntel, toolRecommendations, awarenessTraining, execSummary) has its
+  // own real, working implementation server-side in generators.js's PIPELINE,
+  // called via callClaudeText during program generation — genuinely Claude,
+  // with no persona role-play. This file used to carry a second, dead copy of
+  // each of those prompts, unreachable from any actual call site, several of
+  // them instructing the model to write "(Gemini)" or "(GPT-4o style)" — the
+  // same content, never invoked, mislabeling a provider that never touched it.
+  // Removed rather than fixed in place, since keeping an unreachable, inaccurate
+  // duplicate around is worse than not having it.
   intake: `You are the intake AI for ShieldAI, conducting a security assessment interview for small businesses. Ask ONE conversational question at a time. After 7-9 exchanges gather:
 1. Business basics: industry, employee count, revenue range, data handled
 2. Current security: tools in use, IT staff, last security review
@@ -142,37 +178,6 @@ When you have enough data, output ONLY this block:
 </ASSESSMENT_DONE>
 
 Before that, just have a warm, professional conversation. Start by greeting them and asking for their company name and industry.`,
-
-  riskAnalysis: `You are a senior CISO performing risk analysis. Return ONLY valid JSON, no markdown fences, no prose:
-{
-  "riskScore": 0-100,
-  "riskLevel": "Low|Medium|High|Critical",
-  "executiveSummary": "3-4 sentences",
-  "topThreats": [{"threat":"","likelihood":"High|Medium|Low","impact":"High|Medium|Low","description":""}],
-  "priorities": [{"id":"","rank":1,"title":"","description":"","effort":"Quick Win|30 Days|90 Days|Long Term","impact":"High|Medium|Low","category":"Identity|Network|Data|Endpoint|Compliance|Awareness|AppSec|Physical","owner":"IT|Leadership|All Staff","estimatedCost":"$0|<$500|$500-2k|$2k-10k|$10k+"}],
-  "quickWins": [{"action":"","benefit":"","howTo":""}]
-}`,
-
-  policyDraft: `You are a CISO drafting security policies. Return ONLY valid JSON:
-{"policies":[{"id":"","name":"","purpose":"","scope":"","policyText":"4-6 sentences of actual policy language","procedures":["step 1","step 2","step 3"],"reviewCycle":"Annual|Semi-Annual|Quarterly","owner":""}]}`,
-
-  complianceMap: `You are a compliance expert. Return ONLY valid JSON:
-{"frameworks":[{"name":"","applicability":"Required|Recommended|Optional","gaps":[{"control":"","status":"Missing|Partial|Compliant","remediation":"","priority":"High|Medium|Low"}],"overallScore":0-100,"certificationPath":""}]}`,
-
-  workflows: `You are a CISO building incident response and security workflows. Return ONLY valid JSON:
-{"workflows":[{"id":"","name":"","category":"Incident Response|Access Management|Change Management|Vendor Risk|Awareness|Monitoring","trigger":"","severity":"Critical|High|Medium|Low","steps":[{"step":1,"action":"","responsible":"","timeframe":"","tools":""}],"escalationPath":[],"successCriteria":"","reviewFrequency":""}]}`,
-
-  threatIntel: `You are a threat intelligence analyst (Gemini). Return ONLY valid JSON:
-{"threatLandscape":{"industryThreats":[{"name":"","description":"","prevalence":"High|Medium|Low","mitigations":[]}],"recentCVEs":[{"id":"","description":"","severity":"Critical|High|Medium","affected":"","patch":""}],"attackVectors":[],"darkWebMentions":"No intel|Low risk|Elevated|High alert"},"recommendations":[]}`,
-
-  toolRecommendations: `You are a security architect recommending tools. Return ONLY valid JSON:
-{"toolStack":[{"category":"","subcategory":"","recommended":"","alternative":"","rationale":"","cost":"Free|<$50/mo|$50-200/mo|$200+/mo","implementation":"Easy|Moderate|Complex","integrations":[],"link":""}]}`,
-
-  awarenessTraining: `You are a security awareness trainer (GPT-4o style). Return ONLY valid JSON:
-{"trainingProgram":{"modules":[{"id":"","title":"","audience":"All Staff|IT|Leadership|Finance","duration":"15 min|30 min|1 hour","topics":[],"keyTakeaways":[],"quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}],"phishingSimulation":{"frequency":"","scenarios":[]},"metricsToTrack":[]}}`,
-
-  execSummary: `You are writing an executive summary for a CISO report (GPT-4o style). Return ONLY valid JSON:
-{"executiveReport":{"headline":"","securityPosture":"","keyFindings":[],"businessRisk":"","investmentRequired":"","roi":"","topRecommendations":[],"nextSteps":[{"action":"","owner":"","dueDate":"","priority":""}]}}`,
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -3094,6 +3099,9 @@ function DomainMonitoringCard() {
 
 function ThreatIntelSection({ results }) {
   const tl = results?.threatIntel?.threatLandscape;
+  // generatedBy lives on the outer threatIntel object (the AI's raw JSON
+  // response, tagged server-side with the real provider), one level above tl.
+  const genBy = results?.threatIntel?.generatedBy;
 
   // Breach monitoring is live data and independent of the AI-generated threat
   // landscape, so it renders even when the program hasn't been generated yet.
@@ -3116,7 +3124,7 @@ function ThreatIntelSection({ results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Threat Intelligence"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/></div>
       </div>
       {/* Real, HIBP-backed breach monitoring. This replaces the old
           `darkWebMentions` banner, which was model-generated text rather than
@@ -3153,12 +3161,13 @@ function ThreatIntelSection({ results }) {
 function ToolsSection({ results }) {
   const tools = results?.tools?.toolStack || [];
   const categories = [...new Set(tools.map(t=>t.category))];
+  const genBy = results?.tools?.generatedBy;
 
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Recommended Security Tool Stack"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gemini"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/></div>
       </div>
       {categories.map(cat=>(
         <div key={cat} style={{marginBottom:18}}>
@@ -3347,6 +3356,7 @@ function TrainingSection({ results, assessment }) {
         <div>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,marginTop:8}}>
             <SectionLabel text="Quick Preview (from your assessment)"/>
+            <div style={{marginLeft:"auto"}}><AIChip model={prog.generatedBy === "openai" ? "gpt4" : (prog.generatedBy || "claude")}/></div>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14}}>
             <div>
@@ -3900,13 +3910,14 @@ function QuizRunner({ questions, accent }) {
 function ExecReportSection({ assessment, results }) {
   const rep = results?.execReport?.executiveReport;
   const risk = results?.riskOverview;
+  const genBy = results?.execReport?.generatedBy;
   if (!rep) return <div style={{color:C.textSec,padding:20}}>Report not generated.</div>;
 
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Executive CISO Report"/>
-        <div style={{marginLeft:"auto"}}><AIChip model="gpt4"/></div>
+        <div style={{marginLeft:"auto"}}><AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/></div>
       </div>
       <Card style={{marginBottom:14,padding:"24px"}}>
         <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:16,marginBottom:16}}>
