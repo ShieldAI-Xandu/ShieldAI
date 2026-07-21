@@ -19,7 +19,7 @@
 // path, so it must be registered BEFORE any global express.json() — see the
 // server.js mounting note.
 
-import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER, SELF_SERVE_PAID_TIERS, getAddon, canPurchaseAddon } from "./tiers.js";
+import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER, SELF_SERVE_PAID_TIERS, getAddon, canPurchaseAddon, ADDONS } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -27,6 +27,17 @@ const nowIso = () => new Date().toISOString();
 function tierFromPriceId(priceId) {
   for (const id of TIER_ORDER) {
     if (TIERS[id].stripePriceId && TIERS[id].stripePriceId === priceId) return id;
+  }
+  return null;
+}
+
+// Map a Stripe price id back to our internal add-on id (e.g. training_delivery).
+// Mirrors tierFromPriceId — add-ons are sold as their own Stripe price, separate
+// from the tier's price, so a price id resolves to EITHER a tier OR an add-on,
+// never both.
+function addonFromPriceId(priceId) {
+  for (const id of Object.keys(ADDONS)) {
+    if (ADDONS[id].stripePriceId && ADDONS[id].stripePriceId === priceId) return id;
   }
   return null;
 }
@@ -69,7 +80,8 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
     let sub = getSub(userId);
     if (!sub) {
       sub = { id: cryptoRandom(), userId, tier: DEFAULT_TIER, status: "free",
-              stripeCustomerId: null, stripeSubscriptionId: null, currentPeriodEnd: null, updatedAt: nowIso() };
+              stripeCustomerId: null, stripeSubscriptionId: null, currentPeriodEnd: null,
+              addons: [], updatedAt: nowIso() };
       db.data.subscriptions.push(sub);
     }
     Object.assign(sub, patch, { updatedAt: nowIso() });
@@ -124,24 +136,60 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
           const customerId = obj.customer || obj.customer_id;
           const user = (db.data.users || []).find(u => getSub(u.id)?.stripeCustomerId === customerId);
           if (user) {
-            // Re-fetch the authoritative subscription for this customer.
-            const subs = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 1 });
-            const s = subs.data[0];
-            if (s) {
-              const priceId = s.items?.data?.[0]?.price?.id;
-              const tier = tierFromPriceId(priceId) || getSub(user.id)?.tier || DEFAULT_TIER;
-              const active = ["active", "trialing", "past_due"].includes(s.status);
-              upsertSub(user.id, {
-                tier: active ? tier : DEFAULT_TIER,
-                status: s.status,
-                stripeSubscriptionId: s.id,
-                currentPeriodEnd: s.current_period_end ? new Date(s.current_period_end * 1000).toISOString() : null,
-              });
-              user.tier = active ? tier : DEFAULT_TIER; // keep the user record's tier in sync
+            // Re-fetch EVERY subscription for this customer, not just one.
+            //
+            // A customer can hold two separate Stripe subscription objects at
+            // once: the base tier (Starter/Growth/...) and the $40/mo training
+            // delivery add-on, each its own recurring line item created by its
+            // own checkout session (see /api/billing/checkout-addon below).
+            // Reading only subs.data[0] — the previous behaviour — meant an
+            // add-on purchase completed a real charge in Stripe but never
+            // reached sub.addons, so tierGate.js kept rejecting the client's
+            // access to the thing they'd just paid for.
+            const subs = await stripe.subscriptions.list({ customer: customerId, status: "all", limit: 10 });
+            const active = subs.data.filter(s => ["active", "trialing", "past_due"].includes(s.status));
+
+            // Classify every line item across every active subscription as
+            // either a tier price or an add-on price. A customer's tier comes
+            // from whichever active subscription matches a tier price; their
+            // add-ons are the union of every active subscription matching an
+            // add-on price. The two are mutually exclusive by price id, so
+            // there's no ambiguity in which bucket a given item belongs to.
+            let resolvedTier = null;
+            let latestTierSub = null;
+            const resolvedAddons = new Set();
+            for (const s of active) {
+              for (const item of s.items?.data || []) {
+                const priceId = item.price?.id;
+                const t = tierFromPriceId(priceId);
+                if (t) {
+                  resolvedTier = t;
+                  latestTierSub = s;
+                  continue;
+                }
+                const a = addonFromPriceId(priceId);
+                if (a) resolvedAddons.add(a);
+              }
+            }
+
+            if (active.length === 0) {
+              // Nothing active at all — fully canceled/lapsed.
+              upsertSub(user.id, { status: "canceled", tier: DEFAULT_TIER, stripeSubscriptionId: null, addons: [] });
+              user.tier = DEFAULT_TIER;
+              user.addons = [];
               await db.write();
             } else {
-              upsertSub(user.id, { status: "canceled", tier: DEFAULT_TIER, stripeSubscriptionId: null });
-              user.tier = DEFAULT_TIER;
+              const tier = resolvedTier || getSub(user.id)?.tier || DEFAULT_TIER;
+              upsertSub(user.id, {
+                tier,
+                status: latestTierSub?.status || active[0].status,
+                stripeSubscriptionId: latestTierSub?.id || active[0].id,
+                currentPeriodEnd: (latestTierSub || active[0]).current_period_end
+                  ? new Date((latestTierSub || active[0]).current_period_end * 1000).toISOString() : null,
+                addons: [...resolvedAddons],
+              });
+              user.tier = tier; // keep the user record's tier in sync
+              user.addons = [...resolvedAddons]; // keep the user record's add-ons in sync too
               await db.write();
             }
           }
@@ -311,15 +359,26 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       const tier = u.tier || DEFAULT_TIER;
       const txns = (db.data.transactions || []).filter(t => t.userId === u.id);
       const paid = txns.filter(t => t.status === "paid").reduce((s, t) => s + (t.amountCents || 0), 0);
+      // Add-ons ride alongside the tier price rather than replacing it — a
+      // Starter customer with the training-delivery add-on pays $159 + $40,
+      // and MRR undercounts every such account if this is left out. Same union
+      // tierGate.js uses (user record OR subscription record), so this can't
+      // silently disagree with what actually gates the feature.
+      const addonIds = new Set([
+        ...(Array.isArray(u?.addons) ? u.addons : []),
+        ...(Array.isArray(sub?.addons) ? sub.addons : []),
+      ]);
+      const addonCents = [...addonIds].reduce((s, id) => s + (getAddon(id)?.priceCents || 0), 0);
       return {
         id: u.id, email: u.email, companyName: u.companyName || "",
         tier, status: sub?.status || (tier === "free" ? "free" : "none"),
-        priceCents: getTier(tier).priceCents || 0,
+        priceCents: (getTier(tier).priceCents || 0) + addonCents,
+        addons: [...addonIds],
         lifetimePaidCents: paid,
         currentPeriodEnd: sub?.currentPeriodEnd || null,
       };
     });
-    // MRR estimate = sum of monthly prices for active/manual paid tiers.
+    // MRR estimate = sum of monthly prices (tier + any add-ons) for active/manual paid tiers.
     const mrrCents = rows
       .filter(r => ["active", "trialing", "manual", "past_due"].includes(r.status))
       .reduce((s, r) => s + (r.priceCents || 0), 0);
