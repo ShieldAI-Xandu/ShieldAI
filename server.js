@@ -1081,6 +1081,12 @@ app.post("/api/training/generate", requireAuth, gate.capability("trainingPlan"),
     });
 
     // Generate ONE phase at a time so each response stays small (avoids truncation)
+    // Routed to GPT-4o — same "training content" category as the quick-preview
+    // pipeline step (see server.js's STEP_PROVIDER), for consistency: this and
+    // that step do the same kind of work through different UI entry points,
+    // so they should use the same provider rather than silently disagreeing.
+    // callAI already falls back to Claude if GPT-4o is unconfigured or fails;
+    // the phaseFallback() below is a second, non-AI layer under that.
     async function generatePhase(ph) {
       const sys = `You are a cybersecurity awareness training designer for small businesses. Tailor the given CISA/NIST training modules to this specific company. DO NOT change the module titles, audiences, or objectives — only enrich them.
 
@@ -1090,10 +1096,10 @@ Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly th
 Exactly 1 quiz question per module with exactly 4 options. Keep every field concise.`;
       const usr = `${companyText}\n\nModules to tailor for the "${ph.theme}" phase:\n${JSON.stringify(ph.topics)}`;
       try {
-        const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
+        const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
         const parsed = extractJson(text);
         if (!parsed.modules || !Array.isArray(parsed.modules) || parsed.modules.length === 0) throw new Error("no modules");
-        return { phase: ph.phase, theme: ph.theme, note: ph.note, modules: parsed.modules };
+        return { phase: ph.phase, theme: ph.theme, note: ph.note, modules: parsed.modules, generatedBy: provider };
       } catch (e) {
         console.warn(`Training phase "${ph.phase}" fell back: ${e.message}`);
         return phaseFallback(ph);
@@ -1106,15 +1112,17 @@ Exactly 1 quiz question per module with exactly 4 options. Keep every field conc
       phases.push(await generatePhase(ph));
     }
 
-    // Manager track (one small call, or fallback)
+    // Manager track (one small call, or fallback) — same GPT-4o routing.
     let mgrOut = [];
+    let mgrGeneratedBy = null;
     if (includeManagerTrack && managerTrack.length) {
       try {
         const sys = `Tailor these manager/owner cybersecurity training modules to the company. Keep titles, audiences, and objectives. Return ONLY valid minified JSON: {"modules":[{"id":"","title":"","audience":"","duration":"","objectives":[...],"tailoredIntro":"","quiz":[{"question":"","options":["a","b","c","d"],"correct":0}]}]}. Exactly 1 quiz question, 4 options each. Be concise.`;
         const usr = `${companyText}\n\nManager modules:\n${JSON.stringify(managerTrack)}`;
-        const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 2500 });
+        const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 2500 });
         const parsed = extractJson(text);
         mgrOut = parsed.modules || [];
+        mgrGeneratedBy = provider;
         if (!mgrOut.length) throw new Error("no manager modules");
       } catch (e) {
         console.warn(`Manager track fell back: ${e.message}`);
@@ -1131,6 +1139,7 @@ Exactly 1 quiz question per module with exactly 4 options. Keep every field conc
       overview: `A CISA/NIST-aligned security awareness program tailored for ${company.name || "your business"}${company.industry ? ` in the ${company.industry} sector` : ""}. Delivered over three months with quarterly refreshers.`,
       phases,
       managerTrack: mgrOut,
+      managerTrackGeneratedBy: mgrGeneratedBy,
       deliveryTips: [
         "Keep sessions short (15-30 min) and schedule them during work hours.",
         "Run a simulated phishing test after Month 1 to reinforce learning.",
@@ -1204,7 +1213,7 @@ app.post("/api/training/module-content", requireAuth, async (req, res) => {
 
     // If already generated, return cached content
     if (mod.slides && mod.fullQuiz) {
-      return res.json({ slides: mod.slides, fullQuiz: mod.fullQuiz, cached: true });
+      return res.json({ slides: mod.slides, fullQuiz: mod.fullQuiz, generatedBy: mod.generatedBy || null, cached: true });
     }
 
     const company = program.companyContext || {};
@@ -1221,8 +1230,9 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
 
     let content;
     try {
-      const text = await callClaudeText({ system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
+      const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
       content = extractJson(text);
+      content.generatedBy = provider;
       if (!Array.isArray(content.slides) || !Array.isArray(content.fullQuiz) || !content.slides.length || !content.fullQuiz.length) {
         throw new Error("incomplete content");
       }
@@ -1247,9 +1257,10 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
     // Cache back into the saved program
     mod.slides = content.slides;
     mod.fullQuiz = content.fullQuiz;
+    mod.generatedBy = content.generatedBy || null;
     await db.write();
 
-    res.json({ slides: content.slides, fullQuiz: content.fullQuiz, cached: false });
+    res.json({ slides: content.slides, fullQuiz: content.fullQuiz, generatedBy: mod.generatedBy, cached: false });
   } catch (err) {
     console.error("Module content error:", err.message);
     res.status(500).json({ error: "Failed to generate module content" });

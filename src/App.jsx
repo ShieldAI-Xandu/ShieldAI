@@ -1608,6 +1608,150 @@ function CveExposureCard() {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  DARK-WEB / BREACH EXPOSURE — real HIBP-backed monitoring.
+//
+// This existed fully working on the backend (clientExposure() in
+// darkwebService.js: verification-gated, never a fabricated all-clear, and
+// correctly flagged `simulated: true` for demo accounts since HIBP cannot
+// verify a fictional domain) but had NO frontend component displaying it —
+// DomainMonitoringCard only shows the domain-verification workflow, not the
+// actual breach results once verified. This is that missing piece.
+// ─────────────────────────────────────────────────────────────
+function DarkWebExposureCard({ clientId } = {}) {
+  const [data, setData] = useState(null);   // { userId, configured, exposure }
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const qs = clientId ? `?userId=${encodeURIComponent(clientId)}` : "";
+      const res = await authFetch(`${API_BASE}/api/client/darkweb-exposure${qs}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load breach exposure.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [clientId]);
+
+  async function refresh() {
+    setRefreshing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/darkweb-exposure/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clientId ? { userId: clientId } : {}),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Refresh failed.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setRefreshing(false); }
+  }
+
+  const exp = data?.exposure;
+  const statusColor = {
+    "High alert": C.red, "Elevated": C.amber, "Low risk": "#7ED957",
+    "No intel": C.green, "Not monitored": C.textMut, "Not active": C.textMut,
+    "Unknown": C.textMut,
+  }[exp?.statusLevel] || C.textMut;
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Breach & Dark-Web Exposure"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>HIBP</span>
+        {/* Load-bearing disclosure — never remove this for a cleaner-looking
+            card. A demo/simulated result must never be mistakable for a live
+            breach finding. */}
+        {(exp?.simulated || exp?.demo) && (
+          <span style={{fontSize:10,color:C.purple,letterSpacing:1,fontWeight:700,
+            padding:"2px 8px",borderRadius:20,background:`${C.purple}18`,border:`1px solid ${C.purple}44`}}>
+            SIMULATED — DEMO ONLY
+          </span>
+        )}
+        <div style={{marginLeft:"auto"}}>
+          {exp?.monitored && (
+            <button onClick={refresh} disabled={refreshing||loading}
+              style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.border}`,
+                background:C.surface,color:C.accent,fontSize:12,fontWeight:600,
+                cursor:(refreshing||loading)?"default":"pointer",opacity:(refreshing||loading)?0.6:1}}>
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : !exp ? (
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+          No data to report.
+        </div>
+      ) : !exp.monitored ? (
+        // Every non-monitored state (no domain, not verified, HIBP unconfigured)
+        // renders the SAME honest way: a clear reason, never a green "all clear".
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+          <div style={{color:C.text,fontWeight:600,marginBottom:4}}>{exp.statusLevel || "Not monitored"}</div>
+          {exp.reason || "Breach monitoring requires a verified company domain. Add and verify your domain above to enable it."}
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+              background:`${statusColor}12`,border:`1px solid ${statusColor}33`,borderRadius:9}}>
+              <span style={{fontSize:13,fontWeight:700,color:statusColor}}>{exp.statusLevel}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+              <span style={{fontSize:16,fontWeight:800,color:C.text}}>{exp.breachedAccounts ?? 0}</span>
+              <span style={{fontSize:11,color:C.textSec}}>breached account{exp.breachedAccounts===1?"":"s"}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+              <span style={{fontSize:16,fontWeight:800,color:C.text}}>{exp.distinctBreaches ?? 0}</span>
+              <span style={{fontSize:11,color:C.textSec}}>distinct breach{exp.distinctBreaches===1?"":"es"}</span>
+            </div>
+          </div>
+
+          {(exp.breaches || []).length > 0 && (
+            <>
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                NAMED BREACHES ({exp.breaches.length})
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                {exp.breaches.map((b,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                    border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>{b}</span>
+                ))}
+              </div>
+            </>
+          )}
+
+          {exp.domain && (
+            <div style={{fontSize:11,color:C.textMut,marginBottom:4}}>Domain: <span style={{fontFamily:"monospace"}}>{exp.domain}</span></div>
+          )}
+          {(exp.checkedAt || exp.refreshedAt) && (
+            <div style={{fontSize:11,color:C.textMut}}>
+              Checked {new Date(exp.checkedAt || exp.refreshedAt).toLocaleString()} · source: Have I Been Pwned
+            </div>
+          )}
+          {exp.note && (
+            <div style={{marginTop:8,fontSize:11.5,color:C.textSec,lineHeight:1.5,fontStyle:"italic"}}>{exp.note}</div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  REMEDIATION — the closed loop.
 //  Gaps ranked by projected posture gain → create task → work it →
 //  complete it → the deterministic engine re-scores and the trend moves.
@@ -3113,6 +3257,7 @@ function ThreatIntelSection({ results }) {
         </div>
         <CveExposureCard/>
         <DomainMonitoringCard/>
+        <DarkWebExposureCard/>
         <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
           The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
         </div>
@@ -3134,6 +3279,7 @@ function ThreatIntelSection({ results }) {
           model-generated "recentCVEs" card that used to render here. */}
       <CveExposureCard/>
       <DomainMonitoringCard/>
+      <DarkWebExposureCard/>
       <div style={{marginBottom:14}}>
         <Card>
           <SectionLabel text="Industry Threat Landscape"/>
@@ -3473,6 +3619,22 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
         </Card>
       )}
 
+      {/* Reflects the ACTUAL generator for whichever phase/track is open —
+          not a single top-level badge — since a phase whose GPT-4o call
+          failed falls back to Claude independently of its siblings, and a
+          badge covering the whole curriculum could misrepresent that mix. */}
+      {(() => {
+        const genBy = openPhase === "mgr"
+          ? curriculum.managerTrackGeneratedBy
+          : curriculum.phases?.[openPhase]?.generatedBy;
+        if (!genBy) return null;
+        return (
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
+            <AIChip model={genBy === "openai" ? "gpt4" : genBy}/>
+          </div>
+        );
+      })()}
+
       {/* Phase tabs */}
       <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
         {(curriculum.phases||[]).map((ph,i)=>(
@@ -3559,7 +3721,7 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
 // A single training module card (shared by phase + manager views)
 function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
   const [showAnswer, setShowAnswer] = useState(false);
-  const [content, setContent] = useState(null);   // { slides, fullQuiz }
+  const [content, setContent] = useState(null);   // { slides, fullQuiz, generatedBy }
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [mode, setMode] = useState(null);          // null | "slides" | "quiz"
@@ -3567,7 +3729,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
   useEffect(() => {
     setShowAnswer(false);
     // pick up cached content already attached to the module
-    setContent(mod && (mod.slides || mod.fullQuiz) ? { slides: mod.slides, fullQuiz: mod.fullQuiz } : null);
+    setContent(mod && (mod.slides || mod.fullQuiz) ? { slides: mod.slides, fullQuiz: mod.fullQuiz, generatedBy: mod.generatedBy } : null);
     setMode(null); setErr(null);
   }, [mod]);
 
@@ -3584,7 +3746,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
       });
       if (!res.ok) throw new Error("Could not generate content");
       const data = await res.json();
-      setContent({ slides: data.slides, fullQuiz: data.fullQuiz });
+      setContent({ slides: data.slides, fullQuiz: data.fullQuiz, generatedBy: data.generatedBy });
       setMode(targetMode);
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
   }
@@ -3593,9 +3755,12 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
     <Card>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
-        <div style={{display:"flex",gap:6}}>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <Badge label={mod.duration} color={accent}/>
           <Badge label={mod.audience} color={C.purple}/>
+          {content?.generatedBy && (
+            <AIChip model={content.generatedBy === "openai" ? "gpt4" : content.generatedBy}/>
+          )}
         </div>
       </div>
 
@@ -10310,6 +10475,69 @@ function SocPanel({ title, action, children, accent }) {
 
 const sevColor = (s) => s === "high" ? SOC.red : s === "medium" ? SOC.amber : SOC.cyan;
 
+// Real HIBP-backed breach exposure for one client, styled for the analyst
+// console. Same endpoint and data contract as the client-facing
+// DarkWebExposureCard — reused here rather than duplicated logic, just a
+// different visual shell (SocPanel/SOC.* instead of Card/C.*) to match this
+// console's theme. Analysts previously had no way to see this at all; only
+// Mastermind's get_darkweb_exposure tool could reach it.
+function AnalystDarkWebPanel({ clientId }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    authFetch(`${API_BASE}/api/client/darkweb-exposure?userId=${encodeURIComponent(clientId)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData(null); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [clientId]);
+
+  const exp = data?.exposure;
+  const statusColor = {
+    "High alert": SOC.red, "Elevated": SOC.amber, "Low risk": SOC.green,
+    "No intel": SOC.green,
+  }[exp?.statusLevel] || SOC.textMut;
+
+  return (
+    <SocPanel title="Breach & Dark-Web Exposure" accent={SOC.purple}
+      action={(exp?.simulated || exp?.demo) ? (
+        <span style={{fontSize:9,fontWeight:700,color:SOC.purple,letterSpacing:0.5}}>SIMULATED — DEMO</span>
+      ) : null}>
+      {loading ? (
+        <div style={{color:SOC.textMut,fontSize:12,padding:"10px 0"}}>Loading…</div>
+      ) : !exp ? (
+        <div style={{color:SOC.textSec,fontSize:12,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+      ) : !exp.monitored ? (
+        <div style={{color:SOC.textSec,fontSize:11.5,lineHeight:1.6,padding:"6px 0"}}>
+          <div style={{color:SOC.text,fontWeight:600,marginBottom:4}}>{exp.statusLevel || "Not monitored"}</div>
+          {exp.reason || "This client hasn't verified a company domain yet."}
+        </div>
+      ) : (
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+            <span style={{fontSize:13,fontWeight:700,color:statusColor}}>{exp.statusLevel}</span>
+            <span style={{fontSize:11,color:SOC.textSec}}>
+              {exp.breachedAccounts ?? 0} account{(exp.breachedAccounts ?? 0)===1?"":"s"} · {exp.distinctBreaches ?? 0} breach{(exp.distinctBreaches ?? 0)===1?"":"es"}
+            </span>
+          </div>
+          {(exp.breaches || []).length > 0 && (
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {exp.breaches.map((b,i) => (
+                <span key={i} style={{padding:"3px 9px",borderRadius:6,background:SOC.bg,
+                  border:`1px solid ${SOC.border}`,color:SOC.textSec,fontSize:11}}>{b}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </SocPanel>
+  );
+}
+
 // ── Training Manager overlay (analyst-side training management for a client) ──
 function TrainingManager({ client, onClose }) {
   const t = client.training || {};
@@ -11652,6 +11880,12 @@ function AnalystConsole({ user, onExit }) {
                 </div>
               )}
             </SocPanel>
+          </div>
+
+          {/* Real breach exposure — previously only visible to Mastermind's
+              get_darkweb_exposure tool, never shown directly to the analyst. */}
+          <div style={{marginBottom:14}}>
+            <AnalystDarkWebPanel clientId={c.id}/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
