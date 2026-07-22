@@ -669,16 +669,14 @@ app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, r
 //     documented advantage for a current, factual threat/industry landscape.
 //   tools       — GPT-4o: broad, current knowledge of the security-tool
 //     ecosystem; OpenAI's models are the most-cited general-purpose pick here.
-//   execReport  — Claude: consistently the strongest for long-form,
-//     expert-level business writing and the lowest hallucination rate —
-//     exactly what a client-facing executive report needs.
+//   execReport  — GPT-4o: assigned per product decision (2026-07-22).
 //   training    — GPT-4o: broad instructional/educational content generation.
 // Every other step keeps calling Claude directly (unchanged) — this mapping
 // only applies to the four sections above.
 const STEP_PROVIDER = {
   threatIntel: "gemini",
   tools: "openai",
-  execReport: "claude",
+  execReport: "openai",
   training: "openai",
 };
 

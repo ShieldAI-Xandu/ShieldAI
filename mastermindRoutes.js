@@ -346,7 +346,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
   // (61 sub-requirements) for a merchant the product already knows is SAQ A (7).
   function frameworkOptsFor(assessment, frameworkId) {
     if (!frameworkId) return {};
-    const key = String(frameworkId).replace("iso-27001", "iso27001").replace(/^hipaa$/, "hipaa-security");
+    const key = toRegistryId(frameworkId);
     const answers = assessment?.data?.frameworkIntake?.[key];
     if (!answers) return {};
     try { return toAssessOpts(key, answers); } catch { return {}; }

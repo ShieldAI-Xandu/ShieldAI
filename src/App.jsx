@@ -57,23 +57,30 @@ const AI_MODELS = {
     label: "GPT-4o (OpenAI)",
     color: "#10A37F",
     icon: "🟢",
-    specialty: "Security awareness training, executive summaries, reporting",
+    specialty: "Recommended security tools, security awareness training, executive summaries",
   },
 };
 
-// Task → model routing rules
+// Task → model routing rules. Mirrors server.js's STEP_PROVIDER — kept in sync
+// manually since this table and that one live in different processes. Only
+// "intake" is ever actually passed to the frontend's callAI() below (every
+// other pipeline step is generated server-side via generators.js's PIPELINE);
+// the rest of this table exists for reference/consistency, not because
+// anything here dispatches on it live.
 function routeTask(taskType) {
   const routes = {
-    intake:          "claude",
-    riskAnalysis:    "claude",
-    policyDraft:     "claude",
-    complianceMap:   "claude",
-    threatIntel:     "gemini",
-    vendorResearch:  "gemini",
-    realtimeSearch:  "gemini",
-    execSummary:     "gpt4",
-    awarenessTraining: "gpt4",
-    incidentReport:  "gpt4",
+    intake:            "claude",
+    riskAnalysis:       "claude",
+    policyDraft:        "claude",
+    complianceMap:      "claude",
+    workflows:          "claude",
+    threatIntel:        "gemini",
+    vendorResearch:     "gemini",
+    realtimeSearch:     "gemini",
+    toolRecommendations: "gpt4",
+    awarenessTraining:  "gpt4",
+    incidentReport:     "gpt4",
+    execSummary:        "gpt4",
   };
   return routes[taskType] || "claude";
 }
@@ -5282,7 +5289,7 @@ function InvestorPage({ onBack, onOpenCode }) {
         {/* Traction strip */}
         <div style={{display:"flex",gap:28,flexWrap:"wrap",margin:"40px 0 12px",
           padding:"22px 28px",background:C.card,border:`1px solid ${line}`,borderRadius:16}}>
-          {[["$200k","Cost of the CISO we replace"],["6","Compliance frameworks live"],
+          {[["$200k","Cost of the CISO we replace"],["12","Compliance frameworks live"],
             ["100%","Real threat data — zero fabrication"],["2","Hard product boundaries by design"]].map(([n,l],i)=>(
             <div key={i} style={{flex:"1 1 160px"}}>
               <div style={{fontSize:30,fontWeight:800,color:cyan,lineHeight:1}}>{n}</div>
@@ -5698,9 +5705,21 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   ];
 
   const tiers = [
-    { name:"Self-Serve", tag:"Get started", price:"Free to start", points:["Automated assessment & NIST score","Full security program & policies","Generate and download documents"], cta:"Start free" },
-    { name:"Guided", tag:"Most popular", featured:true, price:"Contact for pricing", points:["Everything in Self-Serve","Periodic expert review","Compliance tracking & check-ins"], cta:"Contact us" },
-    { name:"Managed vCISO", tag:"Full service", price:"Below a human-only firm", points:["A dedicated security engineer","Runs your program end-to-end","Below the cost of human-only firms"], cta:"Contact us" },
+    { name:"Free", tag:"Get started", price:"$0/mo",
+      points:["Security assessment & NIST/CIS posture score","See exactly where you stand today","Upgrade anytime to build your program"],
+      cta:"Start free" },
+    { name:"Starter", tag:"Build your program", price:"$159/mo",
+      points:["Multiple assessments & full program builder","Up to 6 policies","AI-recommended training plan","5 monitored endpoints","Training delivery available as a $40/mo add-on"],
+      cta:"Start free" },
+    { name:"Growth", tag:"Most popular", featured:true, price:"$349/mo",
+      points:["Everything in Starter","Real CVE & dark-web threat intelligence","Employee training delivery included","Up to 10 policies, 25 endpoints","Full downloads & exports"],
+      cta:"Start free" },
+    { name:"Guided", tag:"Expert-reviewed", price:"$699/mo",
+      points:["Everything in Growth","Periodic engineer review","Compliance tracking & scheduled check-ins","Up to 100 endpoints"],
+      cta:"Start free" },
+    { name:"Managed vCISO", tag:"Full service", price:"$1,950/mo",
+      points:["A ShieldAI engineer runs your program end-to-end","Unlimited endpoints & full agent access","Client-facing Mastermind Q&A","Still below a human-only vCISO retainer"],
+      cta:"Contact us" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
@@ -6080,7 +6099,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           Start self-serve. Grow into a managed program.
         </h2>
         <p style={{fontSize:16,color:dim,margin:"0 0 40px",maxWidth:560}}>
-          Three tiers that scale with your needs. Contact us for pricing tailored to your size and obligations.
+          Five tiers, transparent pricing — no sales call needed until you want a dedicated engineer.
         </p>
         <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
           {tiers.map((t,i)=>(
