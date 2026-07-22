@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  ShieldAI reporting
 //
-//  Produces four kinds of report, each as a self-contained, branded HTML
+//  Produces five kinds of report, each as a self-contained, branded HTML
 //  document that opens in Microsoft Word (served with a .doc filename) and
 //  prints cleanly to PDF. No new dependencies — this mirrors the .doc export
 //  pattern already used for policies and training curricula in App.jsx.
@@ -734,7 +734,7 @@ export const REPORT_TYPES = [...CLIENT_SELF_TYPES, ...STAFF_TYPES];
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 export function registerReportRoutes(app, {
-  db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds,
+  db, requireAuth, logClientAction, analystOwnsClient, analystClientIds,
 }) {
   db.data.reports ||= []; // { id, clientId, type, title, filename, html, createdBy, createdByRole, createdAt, deliveredAt }
 

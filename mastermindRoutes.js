@@ -28,7 +28,7 @@ import { trainingSummary, clientTrainingSummary } from "./trainingProgramRoutes.
 // check_compliance answers about ISO 27001 from 93 real Annex A controls with
 // citations rather than 10 hand-written summaries. Mastermind's answers are
 // only ever as good as the facts handed to it; this is that upgrade.
-import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrameworkIds, evaluateWithAgent, getFrameworkDef } from "./complianceBridge.js";
+import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrameworkIds, evaluateWithAgent, getFrameworkDef, toRegistryId } from "./complianceBridge.js";
 import { corroborate, corroborationSummary } from "./agentEvidence.js";
 import { intakeFor, visibleQuestions, intakeStatus, toAssessOpts } from "./frameworkIntake.js";
 import { SECURITY_CHECKLIST } from "./securityChecklist.js";
@@ -546,7 +546,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         const u = resolveClient(input.clientIdOrEmail);
         if (!u) return { error: "Client not found." };
         const rid = input.frameworkId;
-        const intake = intakeFor(rid) || intakeFor(String(rid).replace("iso-27001", "iso27001").replace(/^hipaa$/, "hipaa-security"));
+        const intake = intakeFor(rid) || intakeFor(toRegistryId(rid));
         if (!intake) {
           const def = getFrameworkDef(rid);
           if (!def) return { error: `Unknown framework. Available: ${listFrameworkIds().join(", ")}` };

@@ -1,0 +1,323 @@
+--- /home/claude/verify/live_ComplianceWorkspace.jsx	2026-07-22 00:35:45.523306420 +0000
++++ /home/claude/fix/ComplianceWorkspace.jsx	2026-07-22 00:31:42.984580671 +0000
+@@ -342,33 +342,65 @@
+ 
+   if (!data || !data.hasIntake) return null;
+ 
++  // A "multi" question (currently: SOC 2's trust-services categories) stores
++  // an array of values, not one. Locked options (e.g. "Security", mandatory)
++  // are always included and can't be toggled off.
++  function multiValue(qq, current) {
++    return Array.isArray(current) ? current : qq.options.filter(o => o.locked).map(o => o.value);
++  }
++  function toggleMulti(qq, o) {
++    if (o.locked) return;
++    setAnswers(s => {
++      const cur = multiValue(qq, s[qq.id]);
++      const next = cur.includes(o.value) ? cur.filter(v => v !== o.value) : [...cur, o.value];
++      return { ...s, [qq.id]: next };
++    });
++  }
++
+   return (
+     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+       <div style={{ color: C.text, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>{data.title}</div>
+       <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{data.why}</p>
+ 
+-      {data.questions.map(qq => (
++      {data.questions.map(qq => {
++        const isMulti = qq.type === "multi";
++        return (
+         <div key={qq.id} style={{ marginBottom: 12 }}>
+           <div style={{ color: C.text, fontSize: 12.5, marginBottom: 4 }}>{qq.question}</div>
+           {qq.help && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{qq.help}</div>}
++          {qq.note && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{qq.note}</div>}
+           <div style={{ display: "grid", gap: 5 }}>
+             {qq.options.map((o, i) => {
+-              const sel = JSON.stringify(answers[qq.id]) === JSON.stringify(o.value);
++              const sel = isMulti
++                ? multiValue(qq, answers[qq.id]).includes(o.value)
++                : JSON.stringify(answers[qq.id]) === JSON.stringify(o.value);
+               return (
+                 <button key={i} disabled={o.locked}
+-                  onClick={() => setAnswers(s => ({ ...s, [qq.id]: o.value }))}
++                  onClick={() => isMulti ? toggleMulti(qq, o) : setAnswers(s => ({ ...s, [qq.id]: o.value }))}
+                   style={{
+                     textAlign: "left", padding: "7px 10px", borderRadius: 6, fontSize: 12,
+                     cursor: o.locked ? "default" : "pointer",
+                     background: sel ? `${C.accent}1A` : C.surface,
+                     color: sel ? C.accent : C.textSec,
+                     border: `1px solid ${sel ? C.accent + "66" : C.border}`,
+-                  }}>{o.label}</button>
++                    display: "flex", alignItems: "center", gap: 8,
++                  }}>
++                  {isMulti && (
++                    <span style={{
++                      width: 13, height: 13, borderRadius: 3, flexShrink: 0,
++                      border: `1.5px solid ${sel ? C.accent : C.textMut}`,
++                      background: sel ? C.accent : "transparent",
++                    }} />
++                  )}
++                  {o.label}
++                  {o.locked && <span style={{ marginLeft: "auto", color: C.textMut, fontSize: 10 }}>locked</span>}
++                </button>
+               );
+             })}
+           </div>
+         </div>
+-      ))}
++        );
++      })}
+ 
+       {data.status && !data.status.complete && (
+         <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 10 }}>
+@@ -585,6 +617,233 @@
+   );
+ }
+ 
++// ── Custom frameworks ──────────────────────────────────────────
++// Admin-defined frameworks (see AdminCustomFrameworksPanel in App.jsx),
++// tracked per control here — same honesty rules as the built-in engine:
++// status is agent-measured where possible, otherwise self-reported, never
++// guessed. Renders nothing if the account has none defined yet.
++const CT_STATUS_COLOR = { met: C.green, partial: C.amber, not_met: C.red, unknown: C.textMut };
++const CT_STATUS_LABEL = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Not assessed" };
++const CT_SOURCE_LABEL = { agent: "Agent-measured", client: "Self-reported", unset: "Not set" };
++
++export function CustomFrameworksSection({ authFetch, apiBase, clientId }) {
++  const [list, setList] = useState(null);
++  const [openId, setOpenId] = useState(null);
++
++  useEffect(() => {
++    authFetch(`${apiBase}/api/frameworks`)
++      .then(r => r.json()).then(d => setList(d.frameworks || []))
++      .catch(() => setList([]));
++  }, [apiBase]);
++
++  if (!list || list.length === 0) return null;
++
++  return (
++    <div style={{ marginTop: 24 }}>
++      <h3 style={{ color: C.text, fontSize: 16, fontWeight: 700, margin: "0 0 4px" }}>Custom frameworks</h3>
++      <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 16px" }}>
++        Added for this account beyond the standard catalogue. Tracked per control — each is
++        either measured by your monitoring agent or self-reported by you, never guessed.
++      </p>
++
++      {openId ? (
++        <CustomFrameworkDetail authFetch={authFetch} apiBase={apiBase} clientId={clientId}
++          frameworkId={openId} onBack={() => setOpenId(null)} />
++      ) : (
++        <div style={{ display: "grid", gap: 10 }}>
++          {list.map(f => (
++            <div key={f.id} onClick={() => setOpenId(f.id)} style={{
++              background: C.card, border: `1px solid ${C.border}`, borderRadius: 10,
++              padding: "14px 16px", cursor: "pointer",
++            }}>
++              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
++                <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{f.name}</span>
++                <Pill text="CUSTOM" color={C.purple} />
++                <span style={{ marginLeft: "auto", color: C.textSec, fontSize: 12 }}>
++                  {f.controlCount} control{f.controlCount === 1 ? "" : "s"}
++                </span>
++              </div>
++              {f.description && (
++                <div style={{ color: C.textSec, fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>{f.description}</div>
++              )}
++              {f.controlCount === 0 && (
++                <div style={{ color: C.textMut, fontSize: 11, marginTop: 6 }}>
++                  No controls defined yet — nothing to assess until an admin adds them.
++                </div>
++              )}
++            </div>
++          ))}
++        </div>
++      )}
++    </div>
++  );
++}
++
++function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBack }) {
++  const [data, setData] = useState(null);
++  const [err, setErr] = useState(null);
++  const [openControl, setOpenControl] = useState(null);
++  const [noteDraft, setNoteDraft] = useState({});
++  const [busy, setBusy] = useState(null);
++  const [remediation, setRemediation] = useState({});
++  const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
++
++  const load = useCallback(() => {
++    authFetch(`${apiBase}/api/compliance/${frameworkId}/status${q}`)
++      .then(r => r.json()).then(d => { if (!d.error) setData(d); else setErr(d.error); })
++      .catch(e => setErr(e.message));
++  }, [apiBase, frameworkId, clientId]);
++  useEffect(load, [load]);
++
++  async function setStatus(controlId, status) {
++    setBusy(controlId);
++    try {
++      const res = await authFetch(`${apiBase}/api/compliance/${frameworkId}/control/${controlId}/status`, {
++        method: "POST", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ status, note: noteDraft[controlId] || "", clientId }),
++      });
++      if (res.ok) load();
++    } finally { setBusy(null); }
++  }
++
++  async function getRemediation(controlId) {
++    setRemediation(s => ({ ...s, [controlId]: "loading" }));
++    try {
++      const res = await authFetch(`${apiBase}/api/compliance/${frameworkId}/control/${controlId}/remediation`, {
++        method: "POST", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ clientId }),
++      });
++      const d = await res.json();
++      if (!res.ok) throw new Error(d.error || "Could not generate remediation guidance.");
++      setRemediation(s => ({ ...s, [controlId]: d.remediation }));
++    } catch (e) {
++      setRemediation(s => ({ ...s, [controlId]: { error: e.message } }));
++    }
++  }
++
++  if (err) return <Note tone="red">{err}</Note>;
++  if (!data) return <Note>Loading…</Note>;
++
++  return (
++    <div>
++      <button onClick={onBack} style={{
++        background: "none", border: "none", color: C.accent, cursor: "pointer",
++        fontSize: 12, padding: 0, marginBottom: 10,
++      }}>← All custom frameworks</button>
++
++      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
++        <h4 style={{ color: C.text, fontSize: 15, fontWeight: 700, margin: 0 }}>{data.name}</h4>
++        <Pill text="CUSTOM" color={C.purple} />
++        <span style={{ marginLeft: "auto", color: C.textSec, fontSize: 12 }}>
++          {pct(data.compliancePct)} of {data.total} met
++        </span>
++      </div>
++      {data.description && (
++        <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{data.description}</p>
++      )}
++      {data.total === 0 && <Note>No controls have been defined for this framework yet.</Note>}
++
++      <div style={{ display: "grid", gap: 8 }}>
++        {data.controls.map(c => {
++          const open = openControl === c.id;
++          const color = CT_STATUS_COLOR[c.status] || C.textMut;
++          return (
++            <div key={c.id} style={{
++              background: C.card, borderRadius: 8,
++              border: `1px solid ${c.agentSuggests ? C.amber + "66" : C.border}`,
++            }}>
++              <div onClick={() => setOpenControl(open ? null : c.id)}
++                style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer" }}>
++                <span style={{ width: 6, height: 6, borderRadius: 3, background: color, flexShrink: 0 }} />
++                <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 40 }}>{c.id}</span>
++                <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{c.title}</span>
++                {c.source !== "unset" && <Pill text={(CT_SOURCE_LABEL[c.source] || c.source).toUpperCase()} color={C.textSec} />}
++                <Pill text={CT_STATUS_LABEL[c.status] || c.status} color={color} />
++              </div>
++
++              {open && (
++                <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
++                  {c.description && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{c.description}</p>}
++                  {c.category && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>Category: {c.category}</div>}
++
++                  {c.source === "agent" && (
++                    <div style={{ color: C.purple, fontSize: 11, marginBottom: 8 }}>
++                      Measured by your monitoring agent{c.note ? `: ${c.note}` : "."}
++                    </div>
++                  )}
++                  {c.agentSuggests && (
++                    <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 8, color: C.amber, fontSize: 11, lineHeight: 1.5 }}>
++                      Your recorded status is "{CT_STATUS_LABEL[c.status]}", but the agent suggests
++                      "{CT_STATUS_LABEL[c.agentSuggests]}". Your attestation decides — update it below if the agent is right.
++                    </div>
++                  )}
++
++                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
++                    {["met", "partial", "not_met", "unknown"].map(s => (
++                      <button key={s} onClick={() => setStatus(c.id, s)} disabled={busy === c.id}
++                        style={{
++                          padding: "5px 10px", borderRadius: 6, fontSize: 11,
++                          cursor: busy === c.id ? "default" : "pointer",
++                          border: `1px solid ${c.status === s ? CT_STATUS_COLOR[s] : C.border}`,
++                          background: c.status === s ? `${CT_STATUS_COLOR[s]}1A` : "transparent",
++                          color: c.status === s ? CT_STATUS_COLOR[s] : C.textSec,
++                          fontWeight: c.status === s ? 700 : 500,
++                        }}>{CT_STATUS_LABEL[s]}</button>
++                    ))}
++                  </div>
++                  <input value={noteDraft[c.id] ?? c.note ?? ""} onChange={e => setNoteDraft(s => ({ ...s, [c.id]: e.target.value }))}
++                    placeholder="Optional note (context for your analyst or an auditor)"
++                    style={{
++                      width: "100%", padding: "7px 10px", borderRadius: 6, fontSize: 12, marginBottom: 8,
++                      background: C.surface, color: C.text, border: `1px solid ${C.border}`,
++                    }} />
++
++                  {c.status !== "met" && (
++                    <div>
++                      <button onClick={() => getRemediation(c.id)} disabled={remediation[c.id] === "loading"}
++                        style={{
++                          padding: "6px 12px", borderRadius: 6, border: "none",
++                          cursor: remediation[c.id] === "loading" ? "default" : "pointer",
++                          fontSize: 11.5, fontWeight: 700, color: C.bg,
++                          background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
++                        }}>
++                        {remediation[c.id] === "loading" ? "Thinking…" : "Get remediation guidance"}
++                      </button>
++                      {remediation[c.id] && remediation[c.id] !== "loading" && (
++                        remediation[c.id].error ? (
++                          <div style={{ color: C.red, fontSize: 11.5, marginTop: 8 }}>{remediation[c.id].error}</div>
++                        ) : (
++                          <div style={{ marginTop: 10, background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
++                            <div style={{ color: C.text, fontSize: 12, marginBottom: 8 }}>{remediation[c.id].summary}</div>
++                            <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
++                              {(remediation[c.id].steps || []).map((s, i) => (
++                                <div key={i} style={{ fontSize: 11.5, color: C.textSec, lineHeight: 1.5 }}>
++                                  <span style={{ color: C.accent, fontWeight: 700 }}>{i + 1}.</span> {s.action}
++                                  {s.how && <div style={{ color: C.textMut, marginLeft: 14 }}>{s.how}</div>}
++                                  {s.effort && <span style={{ color: C.textMut, marginLeft: 6 }}>({s.effort} effort)</span>}
++                                </div>
++                              ))}
++                            </div>
++                            {remediation[c.id].evidence && (
++                              <div style={{ fontSize: 11, color: C.textMut, lineHeight: 1.5 }}>
++                                Evidence to keep: {remediation[c.id].evidence}
++                              </div>
++                            )}
++                          </div>
++                        )
++                      )}
++                    </div>
++                  )}
++                </div>
++              )}
++            </div>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
++
+ // ── The workspace ─────────────────────────────────────────────
+ export default function ComplianceWorkspace({ authFetch, apiBase = "", clientId = null }) {
+   const [view, setView] = useState(null);
+@@ -596,8 +855,13 @@
+       {view
+         ? <FrameworkDetail key={`fd${nonce}${view}`} authFetch={authFetch} apiBase={apiBase}
+             frameworkId={view} clientId={clientId} onBack={() => setView(null)} />
+-        : <ComplianceOverview key={`ov${nonce}`} authFetch={authFetch} apiBase={apiBase}
+-            clientId={clientId} onOpen={setView} />}
++        : (
++          <>
++            <ComplianceOverview key={`ov${nonce}`} authFetch={authFetch} apiBase={apiBase}
++              clientId={clientId} onOpen={setView} />
++            <CustomFrameworksSection key={`cf${nonce}`} authFetch={authFetch} apiBase={apiBase} clientId={clientId} />
++          </>
++        )}
+     </div>
+   );
+ }
