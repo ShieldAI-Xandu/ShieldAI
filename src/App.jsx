@@ -290,6 +290,33 @@ ${brandFooterHtml({ note: footerNote || "" })}
 // ─────────────────────────────────────────────────────────────
 //  SHARED UI COMPONENTS
 // ─────────────────────────────────────────────────────────────
+
+// Defensive rendering guard for AI-generated content. The generation
+// pipeline asks Claude/Gemini/GPT-4o for specific JSON shapes, but LLMs
+// occasionally nest an object where a plain string was expected (e.g.
+// {"action":{"text":"..."}} instead of {"action":"..."}). React cannot
+// render a raw object as a child — it throws "Objects are not valid as
+// a React child" (error #31) and takes down the whole dashboard the
+// instant that field is displayed. safeText() never lets that happen:
+// strings/numbers pass through untouched, and if something unexpected
+// slips through server-side sanitization, it recovers whatever readable
+// text it can rather than crashing or silently showing nothing.
+function safeText(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (typeof value === "object") {
+    console.warn("safeText: expected a string but got an object — coercing.", value);
+    if (Array.isArray(value)) {
+      const joined = value.map(v => safeText(v, "")).filter(Boolean).join(", ");
+      return joined || fallback;
+    }
+    const firstString = Object.values(value).find(v => typeof v === "string");
+    if (firstString) return firstString;
+    return fallback;
+  }
+  return String(value);
+}
+
 function Badge({ label, color }) {
   const map = {
     High:"#FF4D6A", Critical:"#FF4D6A", Medium:"#FFB800", Low:C.green,
@@ -303,7 +330,7 @@ function Badge({ label, color }) {
   return (
     <span style={{display:"inline-flex",alignItems:"center",padding:"2px 9px",borderRadius:20,
       background:c+"22",color:c,fontSize:11,fontWeight:600,letterSpacing:0.3,margin:"2px 2px"}}>
-      {label}
+      {safeText(label)}
     </span>
   );
 }
@@ -1327,7 +1354,7 @@ function WorkflowsSection({ results }) {
                 </div>
                 <div style={{flex:1}}>
                   <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:3}}>
-                    {s.action||s}
+                    {typeof s === "string" ? s : safeText(s?.action, "Step details unavailable")}
                   </div>
                   {s.responsible && (
                     <div style={{display:"flex",gap:8}}>

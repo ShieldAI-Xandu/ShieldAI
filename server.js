@@ -259,6 +259,121 @@ function extractJson(text) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  AI OUTPUT SHAPE GUARD
+//
+//  extractJson() only guarantees the AI's response was VALID JSON — it
+//  says nothing about whether it's the RIGHT shape. LLMs occasionally
+//  nest an object where the pipeline schema (see generators.js) asks for
+//  a plain string, e.g. {"action":{"text":"Enable MFA"}} instead of
+//  {"action":"Enable MFA"}. That stray object used to flow straight
+//  through to program.sections and crash the entire client dashboard
+//  the instant React tried to render it as a child (error #31).
+//
+//  This walks each generated section against the known "must be a
+//  string" fields from the pipeline schemas and coerces any that came
+//  back as an object into readable text — recovering the text the
+//  model already wrote rather than fabricating anything new — and
+//  records what it had to fix so it's visible in logs/db instead of
+//  silently masked, in the same spirit as the unbackedClaims() guard.
+// ─────────────────────────────────────────────────────────────
+const AI_STRING_FIELDS = new Set([
+  // riskOverview
+  "executiveSummary", "threat", "likelihood", "impact", "description",
+  // priorities / quickWins
+  "title", "effort", "category", "owner", "estimatedCost", "action", "benefit", "howTo",
+  // policiesCore / policiesOps
+  "name", "purpose", "scope", "policyText", "reviewCycle",
+  // compliance
+  "applicability", "certificationPath", "control", "status", "remediation", "priority",
+  // workflows
+  "trigger", "severity", "responsible", "timeframe", "tools", "successCriteria",
+  // threatIntel
+  "prevalence", "darkWebMentions", "id", "affected", "patch",
+  // tools
+  "subcategory", "capability", "selectionCriteria", "rationale", "cost", "implementation",
+  // training
+  "audience", "duration", "question", "frequency",
+  // execReport
+  "headline", "securityPosture", "businessRisk", "investmentRequired", "roi", "dueDate",
+]);
+
+// Fields that are arrays of strings (a stray object as one of the
+// elements is the same failure mode, one level deeper).
+const AI_STRING_ARRAY_FIELDS = new Set([
+  "procedures", "topics", "keyTakeaways", "scenarios", "escalationPath",
+  "mitigations", "keyFindings", "options",
+]);
+
+// Best-effort recovery of readable text from a value that came back as
+// an object/array where a string was expected. Never invents content —
+// only pulls out text the model already produced.
+function collapseAIValueToText(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    return value.map(collapseAIValueToText).filter(Boolean).join(" ");
+  }
+  if (typeof value === "object") {
+    const firstString = Object.values(value).find(v => typeof v === "string");
+    if (firstString) return firstString;
+    const nested = Object.values(value).map(collapseAIValueToText).filter(Boolean);
+    if (nested.length) return nested.join(" ");
+  }
+  return "";
+}
+
+// Recursively walks a generated section, fixing any known string field
+// that came back as an object/array-of-objects. Mutates `node` in place
+// and pushes a record of every fix into `flags`.
+function sanitizeAIShape(node, flags, path = "") {
+  if (Array.isArray(node)) {
+    node.forEach((item, i) => sanitizeAIShape(item, flags, `${path}[${i}]`));
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    const currentPath = path ? `${path}.${key}` : key;
+
+    if (AI_STRING_FIELDS.has(key) && value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const fixed = collapseAIValueToText(value) || "Not available";
+      flags.push({ path: currentPath });
+      node[key] = fixed;
+    } else if (AI_STRING_ARRAY_FIELDS.has(key) && Array.isArray(value)) {
+      value.forEach((item, i) => {
+        if (item !== null && typeof item === "object") {
+          const fixed = collapseAIValueToText(item) || "Not available";
+          flags.push({ path: `${currentPath}[${i}]` });
+          value[i] = fixed;
+        }
+      });
+    } else if (value && typeof value === "object") {
+      sanitizeAIShape(value, flags, currentPath);
+    }
+  }
+}
+
+// Runs the shape guard against an already-saved section and logs/records
+// anything it had to coerce. Call this right after assigning
+// program.sections[stepKey].
+function applyShapeGuard(program, stepKey) {
+  const section = program.sections[stepKey];
+  if (!section || typeof section !== "object") return;
+
+  const flags = [];
+  sanitizeAIShape(section, flags);
+
+  if (flags.length) {
+    const paths = flags.map(f => f.path).join(", ");
+    console.warn(`Pipeline step "${stepKey}" (program ${program.id}): coerced ${flags.length} malformed field(s) to text — ${paths}`);
+    program.dataQualityFlags = (program.dataQualityFlags || []).concat(
+      flags.map(f => ({ step: stepKey, path: f.path, at: new Date().toISOString() }))
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 //  AUTH ROUTES (public)
 // ─────────────────────────────────────────────────────────────
 app.post("/api/auth/register", async (req, res) => {
@@ -765,6 +880,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
         };
 
         program.sections[step.key] = aiResult;
+        applyShapeGuard(program, step.key);
       } else if (step.key === "compliance") {
         // Framework-aware compliance mapping. The user selected which
         // frameworks apply in the assessment; honor that selection instead
@@ -821,6 +937,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         }
         program.sections[step.key] = parsed;
+        applyShapeGuard(program, step.key);
       } else {
         // All other steps: try once, and on parse failure retry with a
         // stricter "valid JSON only" nudge before giving up.
@@ -858,6 +975,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
           if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
         }
         program.sections[step.key] = parsed;
+        applyShapeGuard(program, step.key);
       }
     } catch (err) {
       console.error(`Pipeline step "${step.key}" failed:`, err.message);
