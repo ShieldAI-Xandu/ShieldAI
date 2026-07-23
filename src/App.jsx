@@ -1092,7 +1092,7 @@ function OverviewSection({ assessment, results }) {
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
             <SectionLabel text={`${breakdown.frameworkLens || "NIST CSF"} Posture Breakdown`}/>
             <span style={{marginLeft:"auto",fontSize:10,color:C.textMut}}>
-              Methodology: {breakdown.methodology}
+              Methodology: {safeText(breakdown.methodology)}
             </span>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -1116,7 +1116,7 @@ function OverviewSection({ assessment, results }) {
           {breakdown.complianceNote && (
             <div style={{marginTop:14,padding:"10px 12px",background:C.surface,
               borderRadius:6,color:C.textSec,fontSize:12}}>
-              ⚖️ {breakdown.complianceNote}
+              ⚖️ {safeText(breakdown.complianceNote)}
             </div>
           )}
 
