@@ -655,6 +655,37 @@ app.get("/api/assessments/:id", requireAuth, (req, res) => {
   res.json(record);
 });
 
+// Deterministic posture score preview — zero AI cost, computed instantly from
+// riskEngine.js. This exists specifically so Free tier (buildPrograms: false,
+// blocked from /api/programs/generate) still gets a real "initial report"
+// instead of a dead end right after the checklist. Every tier can call this;
+// Free is just the one that has nothing else to fall back on. No gate here —
+// it's the same computation the full pipeline already runs for free internally,
+// just returned directly instead of wrapped in a paid AI-generated narrative.
+app.get("/api/assessments/:id/posture-preview", requireAuth, (req, res) => {
+  const record = db.data.assessments.find(a => a.id === req.params.id && a.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Assessment not found" });
+
+  const posture = computePostureScore(record.data);
+  res.json({
+    postureScore: posture.postureScore,
+    postureLevel: posture.postureLevel,
+    methodology: posture.methodology,
+    scoringMode: posture.scoringMode,
+    functions: posture.functions,
+    weakestAreas: posture.weakestAreas,
+    complianceNote: posture.complianceNote,
+    frameworkLens: posture.frameworkLens || "NIST CSF",
+    lens: posture.lens || "nist",
+    alternateView: posture.alternateView || null,
+    // A short, templated (non-AI) summary so the free preview isn't a bare
+    // number with no context. Deliberately NOT written by Claude — this path
+    // must stay zero-cost so a free signup never carries generation cost.
+    executiveSummary: `Your business scored ${posture.postureScore}/100 (${posture.postureLevel}) on the ${posture.frameworkLens || "NIST CSF"} scale. `
+      + `Your weakest areas are ${posture.weakestAreas.join(" and ")}. Upgrade to build a full, AI-generated security program — prioritized roadmap, policies, workflows, compliance mapping, and more — around this score.`,
+  });
+});
+
 // Update an existing assessment's data (company info + checklist)
 app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   const record = db.data.assessments.find(a => a.id === req.params.id && a.userId === req.userId);
@@ -776,6 +807,29 @@ app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, r
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+//  SHIELDAI MASTERMIND — product name & roadmap (2026-07-23)
+//
+//  "Mastermind" is the client-facing brand for ShieldAI's AI system —
+//  covers both this generation pipeline (below) and the separate interactive
+//  advisory chat (mastermindRoutes.js). Today, Mastermind is fully dependent
+//  on three third-party models, routed by task via STEP_PROVIDER:
+//    - Claude (Anthropic)  — risk analysis, policy drafting, compliance
+//      reasoning, workflows. The default for every step not listed below.
+//    - Gemini (Google)     — threat intelligence (real-time search grounding).
+//    - GPT-4o (OpenAI)     — tool recommendations, training content, exec
+//      reports.
+//  ROADMAP: the long-term goal is for Mastermind to become an independent
+//  agent — not a router across three vendors' APIs, but ShieldAI's own model/
+//  agent doing the work directly. That is NOT built yet. Every "Mastermind"
+//  badge and marketing claim today describes this three-provider pipeline,
+//  honestly disclosed (see AI_MODELS in App.jsx and the "Meet Mastermind"
+//  marketing section) — not a proprietary model. Do not remove the provider
+//  routing below or the fallback-to-Claude behavior in callAI() until an
+//  independent Mastermind agent actually replaces it; until then, this
+//  comment is the source of truth on what "Mastermind" currently is.
+// ─────────────────────────────────────────────────────────────
 
 // Which provider generates which pipeline section, chosen for each model's
 // documented real-world strength rather than an arbitrary or purely cosmetic
@@ -1163,7 +1217,7 @@ app.get("/api/training/catalog", requireAuth, (req, res) => {
 });
 
 // Generate a full, company-tailored curriculum (hybrid: fixed backbone + AI detail)
-app.post("/api/training/generate", requireAuth, gate.capability("trainingPlan"), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
+app.post("/api/training/generate", requireAuth, gate.trainingDelivery(), gate.limit("trainingPrograms", counters.trainingPrograms), async (req, res) => {
   try {
     const { companyContext, includeManagerTrack } = req.body || {};
     const company = companyContext || {};
@@ -1312,7 +1366,7 @@ app.delete("/api/training/:id", requireAuth, async (req, res) => {
 
 // Generate (and cache) slides + a full quiz for ONE module within a saved program.
 // Body: { programId, phaseIndex | "mgr", moduleIndex }
-app.post("/api/training/module-content", requireAuth, async (req, res) => {
+app.post("/api/training/module-content", requireAuth, gate.trainingDelivery(), async (req, res) => {
   try {
     const { programId, phaseIndex, moduleIndex } = req.body || {};
     const program = (db.data.trainingPrograms || []).find(t => t.id === programId && t.userId === req.userId);
@@ -1533,7 +1587,7 @@ registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds });
+registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate });
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
@@ -1541,7 +1595,7 @@ registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
-registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
+registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

@@ -33,6 +33,7 @@ export const TIERS = {
       programs: 0,
       trainingPrograms: 0,
       analystSupport: "none",        // none | limited | full
+      complianceFrameworks: 0,       // additional (non-foundation) compliance frameworks
     },
     capabilities: {
       assessments: true,            // can run/view assessments
@@ -46,6 +47,8 @@ export const TIERS = {
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
       mastermindChat: false,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
+      complianceAccess: false, // compliance workspace is paid-only — free sees the posture score only
+      reportsAccess: false,    // status/update/compliance/insurance/legal reports are paid-only
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -57,30 +60,35 @@ export const TIERS = {
     priceCents: 15900,              // $159/mo
     interval: "month",
     stripePriceId: null,
-    description: "Multiple assessments, programs, up to 6 policies, and the AI-recommended training plan. Monitor up to 5 endpoints. Employee training delivery available as an add-on.",
+    description: "Multiple assessments, programs, up to 6 policies, tool recommendations, and 2 compliance frameworks. Monitor up to 5 endpoints. Training and reports are add-ons or higher-tier features.",
     limits: {
       endpoints: 5,
       policies: 6,
       programs: null,               // multiple
       trainingPrograms: 1,          // 1 recommended training plan
       analystSupport: "none",
+      complianceFrameworks: 2,      // beyond the NIST/CIS foundation lens, chosen at intake
     },
     capabilities: {
       assessments: true,
       buildPrograms: true,
       createPolicies: true,         // capped at 6 via limits
-      trainingPlan: true,           // includes the recommendation-version training plan
-      trainingDelivery: false,      // OFF by default — unlocked via the paid add-on
+      trainingPlan: true,           // includes the recommendation-version training plan (view only — see trainingDelivery)
+      trainingDelivery: false,      // OFF by default — full generation + delivery unlocked via the paid add-on
       downloadExports: false,       // no downloads at this tier
       endpoints: true,              // up to 5
       threatIntel: false,
       analystSupport: false,
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
+      complianceAccess: true, // capped to `limits.complianceFrameworks` additional frameworks
+      reportsAccess: false,   // Reports are Growth+
+      evidenceAccess: false,  // Evidence & audit-readiness are Growth+
+      workflowsAccess: false, // Incident-response workflows are Growth+
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
-    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "AI-recommended training plan", "5 endpoints", "Employee training delivery add-on ($40/mo)", "No downloads"],
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Recommended tool stack", "2 compliance frameworks", "5 endpoints", "View-only training plan (full generation via add-on)", "No reports, evidence, or workflows"],
   },
 
   growth: {
@@ -97,6 +105,7 @@ export const TIERS = {
       programs: null,
       trainingPrograms: null,
       analystSupport: "none",
+      complianceFrameworks: 5,
     },
     capabilities: {
       assessments: true,
@@ -110,8 +119,12 @@ export const TIERS = {
       analystSupport: false,
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
+      complianceAccess: true,
+      reportsAccess: true,
+      evidenceAccess: true,
+      workflowsAccess: true,
     },
-    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
+    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence & workflows", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
 
   guided: {
@@ -128,6 +141,7 @@ export const TIERS = {
       programs: null,
       trainingPrograms: null,
       analystSupport: "limited",
+      complianceFrameworks: 10,
     },
     capabilities: {
       assessments: true,
@@ -141,8 +155,12 @@ export const TIERS = {
       analystSupport: true,         // limited — periodic engineer review
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
+      complianceAccess: true,
+      reportsAccess: true,
+      evidenceAccess: true,
+      workflowsAccess: true,
     },
-    features: ["Everything in Growth", "Periodic engineer review", "Compliance tracking", "Scheduled check-ins", "Up to 100 endpoints"],
+    features: ["Everything in Growth", "Periodic engineer review", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
 
   managed: {
@@ -159,6 +177,7 @@ export const TIERS = {
       programs: null,
       trainingPrograms: null,
       analystSupport: "full",
+      complianceFrameworks: null,   // unlimited — everything
     },
     capabilities: {
       assessments: true,
@@ -172,8 +191,12 @@ export const TIERS = {
       analystSupport: true,         // full — engineer runs the program
       mastermind: true,             // client-facing Q&A
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
+      complianceAccess: true,
+      reportsAccess: true,
+      evidenceAccess: true,
+      workflowsAccess: true,
     },
-    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
 };
 
@@ -207,13 +230,30 @@ export const DEFAULT_TIER = "free";
 export const FEATURE_CATALOG = [
   { key: "buildPrograms",    capability: "buildPrograms",    name: "Security program builder",        minTier: "starter" },
   { key: "policies",         capability: "createPolicies",   name: "Policy generation & library",     minTier: "starter" },
-  { key: "trainingPlan",     capability: "trainingPlan",     name: "AI-recommended training plan",     minTier: "starter" },
+  { key: "trainingPlan",     capability: "trainingPlan",     name: "AI-recommended training plan (view only)", minTier: "starter" },
   { key: "endpoints",        capability: "endpoints",        name: "Endpoint monitoring agents",       minTier: "starter" },
+  { key: "complianceAccess", capability: "complianceAccess", name: "Compliance framework tracking (2 frameworks)", minTier: "starter" },
   { key: "threatIntel",      capability: "threatIntel",      name: "Threat intelligence (CVE exposure & dark-web breach monitoring)", minTier: "growth" },
-  { key: "trainingDelivery", capability: "trainingDelivery", name: "Employee training delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
+  { key: "trainingDelivery", capability: "trainingDelivery", name: "Full training generation & delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
+  { key: "reportsAccess",    capability: "reportsAccess",    name: "Status, compliance & insurance reports", minTier: "growth" },
+  { key: "evidenceAccess",   capability: "evidenceAccess",   name: "Evidence & audit readiness", minTier: "growth" },
+  { key: "workflowsAccess",  capability: "workflowsAccess",  name: "Incident response workflows", minTier: "growth" },
   { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
   { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
 ];
+
+// How many ADDITIONAL compliance frameworks (beyond the NIST/CIS foundation
+// lens chosen at intake) this tier can see. null = unlimited. Used by
+// complianceRoutes.js to cap /api/compliance/overview and by the frontend
+// framework picker to gray out selections beyond the cap.
+export function complianceFrameworkLimit(tierId) {
+  const limits = getTier(tierId).limits || {};
+  // Distinguish "not set at all" (deny by default, 0) from "explicitly null"
+  // (unlimited) — a plain ?? would coalesce both to the same fallback and
+  // silently cap Managed's "everything" tier at zero frameworks.
+  if (!("complianceFrameworks" in limits)) return 0;
+  return limits.complianceFrameworks;
+}
 
 // Split the catalog into what a given tier HAS vs. what it's MISSING (with the
 // tier/add-on needed to unlock each missing one). Pure data — safe to expose.

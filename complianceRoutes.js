@@ -33,6 +33,7 @@ import { toAssessOpts, intakeFor, visibleQuestions, intakeStatus } from "./frame
 import { corroborate, RESOLUTION_OPTIONS } from "./agentEvidence.js";
 import { toEvidence, SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
+import { complianceFrameworkLimit } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -79,7 +80,7 @@ export function complianceSummary(db, depth = "summary") {
 }
 
 export function registerComplianceRoutes(app, {
-  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds,
+  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate,
 }) {
   const userById = (id) => (db.data.users || []).find(u => u.id === id) || null;
 
@@ -152,7 +153,7 @@ export function registerComplianceRoutes(app, {
   });
 
   // ── Multi-framework overview for one client ──
-  app.get("/api/compliance/overview", requireAuth, (req, res) => {
+  app.get("/api/compliance/overview", requireAuth, gate.capability("complianceAccess"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -166,16 +167,49 @@ export function registerComplianceRoutes(app, {
     }
     const checklist = checklistOf(a);
     const posture = computePostureScore(a.data);
+    let frameworks = evaluateAllFrameworks(checklist, optsFor(a));
+
+    // Only show frameworks the client actually selected during their assessment
+    // (their framework-lens foundation plus whatever they checked in the
+    // compliance-framework picker) — not the entire 11-framework catalogue.
+    // Older assessments predating this field have no selectedFrameworks
+    // recorded; show everything for those rather than silently hiding
+    // compliance data no one ever chose to hide.
+    const selectedIds = Array.isArray(a.data?.selectedFrameworks)
+      ? a.data.selectedFrameworks.map(f => f.id)
+      : null;
+    if (selectedIds && selectedIds.length > 0) {
+      frameworks = frameworks.filter(f => selectedIds.includes(f.id));
+    }
+
+    // Cap ADDITIONAL frameworks (beyond the NIST/CIS scoring foundation) to
+    // the client's tier limit — Starter 2, Growth 5, Guided 10, Managed
+    // unlimited. Foundation frameworks don't count against this (they're not
+    // control-mapped anyway — they score via riskEngine.js — but excluded
+    // explicitly here in case that ever changes). Keeps the client's own
+    // selection order rather than an arbitrary registry order.
+    const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
+    const tierId = gate.tierOf(targetId);
+    const frameworkLimit = complianceFrameworkLimit(tierId);
+    if (frameworkLimit != null) {
+      const orderedIds = selectedIds || frameworks.map(f => f.id);
+      const allowedAdditional = orderedIds
+        .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
+        .slice(0, frameworkLimit);
+      const allowedIds = new Set([...allowedAdditional, ...FOUNDATION_FRAMEWORK_IDS]);
+      frameworks = frameworks.filter(f => allowedIds.has(f.id));
+    }
+
     res.json({
       hasAssessment: true,
       assessedAt: a.updatedAt || a.createdAt,
       posture: { score: posture.postureScore, level: posture.postureLevel },
-      frameworks: evaluateAllFrameworks(checklist, optsFor(a)),
+      frameworks,
     });
   });
 
   // ── Control-by-control walkthrough for one framework ──
-  app.get("/api/compliance/framework/:id", requireAuth, (req, res) => {
+  app.get("/api/compliance/framework/:id", requireAuth, gate.capability("complianceAccess"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -190,6 +224,35 @@ export function registerComplianceRoutes(app, {
         framework: { id: def.id, name: def.name, short: def.short },
         note: "No assessment on file.",
       });
+    }
+    // Same "only what they selected" rule as the overview — a client shouldn't
+    // be able to open a framework's detail walkthrough by guessing the id if
+    // they never selected it. Older assessments with no selectedFrameworks
+    // recorded fall through to the old, unrestricted behavior.
+    const selectedIds = Array.isArray(a.data?.selectedFrameworks)
+      ? a.data.selectedFrameworks.map(f => f.id)
+      : null;
+    if (selectedIds && selectedIds.length > 0 && !selectedIds.includes(def.id)) {
+      return res.status(403).json({ error: "This framework wasn't selected for this assessment." });
+    }
+    // Same tier-count cap as the overview — a client can't reach a framework
+    // beyond their plan's limit by opening it directly, even if they selected
+    // it at intake (e.g. they downgraded, or picked more than their plan allows).
+    const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
+    if (selectedIds && !FOUNDATION_FRAMEWORK_IDS.has(def.id)) {
+      const tierId = gate.tierOf(targetId);
+      const frameworkLimit = complianceFrameworkLimit(tierId);
+      if (frameworkLimit != null) {
+        const allowedAdditional = selectedIds
+          .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
+          .slice(0, frameworkLimit);
+        if (!allowedAdditional.includes(def.id)) {
+          return res.status(402).json({
+            error: "This framework is beyond your plan's compliance-framework limit. Upgrade to view it.",
+            code: "UPGRADE_REQUIRED", capability: "complianceAccess", currentTier: tierId,
+          });
+        }
+      }
     }
     // evaluateWithAgent, not evaluateFramework: the walkthrough is exactly where
     // a client needs to see both sources on the control itself. Falls back to a
@@ -211,7 +274,7 @@ export function registerComplianceRoutes(app, {
   // ── Mastermind remediation for one requirement ──
   // The FACTS are computed deterministically; Mastermind only writes the
   // steps. If the AI is unavailable, we still return the facts.
-  app.post("/api/compliance/remediate", requireAuth, async (req, res) => {
+  app.post("/api/compliance/remediate", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
     const { frameworkId, requirementId, clientId } = req.body || {};
     const targetId = clientId || req.userId;
     const actor = userById(req.userId);
@@ -286,7 +349,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   // Without this the questionnaires in frameworkIntake.js have no way to be
   // answered, and every assessment runs unscoped — 61 PCI sub-requirements for
   // a merchant responsible for 7.
-  app.get("/api/compliance/intake/:frameworkId", requireAuth, (req, res) => {
+  app.get("/api/compliance/intake/:frameworkId", requireAuth, gate.capability("complianceAccess"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -318,7 +381,7 @@ Write remediation steps to close this gap. Requirements for your answer:
     });
   });
 
-  app.post("/api/compliance/intake/:frameworkId", requireAuth, async (req, res) => {
+  app.post("/api/compliance/intake/:frameworkId", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
     const targetId = req.body?.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -369,7 +432,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   // Deduped by control across every framework, because one BitLocker
   // disagreement can touch dozens of controls and asking the client to resolve
   // it dozens of times would be worse than not detecting it.
-  app.get("/api/compliance/conflicts", requireAuth, (req, res) => {
+  app.get("/api/compliance/conflicts", requireAuth, gate.capability("complianceAccess"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -431,7 +494,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   // Three outcomes, all explicit. Nothing is inferred: the entire reason a
   // conflict exists is that two sources of truth disagree, and software
   // guessing between them produces a confidently wrong compliance report.
-  app.post("/api/compliance/conflicts/resolve", requireAuth, async (req, res) => {
+  app.post("/api/compliance/conflicts/resolve", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
     const { controlId, decision, reason, newAnswer, clientId } = req.body || {};
     const targetId = clientId || req.userId;
     const actor = userById(req.userId);
@@ -506,7 +569,7 @@ Write remediation steps to close this gap. Requirements for your answer:
 
   // ── Update a single control answer (the walkthrough's "fix it" action) ──
   // Re-runs the deterministic engine so posture and compliance both move.
-  app.post("/api/compliance/answer", requireAuth, async (req, res) => {
+  app.post("/api/compliance/answer", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
     const { controlId, answer, clientId } = req.body || {};
     const targetId = clientId || req.userId;
     const actor = userById(req.userId);

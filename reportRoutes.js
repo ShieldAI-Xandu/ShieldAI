@@ -118,21 +118,61 @@ function endpointsFor(db, ownerUserId) {
   });
 }
 
-function trainingFor(db, ownerUserId) {
-  const learners = (db.data.trainingLearners || []).filter(
-    (l) => l.ownerUserId === ownerUserId,
+// Fixed a real bug here: this used to read db.data.trainingLearners (wrong
+// collection — trainingProgramRoutes.js actually stores these at
+// db.data.learners) filtered by .ownerUserId (wrong field — the real field is
+// .clientUserId). That meant every report referencing training data — the
+// Insurance report's "Security awareness training" line in particular — was
+// silently showing zero/no-training for every client regardless of their
+// actual learners and completions. Also expanded to return the full roster
+// (not just counts) so the dedicated training report below can list who's
+// assigned, their status, grade, and completion date — not just a percentage.
+function trainingFor(db, clientUserId) {
+  const learners = (db.data.learners || []).filter(
+    (l) => l.clientUserId === clientUserId,
   );
   const assignments = (db.data.trainingAssignments || []).filter(
-    (a) => a.ownerUserId === ownerUserId,
+    (a) => a.clientUserId === clientUserId,
   );
   const done = assignments.filter((a) => a.status === "completed").length;
+  const overdue = assignments.filter((a) => a.status === "overdue").length;
+  const scores = assignments.map((a) => a.score).filter((s) => typeof s === "number");
+
+  const roster = learners.map((l) => {
+    const la = assignments.filter((a) => a.learnerId === l.id);
+    const completed = la.filter((a) => a.status === "completed");
+    const lScores = completed.map((a) => a.score).filter((s) => typeof s === "number");
+    return {
+      name: l.name,
+      email: l.email,
+      department: l.department || "",
+      status: l.status,
+      assigned: la.length,
+      completed: completed.length,
+      inProgress: la.filter((a) => a.status === "in_progress").length,
+      overdue: la.filter((a) => a.status === "overdue").length,
+      avgScore: lScores.length
+        ? Math.round(lScores.reduce((s, x) => s + x, 0) / lScores.length)
+        : null,
+      lastCompletedAt:
+        completed.map((a) => a.completedAt).filter(Boolean).sort().pop() || null,
+      // Titles of everything currently assigned, for the roster detail table.
+      assignmentTitles: la.map((a) => ({ title: a.title, status: a.status, score: a.score ?? null, dueDate: a.dueDate || null })),
+    };
+  });
+
   return {
     learners: learners.length,
     assigned: assignments.length,
     completed: done,
+    overdue,
     completionPct: assignments.length
       ? Math.round((done / assignments.length) * 100)
       : null,
+    avgScore: scores.length
+      ? Math.round(scores.reduce((s, x) => s + x, 0) / scores.length)
+      : null,
+    roster,
   };
 }
 
@@ -375,6 +415,8 @@ const DISCLAIMERS = {
     "This report summarizes security controls for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers and endpoint data on file; they are not independently verified by ShieldAI. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
   legal:
     "This report is a record of activity within ShieldAI: what was assessed, what was recommended, and actions taken. ShieldAI provides advisory output; decisions and actions are made by the client and its personnel. This document is not legal advice and does not constitute a legal opinion. It should be reviewed by a licensed attorney before being relied upon in any legal or contractual matter.",
+  training:
+    "This training-completion report reflects learner records and assignment status on file within ShieldAI as of the generation date. Completion and quiz scores are self-reported by the learner at the time each module was marked complete and are not independently proctored or verified. This document is a readiness aid for compliance, insurance, or legal review — not a certified attestation — and should be verified against your own personnel records before submission to a third party.",
 };
 
 function frameworksTable(frameworks) {
@@ -696,6 +738,85 @@ function buildLegalReport(d) {
   };
 }
 
+// 6) TRAINING — full learner roster, status, and grades (staff-generated,
+// suitable for compliance frameworks, insurance applications, and legal
+// review of workforce security-awareness obligations).
+function buildTrainingReport(d) {
+  const t = d.training;
+
+  const summary = `
+  <div>
+    ${kpi(t.learners, "Learners")}
+    ${kpi(t.assigned, "Assignments")}
+    ${kpi(pct(t.completionPct), "Completion rate")}
+    ${kpi(t.avgScore === null ? "—" : `${t.avgScore}`, "Average score")}
+    ${kpi(t.overdue, "Overdue")}
+  </div>`;
+
+  const STATUS_LABEL = {
+    completed: "Completed", in_progress: "In progress", assigned: "Assigned",
+    overdue: "Overdue", waived: "Waived",
+  };
+
+  const rosterRows = !t.roster.length
+    ? `<tr><td colspan="7" class="meta">No learners are on file for this client yet.</td></tr>`
+    : t.roster.map((l) => `<tr>
+        <td><b>${esc(l.name)}</b>${l.status === "inactive" ? " <span class=\"meta\">(inactive)</span>" : ""}</td>
+        <td>${esc(l.department || "—")}</td>
+        <td>${esc(l.assigned)}</td>
+        <td>${esc(l.completed)}</td>
+        <td>${esc(l.inProgress)}</td>
+        <td>${esc(l.overdue)}</td>
+        <td>${l.avgScore === null ? "—" : esc(l.avgScore)}</td>
+        <td>${fmtDate(l.lastCompletedAt)}</td>
+      </tr>`).join("");
+
+  // Per-assignment detail, so an auditor can see WHAT each learner was
+  // assigned, not just a rolled-up count. Kept to learners who have at least
+  // one assignment, to keep the document a reasonable length.
+  const detailBlocks = t.roster
+    .filter((l) => l.assignmentTitles.length > 0)
+    .map((l) => {
+      const rows = l.assignmentTitles.map((a) => `<tr>
+          <td>${esc(a.title)}</td>
+          <td>${esc(STATUS_LABEL[a.status] || a.status)}</td>
+          <td>${a.score === null ? "—" : esc(a.score)}</td>
+          <td>${a.dueDate ? fmtDate(a.dueDate) : "—"}</td>
+        </tr>`).join("");
+      return `
+      <h3>${esc(l.name)}${l.department ? ` · ${esc(l.department)}` : ""}</h3>
+      <table class="content">
+        <tr><th>Assignment</th><th>Status</th><th>Score</th><th>Due date</th></tr>
+        ${rows}
+      </table>`;
+    }).join("");
+
+  const body = `
+  <h2>Program summary</h2>
+  ${summary}
+  <p class="meta">Reflects all learners and training assignments on file for ${esc(d.client.name)} as of ${fmtDate(d.generatedAt)}.</p>
+
+  <h2>Learner roster</h2>
+  <table class="content">
+    <tr><th>Learner</th><th>Department</th><th>Assigned</th><th>Completed</th><th>In progress</th><th>Overdue</th><th>Avg score</th><th>Last completed</th></tr>
+    ${rosterRows}
+  </table>
+
+  <h2>Assignment detail</h2>
+  ${detailBlocks || `<div class="note">No individual assignments to detail.</div>`}`;
+
+  return {
+    filename: `ShieldAI_Training_${slug(d.client.name)}_${dateStamp()}.doc`,
+    html: wrapDoc({
+      title: "Security Awareness Training Completion Report",
+      kicker: "Training / Compliance",
+      subtitle: `${d.client.name} · Prepared ${fmtDate(d.generatedAt)}`,
+      body,
+      disclaimer: DISCLAIMERS.training,
+    }),
+  };
+}
+
 function labelActor(role) {
   return (
     {
@@ -725,16 +846,17 @@ const BUILDERS = {
   compliance: (d) => buildComplianceReport(d),
   insurance: (d) => buildInsuranceReport(d),
   legal: (d) => buildLegalReport(d),
+  training: (d) => buildTrainingReport(d),
 };
 
 const CLIENT_SELF_TYPES = new Set(["status", "update"]);
-const STAFF_TYPES = new Set(["compliance", "insurance", "legal"]);
+const STAFF_TYPES = new Set(["compliance", "insurance", "legal", "training"]);
 export const REPORT_TYPES = [...CLIENT_SELF_TYPES, ...STAFF_TYPES];
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 export function registerReportRoutes(app, {
-  db, requireAuth, logClientAction, analystOwnsClient, analystClientIds,
+  db, requireAuth, logClientAction, analystOwnsClient, analystClientIds, gate,
 }) {
   db.data.reports ||= []; // { id, clientId, type, title, filename, html, createdBy, createdByRole, createdAt, deliveredAt }
 
@@ -764,7 +886,7 @@ export function registerReportRoutes(app, {
   // Body: { type, clientId?, since? }
   // Clients may only generate status/update for themselves. Staff may generate
   // any type for a client they're authorized for.
-  app.post("/api/reports/generate", requireAuth, async (req, res) => {
+  app.post("/api/reports/generate", requireAuth, gate.capability("reportsAccess"), async (req, res) => {
     const actor = uById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -854,7 +976,7 @@ export function registerReportRoutes(app, {
   // ── List reports ──
   // Staff: pass ?clientId= to scope to one client; otherwise all authorized.
   // Client: only own delivered reports (and own self-generated ones).
-  app.get("/api/reports", requireAuth, (req, res) => {
+  app.get("/api/reports", requireAuth, gate.capability("reportsAccess"), (req, res) => {
     const actor = uById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -886,7 +1008,7 @@ export function registerReportRoutes(app, {
   });
 
   // ── Deliver a staff report to the client ──
-  app.post("/api/reports/:id/deliver", requireAuth, async (req, res) => {
+  app.post("/api/reports/:id/deliver", requireAuth, gate.capability("reportsAccess"), async (req, res) => {
     const actor = uById(req.userId);
     if (!isStaff(actor))
       return res.status(403).json({ error: "Only staff can deliver reports." });
@@ -914,7 +1036,7 @@ export function registerReportRoutes(app, {
 
   // ── Download a report's document ──
   // Returns the branded HTML with a .doc filename so it opens in Word.
-  app.get("/api/reports/:id/download", requireAuth, (req, res) => {
+  app.get("/api/reports/:id/download", requireAuth, gate.capability("reportsAccess"), (req, res) => {
     const actor = uById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -943,7 +1065,7 @@ export function registerReportRoutes(app, {
 
   // ── Delete a report (staff, or the client for its own self-made report) ──
   // We do NOT hard-delete anything else; this only removes a generated document.
-  app.delete("/api/reports/:id", requireAuth, async (req, res) => {
+  app.delete("/api/reports/:id", requireAuth, gate.capability("reportsAccess"), async (req, res) => {
     const actor = uById(req.userId);
     const idx = (db.data.reports || []).findIndex((x) => x.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Report not found." });
