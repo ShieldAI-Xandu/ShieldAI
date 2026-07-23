@@ -1103,7 +1103,7 @@ function OverviewSection({ assessment, results }) {
                 <div key={i}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
                     <span style={{color:C.text,fontSize:13,fontWeight:600}}>
-                      {fn.name}
+                      {safeText(fn.name)}
                       {isWeak && <span style={{marginLeft:8,fontSize:10,color:C.amber}}>● priority area</span>}
                     </span>
                     <span style={{color:clr,fontSize:13,fontWeight:700}}>{fn.score}/100</span>
@@ -1139,7 +1139,7 @@ function OverviewSection({ assessment, results }) {
                   return (
                     <div key={i}>
                       <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                        <span style={{color:C.textSec,fontSize:12}}>{fn.name}</span>
+                        <span style={{color:C.textSec,fontSize:12}}>{safeText(fn.name)}</span>
                         <span style={{color:clr,fontSize:12,fontWeight:700}}>{fn.score}/100</span>
                       </div>
                       <ProgressBar value={fn.score} color={clr}/>
@@ -1428,7 +1428,7 @@ function ComplianceSection({ results }) {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
             <div>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{color:C.text,fontWeight:700,fontSize:16}}>{f.name}</span>
+                <span style={{color:C.text,fontWeight:700,fontSize:16}}>{safeText(f.name)}</span>
                 {cis?.ig && (
                   <span title={`CIS Controls v8.1 — ${IG_TAGLINE[cis.ig]||""}`}
                     style={{display:"inline-flex",alignItems:"center",gap:5,
@@ -1619,10 +1619,10 @@ function CveExposureCard() {
                           <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>CVSS {c.score}</span>
                         )}
                         {c.software && (
-                          <span style={{marginLeft:"auto",fontSize:11,color:C.textSec}}>{c.software}</span>
+                          <span style={{marginLeft:"auto",fontSize:11,color:C.textSec}}>{safeText(c.software)}</span>
                         )}
                       </div>
-                      <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{c.description}</div>
+                      <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{safeText(c.description)}</div>
                     </div>
                   ))}
                 </>
@@ -1777,7 +1777,7 @@ function DarkWebExposureCard({ clientId } = {}) {
             </div>
           )}
           {exp.note && (
-            <div style={{marginTop:8,fontSize:11.5,color:C.textSec,lineHeight:1.5,fontStyle:"italic"}}>{exp.note}</div>
+            <div style={{marginTop:8,fontSize:11.5,color:C.textSec,lineHeight:1.5,fontStyle:"italic"}}>{safeText(exp.note)}</div>
           )}
         </>
       )}
@@ -2032,9 +2032,9 @@ function RemediationSection() {
                       <div style={{flex:1}}>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                           <Badge label={g.nistFunction} color={NIST_COLORS[g.nistFunction]}/>
-                          <span style={{fontSize:11,color:C.textMut}}>→ score {g.projectedScore}</span>
+                          <span style={{fontSize:11,color:C.textMut}}>→ score {safeText(g.projectedScore)}</span>
                         </div>
-                        <div style={{color:C.text,fontSize:13.5,fontWeight:600,marginBottom:6}}>{g.question}</div>
+                        <div style={{color:C.text,fontSize:13.5,fontWeight:600,marginBottom:6}}>{safeText(g.question)}</div>
                         <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>
                           <span style={{color:C.textMut}}>Now:</span> {g.currentAnswer || "Unanswered"}
                           <span style={{margin:"0 8px",color:C.textMut}}>→</span>
@@ -2071,7 +2071,7 @@ function RemediationSection() {
                   <Card key={t.id} style={{marginBottom:10}}>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
                       <span style={{width:8,height:8,borderRadius:"50%",background:TASK_PRIO_TONE[t.priority]||C.textSec}}/>
-                      <span style={{color:C.text,fontSize:13.5,fontWeight:600,flex:1}}>{t.title}</span>
+                      <span style={{color:C.text,fontSize:13.5,fontWeight:600,flex:1}}>{safeText(t.title)}</span>
                       {t.projectedGain != null && (
                         <span style={{fontSize:11,color:C.green,fontWeight:600}}>+{t.projectedGain} projected</span>
                       )}
@@ -2079,7 +2079,7 @@ function RemediationSection() {
                         padding:"2px 9px",borderRadius:20,background:`${tone.color}18`}}>{tone.label}</span>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10}}>
-                      <span>{t.nistFunction}</span>
+                      <span>{safeText(t.nistFunction)}</span>
                       {t.dueDate && (
                         <span style={{color:overdue?C.red:C.textMut}}>
                           {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
@@ -2115,7 +2115,7 @@ function RemediationSection() {
                     <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
                       background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
                       <span style={{color:C.green}}>✓</span>
-                      <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{t.title}</span>
+                      <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{safeText(t.title)}</span>
                       {t.actualGain != null && (
                         <span style={{fontSize:11,color: t.actualGain >= 0 ? C.green : C.amber,fontWeight:600}}>
                           {t.actualGain >= 0 ? "+" : ""}{t.actualGain} posture
@@ -2362,7 +2362,7 @@ function EvidenceSection() {
               {coverage.missing.map(m => (
                 <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",
                   background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
-                  <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{m.title}</span>
+                  <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{safeText(m.title)}</span>
                   {m.completedAt && <span style={{fontSize:11,color:C.textMut}}>{new Date(m.completedAt).toLocaleDateString()}</span>}
                   <button onClick={()=>attachToTask(m.id, m.title)} disabled={busy}
                     style={miniBtn(C.accent,busy)}>Attach proof</button>
@@ -2408,14 +2408,14 @@ function EvidenceSection() {
                 background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
                 <span style={{fontSize:18}}>{ev.filename ? "📎" : "📝"}</span>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:2}}>{ev.title}</div>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:2}}>{safeText(ev.title)}</div>
                   <div style={{fontSize:11,color:C.textMut,display:"flex",gap:8,flexWrap:"wrap"}}>
                     <Badge label={ev.kind} color={C.textSec}/>
                     {ev.filename && <span>{ev.filename} · {fmtBytes(ev.bytes)}</span>}
                     <span>{new Date(ev.uploadedAt).toLocaleDateString()}</span>
                     {ev.uploadedByName && <span>by {ev.uploadedByName}</span>}
                   </div>
-                  {ev.note && <div style={{fontSize:12,color:C.textSec,marginTop:4,lineHeight:1.5}}>{ev.note}</div>}
+                  {ev.note && <div style={{fontSize:12,color:C.textSec,marginTop:4,lineHeight:1.5}}>{safeText(ev.note)}</div>}
                 </div>
                 {ev.filename && (
                   <button onClick={()=>doDownload(ev)} style={miniBtn(C.accent,false)}>Download</button>
@@ -2561,10 +2561,10 @@ function NotificationBell({ onNavigate }) {
                   <span style={{fontSize:16,lineHeight:1.2}}>{tone.icon}</span>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:12.5,fontWeight:600,color:C.text,flex:1}}>{n.title}</span>
+                      <span style={{fontSize:12.5,fontWeight:600,color:C.text,flex:1}}>{safeText(n.title)}</span>
                       {!n.read && <span style={{width:7,height:7,borderRadius:"50%",background:C.accent,flexShrink:0}}/>}
                     </div>
-                    {n.body && <div style={{fontSize:12,color:C.textSec,marginTop:3,lineHeight:1.5}}>{n.body}</div>}
+                    {n.body && <div style={{fontSize:12,color:C.textSec,marginTop:3,lineHeight:1.5}}>{safeText(n.body)}</div>}
                     <div style={{fontSize:10.5,color:C.textMut,marginTop:4,display:"flex",gap:8}}>
                       <span>{timeAgo(n.createdAt)}</span>
                       {n.actorRole && n.actorRole !== "system" && <span>· {n.actorRole}</span>}
@@ -2639,7 +2639,7 @@ function VirtualCISOSection() {
               <div style={{fontSize:10,color:C.accent,letterSpacing:1.5,fontWeight:700,marginBottom:4}}>
                 {s.stage.toUpperCase()}
               </div>
-              <div style={{fontSize:14.5,fontWeight:700,color:C.text,marginBottom:6}}>{s.title}</div>
+              <div style={{fontSize:14.5,fontWeight:700,color:C.text,marginBottom:6}}>{safeText(s.title)}</div>
               <p style={{fontSize:13,color:C.textSec,lineHeight:1.6,margin:0}}>{s.analyst}</p>
             </Card>
           </div>
@@ -2873,7 +2873,7 @@ function TrainingProgramSection() {
                       background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:6}}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:13,fontWeight:600,color:C.text}}>{a.learnerName}</div>
-                        <div style={{fontSize:11,color:C.textMut}}>{a.title}</div>
+                        <div style={{fontSize:11,color:C.textMut}}>{safeText(a.title)}</div>
                       </div>
                       <div style={{width:90,height:6,borderRadius:6,background:C.surface,overflow:"hidden"}}>
                         <div style={{width:`${a.progress}%`,height:"100%",background:tone.c}}/>
@@ -2913,7 +2913,7 @@ function TrainingProgramSection() {
                 <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
                   background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{l.name}
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{safeText(l.name)}
                       {l.department && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}> · {l.department}</span>}
                     </div>
                     <div style={{fontSize:11,color:C.textMut}}>{l.email}</div>
@@ -2940,7 +2940,7 @@ function TrainingProgramSection() {
                         <label key={l.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 6px",cursor:"pointer"}}>
                           <input type="checkbox" checked={pickLearners.includes(l.id)}
                             onChange={()=>toggle(pickLearners,setPickLearners,l.id)}/>
-                          <span style={{fontSize:12.5,color:C.text}}>{l.name}</span>
+                          <span style={{fontSize:12.5,color:C.text}}>{safeText(l.name)}</span>
                           <span style={{fontSize:11,color:C.textMut,marginLeft:"auto"}}>{l.email}</span>
                         </label>
                       ))}
@@ -2958,7 +2958,7 @@ function TrainingProgramSection() {
                           <input type="checkbox" checked={pickTopics.includes(t.id)}
                             onChange={()=>toggle(pickTopics,setPickTopics,t.id)} style={{marginTop:3}}/>
                           <div>
-                            <div style={{fontSize:12.5,color:C.text,fontWeight:600}}>{t.title}</div>
+                            <div style={{fontSize:12.5,color:C.text,fontWeight:600}}>{safeText(t.title)}</div>
                             <div style={{fontSize:11,color:C.textMut}}>{t.audience} · {t.duration}</div>
                           </div>
                         </label>
@@ -3006,7 +3006,7 @@ function TrainingProgramSection() {
                     background:qForm.topicIds.includes(t.id)?`${C.accent}12`:C.surface,
                     border:`1px solid ${qForm.topicIds.includes(t.id)?C.accent+"44":C.border}`,borderRadius:7,cursor:"pointer"}}>
                     <input type="checkbox" checked={qForm.topicIds.includes(t.id)} onChange={()=>toggleQTopic(t.id)}/>
-                    <span style={{fontSize:12,color:C.text}}>{t.title}</span>
+                    <span style={{fontSize:12,color:C.text}}>{safeText(t.title)}</span>
                   </label>
                 ))}
               </div>
@@ -3187,8 +3187,8 @@ function DomainMonitoringCard() {
           border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
       )}
 
-      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:5}}>{state?.headline}</div>
-      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>{state?.detail}</p>
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:5}}>{safeText(state?.headline)}</div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>{safeText(state?.detail)}</p>
 
       {state?.domain && (
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,
@@ -4789,8 +4789,8 @@ function PolicyLibrarySection({ assessment }) {
           <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:8}}>
             <span style={{fontSize:24}}>📄</span>
             <div>
-              <div style={{color:C.text,fontWeight:700,fontSize:18}}>{selected.name}</div>
-              <div style={{color:C.textSec,fontSize:13,marginTop:4}}>{selected.description}</div>
+              <div style={{color:C.text,fontWeight:700,fontSize:18}}>{safeText(selected.name)}</div>
+              <div style={{color:C.textSec,fontSize:13,marginTop:4}}>{safeText(selected.description)}</div>
             </div>
             <div style={{marginLeft:"auto"}}><AIChip model="claude"/></div>
           </div>
@@ -4977,12 +4977,12 @@ function PolicyLibrarySection({ assessment }) {
               <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8}}>
                 <span style={{fontSize:20}}>📄</span>
                 <div style={{flex:1}}>
-                  <div style={{color:C.text,fontWeight:600,fontSize:14}}>{p.name}</div>
+                  <div style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.name)}</div>
                   <div style={{marginTop:4}}><Badge label={p.category} color={C.purple}/></div>
                 </div>
               </div>
               <p style={{color:C.textSec,fontSize:12,margin:"0 0 10px",lineHeight:1.6}}>
-                {p.description}
+                {safeText(p.description)}
               </p>
               <div style={{color:C.accent,fontSize:12,fontWeight:600}}>
                 Request this policy →
@@ -5336,7 +5336,7 @@ function InvestorPage({ onBack, onOpenCode }) {
               style={{display:"block",padding:"18px 20px",background:C.card,border:`1px solid ${line}`,
                 borderRadius:14,textDecoration:"none",color:ink,transition:"border-color .2s"}}>
               <div style={{fontSize:26,marginBottom:10}}>{d.icon}</div>
-              <div style={{fontSize:15,fontWeight:700,marginBottom:5}}>{d.title}</div>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:5}}>{safeText(d.title)}</div>
               <div style={{fontSize:12.5,color:dim,lineHeight:1.5}}>{d.desc}</div>
               <div style={{fontSize:12,color:cyan,fontWeight:600,marginTop:12}}>Open →</div>
             </a>
@@ -5500,7 +5500,7 @@ function LearnerPage({ token }) {
                 <div style={{padding:"16px 20px",borderBottom:`1px solid ${line}`,
                   display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:15,fontWeight:700}}>{a.title}</div>
+                    <div style={{fontSize:15,fontWeight:700}}>{safeText(a.title)}</div>
                     {a.dueDate && <div style={{fontSize:12,color:dim,marginTop:2}}>Due {new Date(a.dueDate).toLocaleDateString()}</div>}
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -5526,7 +5526,7 @@ function LearnerPage({ token }) {
                             {m.completed ? "✓" : ""}
                           </span>
                           <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{m.title}</div>
+                            <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{safeText(m.title)}</div>
                             <div style={{fontSize:11,color:dim}}>{m.audience} · {m.duration}</div>
                           </div>
                           {m.completed && m.score != null && (
@@ -6137,7 +6137,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   background:cyan,color:deep,fontSize:11,fontWeight:700}}>{t.tag}</div>
               )}
               <div style={{fontSize:13,color:dim,marginBottom:4}}>{!t.featured && t.tag}</div>
-              <div style={{fontSize:22,fontWeight:800,marginBottom:4}}>{t.name}</div>
+              <div style={{fontSize:22,fontWeight:800,marginBottom:4}}>{safeText(t.name)}</div>
               <div style={{fontSize:14,color:t.featured?cyan:C.green,fontWeight:600,marginBottom:16}}>{t.price}</div>
               <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:24}}>
                 {t.points.map((p,j)=>(
@@ -6334,7 +6334,7 @@ function Landing({ onStart }) {
             <div key={i} style={{padding:"22px",background:C.card,
               border:`1px solid ${C.border}`,borderRadius:12}}>
               <div style={{fontSize:28,marginBottom:12}}>{f.icon}</div>
-              <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:8}}>{f.title}</div>
+              <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:8}}>{safeText(f.title)}</div>
               <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{f.desc}</p>
             </div>
           ))}
@@ -6570,13 +6570,13 @@ function FrameworkFoundationScreen({ onComplete, onBack, initial = "nist" }) {
                   }}>
                     {sel && <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent }} />}
                   </div>
-                  <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>{o.name}</span>
+                  <span style={{ color: C.text, fontSize: 15, fontWeight: 700 }}>{safeText(o.name)}</span>
                   <span style={{
                     fontSize: 10, fontWeight: 700, letterSpacing: 0.4, padding: "2px 8px", borderRadius: 999,
                     background: `${C.accent}1A`, color: C.accent, marginLeft: "auto",
                   }}>{o.tag}</span>
                 </div>
-                <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 6px", paddingLeft: 28 }}>{o.body}</p>
+                <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 6px", paddingLeft: 28 }}>{safeText(o.body)}</p>
                 <p style={{ color: sel ? C.accent : C.textMut, fontSize: 11.5, margin: 0, paddingLeft: 28, fontWeight: 500 }}>{o.best}</p>
               </button>
             );
@@ -6727,7 +6727,7 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
                     {on && <span style={{color:C.bg,fontSize:10,fontWeight:900,lineHeight:1}}>✓</span>}
                   </span>
                   <span>
-                    <span style={{fontSize:13,fontWeight:600,display:"block"}}>{fw.name}</span>
+                    <span style={{fontSize:13,fontWeight:600,display:"block"}}>{safeText(fw.name)}</span>
                     {/* What the client is actually choosing. "AI-assisted" means
                         a contextual gap analysis, not a control-by-control
                         walkthrough — they should know that before they pick it,
@@ -6823,7 +6823,7 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
                 border:`1px solid ${answers[q.id] ? NIST_COLORS[fn]+"44" : C.border}`,
                 borderRadius:12,transition:"border-color 0.2s"}}>
                 <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:12}}>
-                  {q.question}
+                  {safeText(q.question)}
                 </div>
                 <div style={{display:"flex",flexDirection:"column",gap:7}}>
                   {q.options.map(opt => {
@@ -7046,12 +7046,12 @@ function AdminThreatIntelStatus() {
             <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12}}>
               <div style={{flex:"1 1 280px",minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
-                  <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{svc.name}</span>
+                  <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{safeText(svc.name)}</span>
                   <Badge label={svc.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
                   <Badge label={svc.required ? "REQUIRED" : "OPTIONAL"}
                     color={svc.required ? C.purple : C.textMut}/>
                 </div>
-                <div style={{fontSize:12,color:C.textSec,lineHeight:1.55}}>{svc.purpose}</div>
+                <div style={{fontSize:12,color:C.textSec,lineHeight:1.55}}>{safeText(svc.purpose)}</div>
               </div>
               {!svc.configured && (
                 <a href={svc.keyUrl} target="_blank" rel="noopener noreferrer"
@@ -7088,7 +7088,7 @@ function AdminThreatIntelStatus() {
                 display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                 <Badge label={p.ok ? "RESPONDING" : p.reachable === null ? "NOT PROBED" : "FAILED"}
                   color={p.ok ? C.green : p.reachable === null ? C.textMut : C.red}/>
-                <span style={{fontSize:12,color:C.textSec,flex:"1 1 200px"}}>{p.detail}</span>
+                <span style={{fontSize:12,color:C.textSec,flex:"1 1 200px"}}>{safeText(p.detail)}</span>
                 {p.latencyMs > 0 && (
                   <span style={{fontSize:11.5,color:C.textMut,fontFamily:"monospace"}}>{p.latencyMs}ms</span>
                 )}
@@ -7224,7 +7224,7 @@ function AdminDomainQueue() {
 
       <div style={{marginBottom:16,padding:"11px 14px",background:C.surface,
         border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.textSec,lineHeight:1.6}}>
-        {data?.note}{" "}
+        {safeText(data?.note)}{" "}
         <a href={data?.dashboardUrl} target="_blank" rel="noopener noreferrer"
           style={{color:C.accent,fontWeight:600,textDecoration:"none"}}>
           Open HIBP Domain Search ↗
@@ -7509,10 +7509,10 @@ function AdminCustomFrameworksPanel() {
           <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
             <div style={{flex:"1 1 260px",minWidth:0}}>
               <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
-                <span style={{fontSize:14,fontWeight:700,color:C.text}}>{f.name}</span>
+                <span style={{fontSize:14,fontWeight:700,color:C.text}}>{safeText(f.name)}</span>
                 <Badge label={`${f.controlCount} CONTROL${f.controlCount===1?"":"S"}`} color={f.controlCount>0?C.purple:C.textMut}/>
               </div>
-              {f.description && <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>{f.description}</div>}
+              {f.description && <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>{safeText(f.description)}</div>}
             </div>
             <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
               <button onClick={()=>startEdit(f.id)}
@@ -8183,7 +8183,7 @@ function AdminPanel({ onClose }) {
                                 background: tierChoice===t.id?`${C.accent}18`:"transparent",
                                 border:`1px solid ${tierChoice===t.id?C.accent:(cur?C.green:C.border)}`,
                                 color: tierChoice===t.id?C.accent:(cur?C.green:C.textSec)}}>
-                              {t.name} <span style={{opacity:0.7,fontWeight:400}}>{t.price}</span>{cur?" ·current":""}
+                              {safeText(t.name)} <span style={{opacity:0.7,fontWeight:400}}>{t.price}</span>{cur?" ·current":""}
                             </button>
                           );
                         })}
@@ -8302,7 +8302,7 @@ function AdminPanel({ onClose }) {
                           <div key={t.id} style={{display:"flex",gap:10,padding:"8px 12px",
                             background:C.surface,borderRadius:6,alignItems:"center"}}>
                             <Badge label={t.status} color={t.status==="paid"?C.green:C.red}/>
-                            <span style={{flex:1,color:C.text,fontSize:12.5}}>{t.description}</span>
+                            <span style={{flex:1,color:C.text,fontSize:12.5}}>{safeText(t.description)}</span>
                             <span style={{color:C.text,fontSize:12.5,fontWeight:600}}>{money(t.amountCents)}</span>
                             <span style={{color:C.textMut,fontSize:11}}>{new Date(t.createdAt).toLocaleDateString()}</span>
                           </div>
@@ -8623,7 +8623,7 @@ function AdminPanel({ onClose }) {
                       background:C.surface,borderRadius:8,alignItems:"flex-start"}}>
                       <Badge label={a.action.replace("_"," ")} color={actColor}/>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{color:C.text,fontSize:13}}>{a.detail}</div>
+                        <div style={{color:C.text,fontSize:13}}>{safeText(a.detail)}</div>
                         <div style={{color:C.textMut,fontSize:11,marginTop:3}}>
                           by {a.actorEmail || a.actorUserId}
                           {target && ` · on ${target.companyName || target.email}`}
@@ -8744,7 +8744,7 @@ function AdminPanel({ onClose }) {
                       {/* unassigned + already-assigned-to-others both selectable */}
                       {[...assignments.unassigned, ...assignments.analysts.flatMap(a=>a.clients)]
                         .filter((c,i,arr)=>arr.findIndex(x=>x.id===c.id)===i)
-                        .map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+                        .map(c=>(<option key={c.id} value={c.id}>{safeText(c.name)}</option>))}
                     </select>
                     <button onClick={()=>assignClientToAnalyst(assignAnalyst,assignClient)}
                       disabled={assignBusy||!assignAnalyst||!assignClient}
@@ -8772,7 +8772,7 @@ function AdminPanel({ onClose }) {
                         {a.clients.map(c=>(
                           <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,
                             padding:"6px 10px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:20}}>
-                            <span style={{color:C.text,fontSize:12.5}}>{c.name}</span>
+                            <span style={{color:C.text,fontSize:12.5}}>{safeText(c.name)}</span>
                             <button onClick={()=>unassign(a.analystUserId,c.id)} disabled={assignBusy}
                               title="Unassign"
                               style={{background:"none",border:"none",color:C.red,fontSize:14,cursor:"pointer",lineHeight:1}}>×</button>
@@ -9216,7 +9216,7 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
                     {it.rank||i+1}
                   </span>
                   <div style={{flex:1}}>
-                    <div style={{color:C.text,fontSize:13,fontWeight:600}}>{it.title}</div>
+                    <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(it.title)}</div>
                     <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
                       {it.effort ? it.effort : ""}{it.impact ? ` · ${it.impact} impact` : ""}
                     </div>
@@ -9242,8 +9242,8 @@ function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram 
                 {notifications.notifications.slice(0,8).map(n=>(
                   <div key={n.id} style={{padding:"9px 11px",borderRadius:9,fontSize:12,lineHeight:1.5,
                     background:C.surface,border:`1px solid ${n.read?C.border:C.accent+"55"}`}}>
-                    <div style={{color:C.text,fontWeight:600,marginBottom:2}}>{n.title}</div>
-                    <div style={{color:C.textSec}}>{n.body}</div>
+                    <div style={{color:C.text,fontWeight:600,marginBottom:2}}>{safeText(n.title)}</div>
+                    <div style={{color:C.textSec}}>{safeText(n.body)}</div>
                     <div style={{fontSize:10,color:C.textMut,marginTop:4}}>
                       {new Date(n.createdAt).toLocaleString()}
                     </div>
@@ -9661,7 +9661,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                           {on && <span style={{color:C.bg,fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
                         </span>
                         <span style={{display:"flex",flexDirection:"column",alignItems:"flex-start",lineHeight:1.25}}>
-                          <span>{fw.name}</span>
+                          <span>{safeText(fw.name)}</span>
                           {/* Same honesty as the intake picker: an AI-assisted
                               framework is a gap analysis, not a control
                               walkthrough, and the client picks with that known. */}
@@ -9712,7 +9712,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                   {questions.map(q => (
                     <div key={q.id} style={{marginBottom:14,padding:"14px 16px",background:C.card,
                       border:`1px solid ${answers[q.id] ? NIST_COLORS[fn]+"44" : C.border}`,borderRadius:12}}>
-                      <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:10}}>{q.question}</div>
+                      <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:10}}>{safeText(q.question)}</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
                         {q.options.map(opt => {
                           const selected = answers[q.id] === opt;
@@ -10385,7 +10385,7 @@ function BrandingManager({ isAdmin }) {
                   <span style={{width:12,height:12,borderRadius:3,background:b.primaryColor,flexShrink:0}}/>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{b.productName}</div>
-                    <div style={{color:SOC.textMut,fontSize:10}}>{b.owner}</div>
+                    <div style={{color:SOC.textMut,fontSize:10}}>{safeText(b.owner)}</div>
                   </div>
                   <span style={{fontSize:11,color:SOC.textSec}}>{b.clientsBranded} client{b.clientsBranded!==1?"s":""}</span>
                 </div>
@@ -10664,7 +10664,7 @@ function ClientTrainingPanel({ clientId }) {
                       {learners.map(l=>(
                         <label key={l.id} style={{display:"flex",gap:8,alignItems:"center",padding:"4px 0",cursor:"pointer",fontSize:12,color:SOC.text}}>
                           <input type="checkbox" checked={pickLearners.includes(l.id)} onChange={()=>tog(pickLearners,setPickLearners,l.id)}/>
-                          {l.name}
+                          {safeText(l.name)}
                         </label>
                       ))}
                     </div>
@@ -10675,7 +10675,7 @@ function ClientTrainingPanel({ clientId }) {
                       {catalog.map(t=>(
                         <label key={t.id} style={{display:"flex",gap:8,alignItems:"center",padding:"4px 0",cursor:"pointer",fontSize:12,color:SOC.text}}>
                           <input type="checkbox" checked={pickTopics.includes(t.id)} onChange={()=>tog(pickTopics,setPickTopics,t.id)}/>
-                          {t.title}
+                          {safeText(t.title)}
                         </label>
                       ))}
                     </div>
@@ -10704,7 +10704,7 @@ function ClientTrainingPanel({ clientId }) {
                     background:SOC.bg,borderRadius:7,border:`1px solid ${SOC.border}`}}>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,fontWeight:600,color:SOC.text}}>{a.learnerName}</div>
-                      <div style={{fontSize:10,color:SOC.textMut}}>{a.title}</div>
+                      <div style={{fontSize:10,color:SOC.textMut}}>{safeText(a.title)}</div>
                     </div>
                     <span style={{fontSize:10,fontWeight:700,color:t,padding:"2px 8px",borderRadius:20,
                       background:`${t}18`}}>{a.progress}%</span>
@@ -10838,7 +10838,7 @@ function TrainingManager({ client, onClose }) {
           <span style={{fontSize:18}}>🎓</span>
           <div style={{flex:1}}>
             <div style={{color:SOC.text,fontWeight:700,fontSize:15}}>Training Management</div>
-            <div style={{color:SOC.textMut,fontSize:11}}>{client.name} · {client.employees} employees</div>
+            <div style={{color:SOC.textMut,fontSize:11}}>{safeText(client.name)} · {client.employees} employees</div>
           </div>
           <button onClick={onClose} style={{background:"none",border:"none",color:SOC.textMut,fontSize:20,cursor:"pointer"}}>×</button>
         </div>
@@ -10849,7 +10849,7 @@ function TrainingManager({ client, onClose }) {
             <div style={{fontSize:36,marginBottom:12}}>📚</div>
             <div style={{color:SOC.text,fontWeight:700,fontSize:16,marginBottom:8}}>No training program deployed</div>
             <div style={{color:SOC.textSec,fontSize:13,lineHeight:1.6,maxWidth:440,margin:"0 auto 20px"}}>
-              Generate a CISA/NIST-aligned awareness program tailored to {client.name}'s industry
+              Generate a CISA/NIST-aligned awareness program tailored to {safeText(client.name)}'s industry
               ({client.industry}) and roll it out to all {client.employees} employees.
             </div>
             <button onClick={buildProgram} disabled={building}
@@ -10910,7 +10910,7 @@ function TrainingManager({ client, onClose }) {
                     return (
                       <div key={i} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:9,padding:"12px 14px"}}>
                         <div style={{display:"flex",justifyContent:"space-between",marginBottom:7}}>
-                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{m.name}</span>
+                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(m.name)}</span>
                           <span style={{color:SOC.textMut,fontSize:11}}>{m.done}/{t.enrolled} done · avg {m.avgScore}%</span>
                         </div>
                         <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden"}}>
@@ -10937,7 +10937,7 @@ function TrainingManager({ client, onClose }) {
                     return (
                       <div key={i} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"13px 15px"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{c.name}</span>
+                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(c.name)}</span>
                           <span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10,
                             background:c.status==="active"?`${SOC.green}22`:`${SOC.textMut}22`,
                             color:c.status==="active"?SOC.green:SOC.textMut,textTransform:"uppercase"}}>{c.status}</span>
@@ -11393,7 +11393,7 @@ function ClientNotePanel({ clientId }) {
         <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",marginBottom:10}}>
           {recent.map(a=>(
             <div key={a.id} style={{padding:"7px 10px",background:SOC.bg,borderRadius:7,fontSize:11}}>
-              <div style={{color:SOC.text}}>{a.detail}</div>
+              <div style={{color:SOC.text}}>{safeText(a.detail)}</div>
               <div style={{color:SOC.textMut,fontSize:9.5,marginTop:2}}>
                 {a.actorRole} · {new Date(a.at).toLocaleString()}
               </div>
@@ -11712,7 +11712,7 @@ function AnalystConsole({ user, onExit }) {
 
           {/* Context line */}
           <div style={{padding:"8px 16px",fontSize:10,color:SOC.textMut,borderBottom:`1px solid ${SOC.border}`}}>
-            {active ? <>Context: <span style={{color:SOC.textSec}}>{active.name}</span></> : "Context: Portfolio overview"}
+            {active ? <>Context: <span style={{color:SOC.textSec}}>{safeText(active.name)}</span></> : "Context: Portfolio overview"}
           </div>
 
           {/* Thread */}
@@ -11815,7 +11815,7 @@ function AnalystConsole({ user, onExit }) {
                         <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,
                           background:`${c}22`,color:c,whiteSpace:"nowrap"}}>{ac.action.replace(/_/g," ")}</span>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{color:SOC.text,fontSize:13}}>{ac.detail}</div>
+                          <div style={{color:SOC.text,fontSize:13}}>{safeText(ac.detail)}</div>
                           <div style={{color:SOC.textMut,fontSize:11,marginTop:3}}>
                             {ac.actorRole} · {new Date(ac.at).toLocaleString()}
                           </div>
@@ -11842,7 +11842,7 @@ function AnalystConsole({ user, onExit }) {
                     <div key={c.id} style={{background:SOC.panel,border:`1px solid ${SOC.border}`,
                       borderRadius:10,padding:"14px 16px",display:"flex",alignItems:"center",gap:14}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{c.name}</div>
+                        <div style={{color:SOC.text,fontWeight:600,fontSize:14}}>{safeText(c.name)}</div>
                         <div style={{color:SOC.textMut,fontSize:12,marginTop:2}}>
                           {c.email} · {c.tier} · {c.endpoints} endpoint(s) · {c.openRecommendations} open rec(s)
                         </div>
@@ -11926,12 +11926,12 @@ function AnalystConsole({ user, onExit }) {
                         <span style={{padding:"2px 8px",borderRadius:5,fontSize:10,fontWeight:700,
                           background:`${sm.color}22`,color:sm.color,textTransform:"uppercase"}}>{sm.label}</span>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{color:SOC.text,fontSize:13.5,fontWeight:600}}>{d.title}</div>
+                          <div style={{color:SOC.text,fontSize:13.5,fontWeight:600}}>{safeText(d.title)}</div>
                           <div style={{color:SOC.textMut,fontSize:11,marginTop:2}}>
                             {d.owner?.companyName || d.owner?.email || "—"}{d.hostname?` · ${d.hostname}`:""}
                             {d.aiEnriched && <span style={{color:SOC.purple,marginLeft:6}}>· AI-enriched</span>}
                           </div>
-                          <div style={{color:SOC.textSec,fontSize:12.5,marginTop:6,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{d.detail}</div>
+                          <div style={{color:SOC.textSec,fontSize:12.5,marginTop:6,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{safeText(d.detail)}</div>
                         </div>
                       </div>
                       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -12137,8 +12137,8 @@ function AnalystConsole({ user, onExit }) {
                     <div key={i} style={{display:"flex",gap:10,padding:"8px 10px",background:SOC.bg,
                       borderRadius:8,borderLeft:`3px solid ${sevColor(a.sev)}`}}>
                       <div style={{flex:1}}>
-                        <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{a.title}</div>
-                        <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{a.detail}</div>
+                        <div style={{color:SOC.text,fontSize:12,fontWeight:600}}>{safeText(a.title)}</div>
+                        <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{safeText(a.detail)}</div>
                       </div>
                       <div style={{textAlign:"right",flexShrink:0}}>
                         <span style={{fontSize:8,fontWeight:700,color:sevColor(a.sev),textTransform:"uppercase"}}>{a.sev}</span>
@@ -12266,7 +12266,7 @@ function AnalystConsole({ user, onExit }) {
                     <div style={{height:4,background:SOC.grid,borderRadius:2,overflow:"hidden"}}>
                       <div style={{width:`${r.val ?? 0}%`,height:"100%",background:r.val===null?SOC.grid:pColor(r.val)}}/>
                     </div>
-                    <div style={{fontSize:9.5,color:SOC.textMut,marginTop:2}}>{r.note}</div>
+                    <div style={{fontSize:9.5,color:SOC.textMut,marginTop:2}}>{safeText(r.note)}</div>
                   </div>
                 ))}
               </div>
@@ -12476,7 +12476,7 @@ function AnalystConsole({ user, onExit }) {
                     </div>
                     <div style={{flex:1}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <span style={{color:SOC.text,fontWeight:600,fontSize:14}}>{c.name}</span>
+                        <span style={{color:SOC.text,fontWeight:600,fontSize:14}}>{safeText(c.name)}</span>
                         <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:sm.color+"22",color:sm.color,fontWeight:700}}>{sm.label}</span>
                       </div>
                       <div style={{color:SOC.textMut,fontSize:11,marginTop:3}}>{c.industry} · {c.employees} employees</div>
@@ -12518,8 +12518,8 @@ function AnalystConsole({ user, onExit }) {
                     <span style={{fontSize:9,fontWeight:700,color:SOC.red,textTransform:"uppercase"}}>High Alert</span>
                     <span style={{fontSize:9,color:SOC.textMut}}>{a.time}</span>
                   </div>
-                  <div style={{color:SOC.text,fontSize:12,fontWeight:600,marginTop:3}}>{a.title}</div>
-                  <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{c.name}</div>
+                  <div style={{color:SOC.text,fontSize:12,fontWeight:600,marginTop:3}}>{safeText(a.title)}</div>
+                  <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{safeText(c.name)}</div>
                 </div>
               ))}
               {clients.flatMap(c => c.reviewQueue.filter(r=>r.status==="awaiting_review").map(r=>({c,r})))
@@ -12532,7 +12532,7 @@ function AnalystConsole({ user, onExit }) {
                     <span style={{fontSize:9,color:SOC.textMut}}>{r.generated}</span>
                   </div>
                   <div style={{color:SOC.text,fontSize:12,fontWeight:600,marginTop:3}}>{r.type}</div>
-                  <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{c.name}</div>
+                  <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{safeText(c.name)}</div>
                 </div>
               ))}
             </div>
@@ -12558,7 +12558,7 @@ function AnalystConsole({ user, onExit }) {
                   style={{display:"flex",alignItems:"center",gap:14,padding:"12px 16px",cursor:"pointer",
                     borderTop:i>0?`1px solid ${SOC.border}`:"none"}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{color:SOC.text,fontSize:13,fontWeight:600}}>{c.name}</div>
+                    <div style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(c.name)}</div>
                     <div style={{color:SOC.textMut,fontSize:11,marginTop:2}}>
                       {deployed ? tr.active : "No program deployed"}
                     </div>
@@ -12817,9 +12817,9 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
               <Badge label={cm.label} color={cm.color}/>
               <div style={{flex:1}}>
                 <div style={{color:C.text,fontSize:13,fontWeight:600}}>
-                  {c.title} {c.cisControl && <span style={{color:C.textMut,fontWeight:400,fontSize:11}}>· CIS {c.cisControl}</span>}
+                  {safeText(c.title)} {c.cisControl && <span style={{color:C.textMut,fontWeight:400,fontSize:11}}>· CIS {c.cisControl}</span>}
                 </div>
-                <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{c.detail}</div>
+                <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{safeText(c.detail)}</div>
                 {c.observed && <div style={{color:C.textMut,fontSize:11,marginTop:2}}>Observed: {c.observed}</div>}
               </div>
             </div>
@@ -12927,8 +12927,8 @@ function EndpointsScreen({ onBack }) {
                   <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
                     <Badge label={sm.label} color={sm.color}/>
                     <div style={{flex:1}}>
-                      <div style={{color:C.text,fontSize:14,fontWeight:600}}>{r.title}</div>
-                      {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:4,lineHeight:1.5}}>{r.detail}</div>}
+                      <div style={{color:C.text,fontSize:14,fontWeight:600}}>{safeText(r.title)}</div>
+                      {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:4,lineHeight:1.5}}>{safeText(r.detail)}</div>}
                       {r.origin==="ai" && <div style={{color:C.textMut,fontSize:11,marginTop:4}}>Drafted by Mastermind AI · reviewed by your analyst</div>}
                     </div>
                   </div>
@@ -12966,7 +12966,7 @@ function EndpointsScreen({ onBack }) {
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
                   <Badge label={r.status==="permitted"?"Analyst performing":"You're handling"}
                     color={r.status==="permitted"?C.green:C.accent}/>
-                  <span style={{flex:1,color:C.text,fontSize:13.5,fontWeight:600}}>{r.title}</span>
+                  <span style={{flex:1,color:C.text,fontSize:13.5,fontWeight:600}}>{safeText(r.title)}</span>
                   {r.status==="client_performing" && (
                     <button onClick={()=>markDone(r.id)}
                       style={{padding:"6px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
@@ -13203,8 +13203,8 @@ function MastermindConsole({ onClose }) {
                     <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
                       <Badge label={r.severity} color={sevColor(r.severity)}/>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{r.title}</div>
-                        {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{r.detail}</div>}
+                        <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{safeText(r.title)}</div>
+                        {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{safeText(r.detail)}</div>}
                         <div style={{color:C.textMut,fontSize:11,marginTop:5}}>
                           {r.client} · {r.aiAuthored?"AI-drafted":r.origin} · {new Date(r.createdAt).toLocaleDateString()}
                         </div>
@@ -13279,8 +13279,8 @@ function MastermindConsole({ onClose }) {
                           <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
                             <Badge label={rc.severity} color={sevColor(rc.severity)}/>
                             <div style={{flex:1}}>
-                              <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{rc.title}</div>
-                              <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{rc.detail}</div>
+                              <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{safeText(rc.title)}</div>
+                              <div style={{color:C.textSec,fontSize:12.5,marginTop:3,lineHeight:1.5}}>{safeText(rc.detail)}</div>
                             </div>
                             <button onClick={()=>promote(rc,i)} disabled={promoted[i]}
                               style={{padding:"6px 12px",borderRadius:6,fontSize:11.5,fontWeight:600,whiteSpace:"nowrap",
@@ -13332,7 +13332,7 @@ function MastermindConsole({ onClose }) {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{color:C.text,fontSize:13.5,fontWeight:600}}>{e.hostname}</div>
                             <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
-                              {e.owner?.name} · v{e.agentVersion} → v{e.latestVersion}
+                              {safeText(e.owner?.name)} · v{e.agentVersion} → v{e.latestVersion}
                             </div>
                           </div>
                           <button onClick={()=>getUpgradeInstructions(e.id)} disabled={upgradeBusy}
