@@ -1076,7 +1076,7 @@ function OverviewSection({ assessment, results }) {
         <Card>
           <SectionLabel text="Executive Summary"/>
           <p style={{color:C.textSec,fontSize:14,lineHeight:1.75,margin:"0 0 14px"}}>
-            {risk?.executiveSummary || exec?.headline}
+            {safeText(risk?.executiveSummary) || safeText(exec?.headline)}
           </p>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {assessment?.compliance?.map(c=><Badge key={c} label={c} color={C.accent}/>)}
@@ -1161,10 +1161,10 @@ function OverviewSection({ assessment, results }) {
               <div key={i} style={{padding:"12px 14px",background:C.surface,
                 border:`1px solid ${C.border}`,borderRadius:8}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span style={{color:C.text,fontSize:13,fontWeight:600}}>{t.threat}</span>
+                  <span style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(t.threat)}</span>
                   <Badge label={t.likelihood}/>
                 </div>
-                <p style={{color:C.textSec,fontSize:12,margin:0,lineHeight:1.6}}>{t.description}</p>
+                <p style={{color:C.textSec,fontSize:12,margin:0,lineHeight:1.6}}>{safeText(t.description)}</p>
                 <div style={{marginTop:8}}><Badge label={`Impact: ${t.impact}`}/></div>
               </div>
             ))}
@@ -1186,9 +1186,9 @@ function OverviewSection({ assessment, results }) {
                   ✓
                 </div>
                 <div>
-                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:4}}>{w.action}</div>
-                  <div style={{color:C.textSec,fontSize:12}}>{w.howTo}</div>
-                  <div style={{marginTop:4,color:C.green,fontSize:11}}>{w.benefit}</div>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:4}}>{safeText(w.action)}</div>
+                  <div style={{color:C.textSec,fontSize:12}}>{safeText(w.howTo)}</div>
+                  <div style={{marginTop:4,color:C.green,fontSize:11}}>{safeText(w.benefit)}</div>
                 </div>
               </div>
             ))}
@@ -1228,16 +1228,16 @@ function PrioritiesSection({ results }) {
               </div>
               <div style={{flex:1}}>
                 <div style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:4,marginBottom:6}}>
-                  <span style={{color:C.text,fontWeight:600,fontSize:14}}>{p.title}</span>
+                  <span style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.title)}</span>
                   <Badge label={p.effort}/><Badge label={p.impact}/><Badge label={p.category}/>
                   {p.estimatedCost && <Badge label={p.estimatedCost} color={C.textSec}/>}
                 </div>
                 <p style={{color:C.textSec,fontSize:13,margin:"0 0 8px",lineHeight:1.65}}>
-                  {p.description}
+                  {safeText(p.description)}
                 </p>
                 <div style={{display:"flex",gap:6}}>
                   <span style={{fontSize:11,color:C.textMut}}>Owner:</span>
-                  <span style={{fontSize:11,color:C.textSec}}>{p.owner}</span>
+                  <span style={{fontSize:11,color:C.textSec}}>{safeText(p.owner)}</span>
                 </div>
               </div>
             </div>
@@ -1264,8 +1264,8 @@ function PoliciesSection({ results }) {
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <span style={{fontSize:18}}>📄</span>
               <div style={{flex:1}}>
-                <div style={{color:C.text,fontWeight:600,fontSize:14}}>{p.name}</div>
-                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{p.purpose}</div>
+                <div style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.name)}</div>
+                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{safeText(p.purpose)}</div>
               </div>
               <div style={{display:"flex",gap:6}}>
                 <Badge label={p.reviewCycle||"Annual"}/>
@@ -1276,13 +1276,13 @@ function PoliciesSection({ results }) {
               <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
                 <div style={{marginBottom:10}}>
                   <div style={{fontSize:11,color:C.textMut,marginBottom:6}}>SCOPE</div>
-                  <p style={{color:C.textSec,fontSize:13,margin:0}}>{p.scope}</p>
+                  <p style={{color:C.textSec,fontSize:13,margin:0}}>{safeText(p.scope)}</p>
                 </div>
                 <div style={{marginBottom:10,padding:"12px 14px",background:C.bg,
                   borderLeft:`3px solid ${C.accent}`,borderRadius:4}}>
                   <div style={{fontSize:11,color:C.accent,marginBottom:6}}>POLICY TEXT</div>
                   <p style={{color:C.text,fontSize:13,margin:0,lineHeight:1.75,fontStyle:"italic"}}>
-                    {p.policyText}
+                    {safeText(p.policyText)}
                   </p>
                 </div>
                 {p.procedures && (
@@ -1293,7 +1293,7 @@ function PoliciesSection({ results }) {
                         <div style={{width:20,height:20,borderRadius:"50%",background:`${C.accent}22`,
                           color:C.accent,fontSize:10,fontWeight:700,display:"flex",
                           alignItems:"center",justifyContent:"center",flexShrink:0}}>{j+1}</div>
-                        <span style={{color:C.textSec,fontSize:13}}>{step}</span>
+                        <span style={{color:C.textSec,fontSize:13}}>{safeText(step)}</span>
                       </div>
                     ))}
                   </div>
@@ -1325,7 +1325,7 @@ function WorkflowsSection({ results }) {
               border:`1px solid ${active===i?C.accent:C.border}`,borderRadius:8,
               color:active===i?C.accent:C.textSec,cursor:"pointer",textAlign:"left",
               fontSize:12,fontWeight:active===i?600:400}}>
-            <div style={{fontSize:14,marginBottom:2}}>{wf.name}</div>
+            <div style={{fontSize:14,marginBottom:2}}>{safeText(wf.name)}</div>
             <Badge label={wf.severity||"Medium"}/>
           </button>
         ))}
@@ -1333,8 +1333,8 @@ function WorkflowsSection({ results }) {
       <Card>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
           <div>
-            <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:4}}>{w.name}</div>
-            <div style={{color:C.accent,fontSize:12}}>⚡ Trigger: {w.trigger}</div>
+            <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:4}}>{safeText(w.name)}</div>
+            <div style={{color:C.accent,fontSize:12}}>⚡ Trigger: {safeText(w.trigger)}</div>
           </div>
           <div style={{display:"flex",gap:6}}>
             <Badge label={w.category||""}/>
@@ -1358,9 +1358,9 @@ function WorkflowsSection({ results }) {
                   </div>
                   {s.responsible && (
                     <div style={{display:"flex",gap:8}}>
-                      <span style={{color:C.textMut,fontSize:11}}>👤 {s.responsible}</span>
-                      {s.timeframe && <span style={{color:C.textMut,fontSize:11}}>⏱ {s.timeframe}</span>}
-                      {s.tools && <span style={{color:C.textMut,fontSize:11}}>🔧 {s.tools}</span>}
+                      <span style={{color:C.textMut,fontSize:11}}>👤 {safeText(s.responsible)}</span>
+                      {s.timeframe && <span style={{color:C.textMut,fontSize:11}}>⏱ {safeText(s.timeframe)}</span>}
+                      {s.tools && <span style={{color:C.textMut,fontSize:11}}>🔧 {safeText(s.tools)}</span>}
                     </div>
                   )}
                 </div>
@@ -1374,7 +1374,7 @@ function WorkflowsSection({ results }) {
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {w.escalationPath.map((e,i)=>(
                 <span key={i} style={{color:C.textSec,fontSize:12}}>
-                  {i>0&&<span style={{color:C.textMut,margin:"0 4px"}}>→</span>}{e}
+                  {i>0&&<span style={{color:C.textMut,margin:"0 4px"}}>→</span>}{safeText(e)}
                 </span>
               ))}
             </div>
@@ -1384,7 +1384,7 @@ function WorkflowsSection({ results }) {
           <div style={{marginTop:12,padding:"10px 14px",background:`${C.green}11`,
             border:`1px solid ${C.green}33`,borderRadius:8}}>
             <span style={{color:C.green,fontSize:12}}>✓ Success: </span>
-            <span style={{color:C.textSec,fontSize:12}}>{w.successCriteria}</span>
+            <span style={{color:C.textSec,fontSize:12}}>{safeText(w.successCriteria)}</span>
           </div>
         )}
       </Card>
@@ -3324,12 +3324,12 @@ function ThreatIntelSection({ results }) {
             <div key={i} style={{marginBottom:12,paddingBottom:12,
               borderBottom:i<(tl.industryThreats.length-1)?`1px solid ${C.border}`:"none"}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                <span style={{color:C.text,fontSize:13,fontWeight:600}}>{t.name}</span>
+                <span style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(t.name)}</span>
                 <Badge label={t.prevalence}/>
               </div>
-              <p style={{color:C.textSec,fontSize:12,margin:"0 0 6px"}}>{t.description}</p>
+              <p style={{color:C.textSec,fontSize:12,margin:"0 0 6px"}}>{safeText(t.description)}</p>
               {(t.mitigations||[]).map((m,j)=>(
-                <div key={j} style={{color:C.green,fontSize:11}}>✓ {m}</div>
+                <div key={j} style={{color:C.green,fontSize:11}}>✓ {safeText(m)}</div>
               ))}
             </div>
           ))}
@@ -3352,24 +3352,24 @@ function ToolsSection({ results }) {
       {categories.map(cat=>(
         <div key={cat} style={{marginBottom:18}}>
           <div style={{color:C.textSec,fontSize:12,fontWeight:600,
-            letterSpacing:1,marginBottom:10,textTransform:"uppercase"}}>{cat}</div>
+            letterSpacing:1,marginBottom:10,textTransform:"uppercase"}}>{safeText(cat)}</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
             {tools.filter(t=>t.category===cat).map((t,i)=>(
               <Card key={i} style={{padding:"14px 16px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-                  <span style={{color:C.accent,fontWeight:700,fontSize:15}}>{t.recommended}</span>
+                  <span style={{color:C.accent,fontWeight:700,fontSize:15}}>{safeText(t.recommended)}</span>
                   <Badge label={t.cost}/>
                 </div>
                 {t.subcategory && (
-                  <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>{t.subcategory}</div>
+                  <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>{safeText(t.subcategory)}</div>
                 )}
                 <p style={{color:C.textSec,fontSize:12,margin:"0 0 8px",lineHeight:1.6}}>
-                  {t.rationale}
+                  {safeText(t.rationale)}
                 </p>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <Badge label={t.implementation}/>
                   {t.alternative && (
-                    <span style={{color:C.textMut,fontSize:11}}>Alt: {t.alternative}</span>
+                    <span style={{color:C.textMut,fontSize:11}}>Alt: {safeText(t.alternative)}</span>
                   )}
                 </div>
               </Card>
@@ -3547,8 +3547,8 @@ function TrainingSection({ results, assessment }) {
                     border:`1px solid ${activeModule===i?C.accent:C.border}`,
                     borderRadius:8,color:activeModule===i?C.accent:C.textSec,
                     cursor:"pointer",textAlign:"left",fontSize:12}}>
-                  <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
-                  <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+                  <div style={{fontWeight:600,marginBottom:3}}>{safeText(m.title)}</div>
+                  <div style={{fontSize:11,color:C.textMut}}>{safeText(m.duration)} · {safeText(m.audience)}</div>
                 </button>
               ))}
             </div>
@@ -3557,7 +3557,7 @@ function TrainingSection({ results, assessment }) {
               return (
                 <Card>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-                    <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
+                    <div style={{color:C.text,fontWeight:700,fontSize:16}}>{safeText(mod.title)}</div>
                     <div style={{display:"flex",gap:6}}>
                       <Badge label={mod.duration} color={C.accent}/>
                       <Badge label={mod.audience} color={C.purple}/>
@@ -3566,7 +3566,7 @@ function TrainingSection({ results, assessment }) {
                   {(mod.keyTakeaways||[]).map((t,i)=>(
                     <div key={i} style={{display:"flex",gap:10,marginBottom:8}}>
                       <span style={{color:C.green,fontSize:14}}>✓</span>
-                      <span style={{color:C.textSec,fontSize:13}}>{t}</span>
+                      <span style={{color:C.textSec,fontSize:13}}>{safeText(t)}</span>
                     </div>
                   ))}
                 </Card>
@@ -3649,7 +3649,7 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
       </div>
       {curriculum.overview && (
         <Card style={{marginBottom:16,padding:"16px 18px"}}>
-          <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{curriculum.overview}</p>
+          <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{safeText(curriculum.overview)}</p>
         </Card>
       )}
 
@@ -3676,8 +3676,8 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
             style={{padding:"8px 16px",background:openPhase===i?`${C.accent}22`:C.surface,
               border:`1px solid ${openPhase===i?C.accent:C.border}`,borderRadius:8,
               color:openPhase===i?C.accent:C.textSec,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-            <div>{ph.phase}</div>
-            <div style={{fontSize:10,color:C.textMut,fontWeight:400}}>{ph.theme}</div>
+            <div>{safeText(ph.phase)}</div>
+            <div style={{fontSize:10,color:C.textMut,fontWeight:400}}>{safeText(ph.theme)}</div>
           </button>
         ))}
         {curriculum.managerTrack?.length > 0 && (
@@ -3700,8 +3700,8 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
                   background:openModule===i?`${C.purple}15`:C.surface,
                   border:`1px solid ${openModule===i?C.purple:C.border}`,borderRadius:8,
                   color:openModule===i?C.purple:C.textSec,cursor:"pointer",textAlign:"left",fontSize:12}}>
-                <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
-                <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+                <div style={{fontWeight:600,marginBottom:3}}>{safeText(m.title)}</div>
+                <div style={{fontSize:11,color:C.textMut}}>{safeText(m.duration)} · {safeText(m.audience)}</div>
               </button>
             ))}
           </div>
@@ -3713,7 +3713,7 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
           {phase?.note && (
             <div style={{marginBottom:12,padding:"10px 14px",background:`${C.amber}11`,
               border:`1px solid ${C.amber}33`,borderRadius:8,color:C.textSec,fontSize:12}}>
-              💡 {phase.note}
+              💡 {safeText(phase.note)}
             </div>
           )}
           <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14}}>
@@ -3724,8 +3724,8 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
                     background:openModule===i?`${C.accent}15`:C.surface,
                     border:`1px solid ${openModule===i?C.accent:C.border}`,borderRadius:8,
                     color:openModule===i?C.accent:C.textSec,cursor:"pointer",textAlign:"left",fontSize:12}}>
-                  <div style={{fontWeight:600,marginBottom:3}}>{m.title}</div>
-                  <div style={{fontSize:11,color:C.textMut}}>{m.duration} · {m.audience}</div>
+                  <div style={{fontWeight:600,marginBottom:3}}>{safeText(m.title)}</div>
+                  <div style={{fontSize:11,color:C.textMut}}>{safeText(m.duration)} · {safeText(m.audience)}</div>
                 </button>
               ))}
             </div>
@@ -3742,7 +3742,7 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
             {curriculum.deliveryTips.map((t,i)=>(
               <div key={i} style={{display:"flex",gap:10,marginBottom:8}}>
                 <span style={{color:C.accent,fontSize:14}}>→</span>
-                <span style={{color:C.textSec,fontSize:13}}>{t}</span>
+                <span style={{color:C.textSec,fontSize:13}}>{safeText(t)}</span>
               </div>
             ))}
           </Card>
@@ -3788,7 +3788,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
   return (
     <Card>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <div style={{color:C.text,fontWeight:700,fontSize:16}}>{mod.title}</div>
+        <div style={{color:C.text,fontWeight:700,fontSize:16}}>{safeText(mod.title)}</div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <Badge label={mod.duration} color={accent}/>
           <Badge label={mod.audience} color={C.purple}/>
@@ -3830,7 +3830,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
       {!mode && (
         <>
           {mod.tailoredIntro && (
-            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{mod.tailoredIntro}</p>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{safeText(mod.tailoredIntro)}</p>
           )}
           {mod.objectives?.length > 0 && (
             <>
@@ -3839,7 +3839,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
                 {mod.objectives.map((o,i)=>(
                   <div key={i} style={{display:"flex",gap:10,marginBottom:7}}>
                     <span style={{color:C.green,fontSize:14}}>✓</span>
-                    <span style={{color:C.textSec,fontSize:13}}>{o}</span>
+                    <span style={{color:C.textSec,fontSize:13}}>{safeText(o)}</span>
                   </div>
                 ))}
               </div>
@@ -3849,21 +3849,21 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
             <div style={{marginBottom:14,padding:"12px 14px",background:C.surface,borderRadius:8,
               borderLeft:`3px solid ${accent}`}}>
               <div style={{color:accent,fontSize:11,fontWeight:700,marginBottom:5,letterSpacing:0.5}}>REAL-WORLD SCENARIO</div>
-              <div style={{color:C.textSec,fontSize:13,lineHeight:1.6}}>{mod.realWorldScenario}</div>
+              <div style={{color:C.textSec,fontSize:13,lineHeight:1.6}}>{safeText(mod.realWorldScenario)}</div>
             </div>
           )}
           {mod.quiz?.[0] && (
             <div>
               <SectionLabel text="Knowledge Check"/>
               <div style={{padding:"14px",background:C.surface,borderRadius:8,marginTop:6}}>
-                <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>{mod.quiz[0].question}</div>
+                <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>{safeText(mod.quiz[0].question)}</div>
                 {mod.quiz[0].options.map((opt,j)=>(
                   <div key={j} onClick={()=>setShowAnswer(true)}
                     style={{padding:"8px 12px",marginBottom:5,borderRadius:6,cursor:"pointer",
                       background:showAnswer&&j===mod.quiz[0].correct?`${C.green}22`:C.card,
                       border:`1px solid ${showAnswer&&j===mod.quiz[0].correct?C.green:C.border}`,
                       color:showAnswer&&j===mod.quiz[0].correct?C.green:C.textSec,fontSize:12}}>
-                    {String.fromCharCode(65+j)}. {opt}
+                    {String.fromCharCode(65+j)}. {safeText(opt)}
                     {showAnswer&&j===mod.quiz[0].correct?"  ✓":""}
                   </div>
                 ))}
@@ -3995,14 +3995,14 @@ function SlideViewer({ slides, title, accent }) {
       <div style={{background:"#fff",borderRadius:10,padding:"30px 34px",minHeight:230,
         border:`1px solid ${C.border}`,display:"flex",flexDirection:"column"}}>
         <div style={{fontSize:11,color:"#8090a5",marginBottom:8}}>Slide {i+1} of {slides.length}</div>
-        <div style={{fontSize:20,fontWeight:800,color:"#0b2545",marginBottom:16}}>{s.title}</div>
+        <div style={{fontSize:20,fontWeight:800,color:"#0b2545",marginBottom:16}}>{safeText(s.title)}</div>
         <ul style={{margin:0,paddingLeft:22,color:"#333",fontSize:14,lineHeight:1.8,flex:1}}>
-          {(s.bullets||[]).map((b,bi)=><li key={bi}>{b}</li>)}
+          {(s.bullets||[]).map((b,bi)=><li key={bi}>{safeText(b)}</li>)}
         </ul>
         {s.speakerNotes && (
           <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid #eee",
             fontSize:12,color:"#8090a5",fontStyle:"italic"}}>
-            Speaker notes: {s.speakerNotes}
+            Speaker notes: {safeText(s.speakerNotes)}
           </div>
         )}
       </div>
@@ -4052,7 +4052,7 @@ function QuizRunner({ questions, accent }) {
       {questions.map((q,qi)=>(
         <div key={qi} style={{marginBottom:16,padding:"14px 16px",background:C.surface,borderRadius:8}}>
           <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
-            {qi+1}. {q.question}
+            {qi+1}. {safeText(q.question)}
           </div>
           {q.options.map((opt,oi)=>{
             const chosen = answers[qi]===oi;
@@ -4066,14 +4066,14 @@ function QuizRunner({ questions, accent }) {
               <div key={oi} onClick={()=>!submitted && setAnswers(a=>({...a,[qi]:oi}))}
                 style={{padding:"8px 12px",marginBottom:5,borderRadius:6,fontSize:12,
                   cursor:submitted?"default":"pointer",background:bg,border:`1px solid ${bc}`,color:col}}>
-                {String.fromCharCode(65+oi)}. {opt}
+                {String.fromCharCode(65+oi)}. {safeText(opt)}
                 {submitted && isCorrect ? "  ✓" : ""}
                 {submitted && chosen && !isCorrect ? "  ✗" : ""}
               </div>
             );
           })}
           {submitted && q.explanation && (
-            <div style={{marginTop:8,fontSize:11,color:C.textMut,fontStyle:"italic"}}>{q.explanation}</div>
+            <div style={{marginTop:8,fontSize:11,color:C.textMut,fontStyle:"italic"}}>{safeText(q.explanation)}</div>
           )}
         </div>
       ))}
@@ -4123,7 +4123,7 @@ function ExecReportSection({ assessment, results }) {
           <div style={{color:C.textMut,fontSize:11,letterSpacing:2,marginBottom:8}}>
             SHIELDAI · VIRTUAL CISO REPORT
           </div>
-          <h2 style={{color:C.text,margin:"0 0 6px",fontSize:22}}>{rep.headline}</h2>
+          <h2 style={{color:C.text,margin:"0 0 6px",fontSize:22}}>{safeText(rep.headline)}</h2>
           <div style={{color:C.textSec,fontSize:13}}>
             {assessment?.company?.name||"Your Company"} · Generated {new Date().toLocaleDateString()}
           </div>
@@ -4131,11 +4131,11 @@ function ExecReportSection({ assessment, results }) {
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
           <div>
             <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>SECURITY POSTURE</div>
-            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{rep.securityPosture}</p>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{safeText(rep.securityPosture)}</p>
           </div>
           <div>
             <div style={{color:C.textMut,fontSize:11,marginBottom:6}}>BUSINESS RISK</div>
-            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{rep.businessRisk}</p>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{safeText(rep.businessRisk)}</p>
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
@@ -4145,8 +4145,8 @@ function ExecReportSection({ assessment, results }) {
             {label:"Expected ROI",value:rep.roi,color:C.green},
           ].map((s,i)=>(
             <div key={i} style={{padding:"14px",background:C.surface,borderRadius:8,textAlign:"center"}}>
-              <div style={{color:C.textMut,fontSize:10,marginBottom:6}}>{s.label}</div>
-              <div style={{color:s.color,fontWeight:700,fontSize:16}}>{s.value}</div>
+              <div style={{color:C.textMut,fontSize:10,marginBottom:6}}>{safeText(s.label)}</div>
+              <div style={{color:s.color,fontWeight:700,fontSize:16}}>{safeText(s.value)}</div>
             </div>
           ))}
         </div>
@@ -4157,7 +4157,7 @@ function ExecReportSection({ assessment, results }) {
           {(rep.keyFindings||[]).map((f,i)=>(
             <div key={i} style={{display:"flex",gap:10,marginBottom:8}}>
               <span style={{color:C.amber}}>⚠</span>
-              <span style={{color:C.textSec,fontSize:13}}>{f}</span>
+              <span style={{color:C.textSec,fontSize:13}}>{safeText(f)}</span>
             </div>
           ))}
         </Card>
@@ -4168,9 +4168,9 @@ function ExecReportSection({ assessment, results }) {
               borderRadius:6,display:"flex",gap:10,alignItems:"flex-start"}}>
               <Badge label={s.priority}/>
               <div>
-                <div style={{color:C.text,fontSize:13,fontWeight:600}}>{s.action}</div>
+                <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(s.action)}</div>
                 <div style={{color:C.textMut,fontSize:11}}>
-                  {s.owner} · {s.dueDate}
+                  {safeText(s.owner)} · {safeText(s.dueDate)}
                 </div>
               </div>
             </div>
