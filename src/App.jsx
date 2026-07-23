@@ -301,6 +301,15 @@ ${brandFooterHtml({ note: footerNote || "" })}
 // strings/numbers pass through untouched, and if something unexpected
 // slips through server-side sanitization, it recovers whatever readable
 // text it can rather than crashing or silently showing nothing.
+// Checklist question options come from /api/tasks/controls as {label,score}
+// objects (matching securityChecklist.js), but the static fallback list uses
+// plain strings. Both selection UIs must display AND STORE the label string
+// either way — riskEngine.js matches answers by `option.label === selectedLabel`,
+// so storing the raw object here would make every answer silently unmatchable
+// (every factor would default-score as unanswered, corrupting the posture
+// score) even before considering that rendering the raw object crashes React.
+const optionLabel = (opt) => (typeof opt === "string" ? opt : opt?.label ?? String(opt));
+
 function safeText(value, fallback = "") {
   if (value === null || value === undefined) return fallback;
   if (typeof value === "string" || typeof value === "number") return value;
@@ -6827,9 +6836,10 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
                 </div>
                 <div style={{display:"flex",flexDirection:"column",gap:7}}>
                   {q.options.map(opt => {
-                    const selected = answers[q.id] === opt;
+                    const label = optionLabel(opt);
+                    const selected = answers[q.id] === label;
                     return (
-                      <button key={opt} onClick={() => selectAnswer(q.id, opt)}
+                      <button key={label} onClick={() => selectAnswer(q.id, label)}
                         style={{textAlign:"left",padding:"10px 14px",borderRadius:8,cursor:"pointer",
                           background: selected ? `${NIST_COLORS[fn]}18` : C.surface,
                           border:`1px solid ${selected ? NIST_COLORS[fn] : C.border}`,
@@ -6843,7 +6853,7 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
                           display:"flex",alignItems:"center",justifyContent:"center"}}>
                           {selected && <span style={{width:6,height:6,borderRadius:"50%",background:C.bg}}/>}
                         </span>
-                        {opt}
+                        {label}
                       </button>
                     );
                   })}
@@ -9715,9 +9725,10 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                       <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:10}}>{safeText(q.question)}</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
                         {q.options.map(opt => {
-                          const selected = answers[q.id] === opt;
+                          const label = optionLabel(opt);
+                          const selected = answers[q.id] === label;
                           return (
-                            <button key={opt} onClick={()=>setAnswers({...answers,[q.id]:opt})}
+                            <button key={label} onClick={()=>setAnswers({...answers,[q.id]:label})}
                               style={{textAlign:"left",padding:"9px 12px",borderRadius:8,cursor:"pointer",
                                 background: selected ? `${NIST_COLORS[fn]}18` : C.surface,
                                 border:`1px solid ${selected ? NIST_COLORS[fn] : C.border}`,
@@ -9730,7 +9741,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                                 display:"flex",alignItems:"center",justifyContent:"center"}}>
                                 {selected && <span style={{width:5,height:5,borderRadius:"50%",background:C.bg}}/>}
                               </span>
-                              {opt}
+                              {label}
                             </button>
                           );
                         })}

@@ -32,6 +32,29 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 
+// Defensive rendering guard. Every value here ultimately comes from the
+// backend — most of it deterministic (framework definitions, computed
+// control status), but some genuinely AI-generated (the remediation-guidance
+// feature below). Either way, if a field ever comes back as an object where
+// a string was expected, rendering it directly as a JSX child throws
+// "Objects are not valid as a React child" (React error #31) and takes down
+// this whole workspace. safeText() prevents that unconditionally.
+function safeText(value, fallback = "") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (typeof value === "object") {
+    console.warn("safeText: expected a string but got an object — coercing.", value);
+    if (Array.isArray(value)) {
+      const joined = value.map(v => safeText(v, "")).filter(Boolean).join(", ");
+      return joined || fallback;
+    }
+    const firstString = Object.values(value).find(v => typeof v === "string");
+    if (firstString) return firstString;
+    return fallback;
+  }
+  return String(value);
+}
+
 const C = {
   bg: "#080D18", surface: "#0D1526", card: "#101C30", cardHov: "#142035",
   border: "#1A2D47", borderHi: "#254060", accent: "#00C8FF", accentDm: "#0090BB",
@@ -86,10 +109,10 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
     return () => { live = false; };
   }, [apiBase, clientId]);
 
-  if (err) return <Note tone="red">Couldn't load compliance: {err}</Note>;
+  if (err) return <Note tone="red">Couldn't load compliance: {safeText(err)}</Note>;
   if (!data) return <Note>Loading…</Note>;
   if (!data.hasAssessment) {
-    return <Note>{data.note || "No assessment on file. Compliance can't be determined without answers."}</Note>;
+    return <Note>{safeText(data.note) || "No assessment on file. Compliance can't be determined without answers."}</Note>;
   }
 
   return (
@@ -115,7 +138,7 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
               padding: "14px 16px", cursor: onOpen ? "pointer" : "default",
             }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-              <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{f.short || f.name}</span>
+              <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{safeText(f.short) || safeText(f.name)}</span>
               <DepthBadge depth={f.depth} />
               <span style={{ marginLeft: "auto", color: C.textSec, fontSize: 12 }}>
                 {f.notControlMapped ? "Gap analysis" : `${f.assessed ?? 0} of ${f.total} assessed`}
@@ -130,7 +153,7 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
               // A percentage was deliberately withheld. Say why — a bare dash
               // looks like a loading state or a bug, and this is neither.
               <div style={{ color: C.textSec, fontSize: 11.5, lineHeight: 1.6 }}>
-                {f.pctSuppressedReason}
+                {safeText(f.pctSuppressedReason)}
               </div>
             ) : (
               <>
@@ -192,7 +215,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
   if (!data.reportingHosts) {
     return (
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
-        <div style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6 }}>{data.note}</div>
+        <div style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6 }}>{safeText(data.note)}</div>
       </div>
     );
   }
@@ -220,7 +243,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
       </div>
       <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>
         Your answers and what the agent measured disagree. We won't pick a side — the agent only sees
-        endpoints, and you know your environment. {data.boundary}
+        endpoints, and you know your environment. {safeText(data.boundary)}
       </p>
 
       {data.conflicts.map(c => (
@@ -228,7 +251,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
           background: C.card, border: `1px solid ${C.amber}44`, borderRadius: 10,
           padding: "14px 16px", marginBottom: 10,
         }}>
-          <div style={{ color: C.text, fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>{c.question}</div>
+          <div style={{ color: C.text, fontSize: 13.5, fontWeight: 700, marginBottom: 10 }}>{safeText(c.question)}</div>
 
           {/* Both sources, side by side. Rule 2. */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
@@ -236,13 +259,13 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
               <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
                 YOU SAID · DECIDES
               </div>
-              <div style={{ color: C.text, fontSize: 12.5 }}>{c.yourAnswer}</div>
+              <div style={{ color: C.text, fontSize: 12.5 }}>{safeText(c.yourAnswer)}</div>
             </div>
             <div style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ fontSize: 10, color: C.purple, fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
                 AGENT MEASURED · INFORMS
               </div>
-              <div style={{ color: C.text, fontSize: 12.5 }}>{c.agentObserved.summary}</div>
+              <div style={{ color: C.text, fontSize: 12.5 }}>{safeText(c.agentObserved.summary)}</div>
               {c.agentObserved.perHost?.length > 0 && (
                 <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {c.agentObserved.perHost.map((h, i) => (
@@ -250,7 +273,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
                       fontSize: 10, padding: "1px 6px", borderRadius: 4,
                       background: h.status === "pass" ? `${C.green}1A` : `${C.red}1A`,
                       color: h.status === "pass" ? C.green : C.red,
-                    }}>{h.host}: {h.observed}</span>
+                    }}>{safeText(h.host)}: {safeText(h.observed)}</span>
                   ))}
                 </div>
               )}
@@ -258,13 +281,13 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
           </div>
 
           <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}>
-            The agent can see: {c.agentObserved.whatItSees} — but not: {c.agentObserved.whatItCannotSee}
+            The agent can see: {safeText(c.agentObserved.whatItSees)} — but not: {safeText(c.agentObserved.whatItCannotSee)}
           </div>
 
           {c.previouslyResolved && (
             <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
               <span style={{ color: C.amber, fontSize: 11 }}>
-                You resolved this before ({c.previouslyResolved.decision}) and the telemetry still disagrees.
+                You resolved this before ({safeText(c.previouslyResolved.decision)}) and the telemetry still disagrees.
               </span>
             </div>
           )}
@@ -273,8 +296,8 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
           <div style={{ display: "grid", gap: 8 }}>
             {c.resolution.options.map(o => (
               <div key={o.id} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{o.label}</div>
-                <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{o.effect}</div>
+                <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{safeText(o.label)}</div>
+                <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{safeText(o.effect)}</div>
 
                 {o.id === "update-answer" && (
                   <select value={newAnswer[c.controlId] || ""} onChange={e => setNewAnswer(s => ({ ...s, [c.controlId]: e.target.value }))}
@@ -359,16 +382,16 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ color: C.text, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>{data.title}</div>
-      <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{data.why}</p>
+      <div style={{ color: C.text, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>{safeText(data.title)}</div>
+      <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{safeText(data.why)}</p>
 
       {data.questions.map(qq => {
         const isMulti = qq.type === "multi";
         return (
         <div key={qq.id} style={{ marginBottom: 12 }}>
-          <div style={{ color: C.text, fontSize: 12.5, marginBottom: 4 }}>{qq.question}</div>
-          {qq.help && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{qq.help}</div>}
-          {qq.note && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{qq.note}</div>}
+          <div style={{ color: C.text, fontSize: 12.5, marginBottom: 4 }}>{safeText(qq.question)}</div>
+          {qq.help && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{safeText(qq.help)}</div>}
+          {qq.note && <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 6 }}>{safeText(qq.note)}</div>}
           <div style={{ display: "grid", gap: 5 }}>
             {qq.options.map((o, i) => {
               const sel = isMulti
@@ -392,7 +415,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
                       background: sel ? C.accent : "transparent",
                     }} />
                   )}
-                  {o.label}
+                  {safeText(o.label)}
                   {o.locked && <span style={{ marginLeft: "auto", color: C.textMut, fontSize: 10 }}>locked</span>}
                 </button>
               );
@@ -404,7 +427,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
 
       {data.status && !data.status.complete && (
         <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 10 }}>
-          If you skip this: {data.status.defaultIfSkipped}
+          If you skip this: {safeText(data.status.defaultIfSkipped)}
         </div>
       )}
 
@@ -423,7 +446,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
           </div>
           <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5 }}>
             {result.scopeChange.excluded > 0 && `${result.scopeChange.excluded} scoped out with a recorded reason. `}
-            {result.suggestionNote}
+            {safeText(result.suggestionNote)}
           </div>
         </div>
       )}
@@ -445,7 +468,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
   useEffect(load, [load]);
 
   if (!data) return <Note>Loading…</Note>;
-  if (!data.hasAssessment) return <Note>{data.note}</Note>;
+  if (!data.hasAssessment) return <Note>{safeText(data.note)}</Note>;
 
   const reqs = (data.requirements || []).filter(r => {
     if (filter !== "all" && r.status !== filter) return false;
@@ -463,18 +486,18 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
       )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h3 style={{ color: C.text, fontSize: 16, fontWeight: 700, margin: 0 }}>{data.framework.name}</h3>
+        <h3 style={{ color: C.text, fontSize: 16, fontWeight: 700, margin: 0 }}>{safeText(data.framework.name)}</h3>
         <DepthBadge depth={data.depth} />
       </div>
       {data.framework.citation && (
-        <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>{data.framework.citation}</div>
+        <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>{safeText(data.framework.citation)}</div>
       )}
       {data.framework.note && (
-        <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 10px" }}>{data.framework.note}</p>
+        <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 10px" }}>{safeText(data.framework.note)}</p>
       )}
 
       {data.notControlMapped ? (
-        <Note tone="amber">{data.why}</Note>
+        <Note tone="amber">{safeText(data.why)}</Note>
       ) : (
         <>
           <FrameworkIntake authFetch={authFetch} apiBase={apiBase} frameworkId={frameworkId}
@@ -520,8 +543,8 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
               <div style={{ marginTop: 8, display: "grid", gap: 5 }}>
                 {data.excluded.map(e => (
                   <div key={e.id} style={{ background: C.surface, borderRadius: 6, padding: "7px 10px" }}>
-                    <span style={{ color: C.textSec, fontSize: 11.5, fontWeight: 700 }}>{e.id}</span>
-                    <span style={{ color: C.textMut, fontSize: 11, marginLeft: 8 }}>{e.reason}</span>
+                    <span style={{ color: C.textSec, fontSize: 11.5, fontWeight: 700 }}>{safeText(e.id)}</span>
+                    <span style={{ color: C.textMut, fontSize: 11, marginLeft: 8 }}>{safeText(e.reason)}</span>
                   </div>
                 ))}
               </div>
@@ -534,7 +557,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
 
           {data.detail?.disclaimer && (
             <div style={{ marginTop: 16, color: C.textMut, fontSize: 11, lineHeight: 1.6 }}>
-              {data.detail.disclaimer}
+              {safeText(data.detail.disclaimer)}
             </div>
           )}
         </>
@@ -553,8 +576,8 @@ function RequirementRow({ r }) {
     }}>
       <div onClick={() => setOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer" }}>
         <span style={{ width: 6, height: 6, borderRadius: 3, background: color, flexShrink: 0 }} />
-        <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 62 }}>{r.id}</span>
-        <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{r.name}</span>
+        <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 62 }}>{safeText(r.id)}</span>
+        <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{safeText(r.name)}</span>
         {r.hasCorroboration && <Pill text="AGENT-CONFIRMED" color={C.green} title="Independently confirmed by the monitoring agent — measured evidence, not a self-assessment." />}
         {r.hasDispute && <Pill text="CONFLICT" color={C.amber} title="Your answer and the agent's measurement disagree. Needs your decision." />}
         <Pill text={STATUS_LABEL[r.status]} color={color} />
@@ -562,14 +585,14 @@ function RequirementRow({ r }) {
 
       {open && (
         <div style={{ padding: "0 14px 12px", borderTop: `1px solid ${C.border}` }}>
-          {r.text && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{r.text}</p>}
-          {r.citation && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>{r.citation}</div>}
+          {r.text && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{safeText(r.text)}</p>}
+          {r.citation && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>{safeText(r.citation)}</div>}
 
           {r.controls.map(c => (
             <div key={c.controlId} style={{ background: C.surface, borderRadius: 6, padding: "9px 11px", marginBottom: 6 }}>
-              <div style={{ color: C.textSec, fontSize: 11.5, marginBottom: 4 }}>{c.question}</div>
+              <div style={{ color: C.textSec, fontSize: 11.5, marginBottom: 4 }}>{safeText(c.question)}</div>
               <div style={{ color: c.meets ? C.green : C.amber, fontSize: 12 }}>
-                {c.answer || <span style={{ color: C.textMut }}>Not answered</span>}
+                {c.answer ? safeText(c.answer) : <span style={{ color: C.textMut }}>Not answered</span>}
                 {c.score !== null && <span style={{ color: C.textMut, marginLeft: 6 }}>({c.score}/100)</span>}
               </div>
 
@@ -594,7 +617,7 @@ function RequirementRow({ r }) {
 
               {!c.meets && c.bestAnswer && (
                 <div style={{ color: C.textMut, fontSize: 11, marginTop: 5 }}>
-                  Target: {c.bestAnswer}
+                  Target: {safeText(c.bestAnswer)}
                 </div>
               )}
             </div>
@@ -657,14 +680,14 @@ export function CustomFrameworksSection({ authFetch, apiBase, clientId }) {
               padding: "14px 16px", cursor: "pointer",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{f.name}</span>
+                <span style={{ color: C.text, fontSize: 14, fontWeight: 700 }}>{safeText(f.name)}</span>
                 <Pill text="CUSTOM" color={C.purple} />
                 <span style={{ marginLeft: "auto", color: C.textSec, fontSize: 12 }}>
                   {f.controlCount} control{f.controlCount === 1 ? "" : "s"}
                 </span>
               </div>
               {f.description && (
-                <div style={{ color: C.textSec, fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>{f.description}</div>
+                <div style={{ color: C.textSec, fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>{safeText(f.description)}</div>
               )}
               {f.controlCount === 0 && (
                 <div style={{ color: C.textMut, fontSize: 11, marginTop: 6 }}>
@@ -732,14 +755,14 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
       }}>← All custom frameworks</button>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <h4 style={{ color: C.text, fontSize: 15, fontWeight: 700, margin: 0 }}>{data.name}</h4>
+        <h4 style={{ color: C.text, fontSize: 15, fontWeight: 700, margin: 0 }}>{safeText(data.name)}</h4>
         <Pill text="CUSTOM" color={C.purple} />
         <span style={{ marginLeft: "auto", color: C.textSec, fontSize: 12 }}>
           {pct(data.compliancePct)} of {data.total} met
         </span>
       </div>
       {data.description && (
-        <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{data.description}</p>
+        <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "0 0 12px" }}>{safeText(data.description)}</p>
       )}
       {data.total === 0 && <Note>No controls have been defined for this framework yet.</Note>}
 
@@ -755,16 +778,16 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
               <div onClick={() => setOpenControl(open ? null : c.id)}
                 style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer" }}>
                 <span style={{ width: 6, height: 6, borderRadius: 3, background: color, flexShrink: 0 }} />
-                <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 40 }}>{c.id}</span>
-                <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{c.title}</span>
+                <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 40 }}>{safeText(c.id)}</span>
+                <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{safeText(c.title)}</span>
                 {c.source !== "unset" && <Pill text={(CT_SOURCE_LABEL[c.source] || c.source).toUpperCase()} color={C.textSec} />}
                 <Pill text={CT_STATUS_LABEL[c.status] || c.status} color={color} />
               </div>
 
               {open && (
                 <div style={{ padding: "0 14px 14px", borderTop: `1px solid ${C.border}` }}>
-                  {c.description && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{c.description}</p>}
-                  {c.category && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>Category: {c.category}</div>}
+                  {c.description && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{safeText(c.description)}</p>}
+                  {c.category && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>Category: {safeText(c.category)}</div>}
 
                   {c.source === "agent" && (
                     <div style={{ color: C.purple, fontSize: 11, marginBottom: 8 }}>
@@ -811,22 +834,22 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                       </button>
                       {remediation[c.id] && remediation[c.id] !== "loading" && (
                         remediation[c.id].error ? (
-                          <div style={{ color: C.red, fontSize: 11.5, marginTop: 8 }}>{remediation[c.id].error}</div>
+                          <div style={{ color: C.red, fontSize: 11.5, marginTop: 8 }}>{safeText(remediation[c.id].error)}</div>
                         ) : (
                           <div style={{ marginTop: 10, background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-                            <div style={{ color: C.text, fontSize: 12, marginBottom: 8 }}>{remediation[c.id].summary}</div>
+                            <div style={{ color: C.text, fontSize: 12, marginBottom: 8 }}>{safeText(remediation[c.id].summary)}</div>
                             <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
                               {(remediation[c.id].steps || []).map((s, i) => (
                                 <div key={i} style={{ fontSize: 11.5, color: C.textSec, lineHeight: 1.5 }}>
-                                  <span style={{ color: C.accent, fontWeight: 700 }}>{i + 1}.</span> {s.action}
-                                  {s.how && <div style={{ color: C.textMut, marginLeft: 14 }}>{s.how}</div>}
-                                  {s.effort && <span style={{ color: C.textMut, marginLeft: 6 }}>({s.effort} effort)</span>}
+                                  <span style={{ color: C.accent, fontWeight: 700 }}>{i + 1}.</span> {safeText(s.action)}
+                                  {s.how && <div style={{ color: C.textMut, marginLeft: 14 }}>{safeText(s.how)}</div>}
+                                  {s.effort && <span style={{ color: C.textMut, marginLeft: 6 }}>({safeText(s.effort)} effort)</span>}
                                 </div>
                               ))}
                             </div>
                             {remediation[c.id].evidence && (
                               <div style={{ fontSize: 11, color: C.textMut, lineHeight: 1.5 }}>
-                                Evidence to keep: {remediation[c.id].evidence}
+                                Evidence to keep: {safeText(remediation[c.id].evidence)}
                               </div>
                             )}
                           </div>
