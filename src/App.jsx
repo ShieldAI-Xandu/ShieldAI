@@ -2998,7 +2998,7 @@ function TrainingProgramSection() {
   }
 
   const tabs = [["overview","Overview"],["learners",`Learners (${learners.length})`],
-    ["assign","Assign"],["quarterly","Quarterly"],["reports","Reports"]];
+    ["assign","Assign"],["quarterly","Quarterly"],["phishing","Phishing Sim"],["reports","Reports"]];
   const inp = { padding:"9px 12px", background:C.surface, border:`1px solid ${C.border}`,
     borderRadius:8, color:C.text, fontSize:13, boxSizing:"border-box", fontFamily:"inherit" };
 
@@ -3204,11 +3204,276 @@ function TrainingProgramSection() {
             </Card>
           )}
 
+          {/* PHISHING SIMULATION */}
+          {tab === "phishing" && (
+            <PhishingSimTab learners={learners}/>
+          )}
+
           {/* REPORTS */}
           {tab === "reports" && (
             <TrainingReportView/>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// Send realistic-but-safe simulated phishing emails to enrolled learners and
+// track who clicks. Reuses the same learner list the training tabs already
+// loaded — a campaign targets real enrolled people, not a separate contact
+// list. Every click lands on an educational reveal page (PhishRevealPage),
+// not a fake credential-harvesting form — this is deliberate: capturing
+// what someone "would have" typed raises its own concerns even in a
+// simulated context, and click-through rate alone is the metric that
+// actually matters for a training program.
+function PhishingSimTab({ learners }) {
+  const [scenarios, setScenarios] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [viewCampaign, setViewCampaign] = useState(null);
+  const [showNew, setShowNew] = useState(false);
+  const [nc, setNc] = useState({ name: "", scenarioId: "", learnerIds: [] });
+
+  function flash(msg, tone = C.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  async function loadAll() {
+    setLoading(true); setError(null);
+    try {
+      const [s, c, o] = await Promise.all([
+        authFetch(`${API_BASE}/api/phishing/scenarios`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/phishing/campaigns`).then(r => r.json()),
+        authFetch(`${API_BASE}/api/phishing/overview`).then(r => r.json()),
+      ]);
+      setScenarios(Array.isArray(s) ? s : []);
+      setCampaigns(Array.isArray(c) ? c : []);
+      setOverview(o && !o.error ? o : null);
+    } catch (e) { setError("Could not load phishing simulation data."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function createCampaign() {
+    if (!nc.name.trim() || !nc.scenarioId || !nc.learnerIds.length) {
+      setError("Name, scenario, and at least one learner are required."); return;
+    }
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/phishing/campaigns`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nc),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not create campaign.");
+      flash(`Campaign "${d.name}" created as a draft.`);
+      setNc({ name: "", scenarioId: "", learnerIds: [] });
+      setShowNew(false);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function sendCampaign(id) {
+    if (!window.confirm("Send this simulated phishing test now? Emails go out immediately to every selected learner.")) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/phishing/campaigns/${id}/send`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not send campaign.");
+      flash(`Sent to ${d.stats.sent} of ${d.stats.targeted} learners.`);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function deleteCampaign(id) {
+    if (!window.confirm("Delete this draft campaign?")) return;
+    setBusy(true);
+    try {
+      await authFetch(`${API_BASE}/api/phishing/campaigns/${id}`, { method: "DELETE" });
+      flash("Draft deleted.");
+      await loadAll();
+    } catch { setError("Could not delete."); }
+    finally { setBusy(false); }
+  }
+
+  async function openDetail(c) {
+    const res = await authFetch(`${API_BASE}/api/phishing/campaigns/${c.id}`);
+    setViewCampaign(await res.json());
+  }
+
+  function toggleLearner(id) {
+    setNc(f => ({ ...f, learnerIds: f.learnerIds.includes(id) ? f.learnerIds.filter(x=>x!==id) : [...f.learnerIds, id] }));
+  }
+
+  if (loading) return <Spinner/>;
+
+  const activeLearners = learners.filter(l => l.status === "active");
+
+  return (
+    <div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>{toast.msg}</div>
+      )}
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {overview && !overview.configured && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}15`,
+          border:`1px solid ${C.amber}44`,borderRadius:8,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
+          Email sending isn't configured on this account yet, so campaigns can be created but not sent.
+          Contact your ShieldAI admin to enable it.
+        </div>
+      )}
+
+      {overview && (
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
+          {[
+            ["Campaigns Run", overview.campaignsRun ?? 0, C.accent],
+            ["Overall Click Rate", overview.overallClickRatePct != null ? `${overview.overallClickRatePct}%` : "—",
+              overview.overallClickRatePct != null && overview.overallClickRatePct > 20 ? C.red : C.green],
+          ].map(([label,val,tone],i)=>(
+            <div key={i} style={{flex:"1 1 160px",padding:"16px 18px",background:C.card,
+              border:`1px solid ${C.border}`,borderRadius:12}}>
+              <div style={{fontSize:28,fontWeight:800,color:tone,lineHeight:1}}>{val}</div>
+              <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginTop:5}}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <SectionLabel text="Campaigns"/>
+        <button onClick={()=>setShowNew(v=>!v)}
+          style={{padding:"8px 16px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+            fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+          {showNew ? "Cancel" : "+ New Campaign"}
+        </button>
+      </div>
+
+      {showNew && (
+        <div style={{padding:"16px 18px",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:20}}>
+          <input placeholder="Campaign name (e.g. Q3 Awareness Test)" value={nc.name}
+            onChange={e=>setNc({...nc,name:e.target.value})}
+            style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box",marginBottom:12,fontFamily:"inherit"}}/>
+
+          <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginBottom:8}}>SCENARIO</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))",gap:8,marginBottom:16}}>
+            {scenarios.map(s => (
+              <label key={s.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"10px 12px",
+                background:nc.scenarioId===s.id?`${C.accent}12`:C.surface,
+                border:`1px solid ${nc.scenarioId===s.id?C.accent+"66":C.border}`,borderRadius:8,cursor:"pointer"}}>
+                <input type="radio" name="scenario" checked={nc.scenarioId===s.id}
+                  onChange={()=>setNc({...nc,scenarioId:s.id})} style={{marginTop:2}}/>
+                <div>
+                  <div style={{fontSize:12.5,fontWeight:700,color:C.text}}>{s.name}</div>
+                  <div style={{fontSize:10.5,color:C.textMut,marginTop:2}}>{s.category} · {s.difficulty}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,marginBottom:8}}>
+            TARGET LEARNERS ({nc.learnerIds.length} selected)
+          </div>
+          <div style={{maxHeight:180,overflowY:"auto",marginBottom:16,border:`1px solid ${C.border}`,borderRadius:8,padding:8}}>
+            {activeLearners.length === 0 ? (
+              <div style={{color:C.textMut,fontSize:12,padding:"6px 4px"}}>No active learners yet — add some in the Learners tab first.</div>
+            ) : activeLearners.map(l => (
+              <label key={l.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",cursor:"pointer"}}>
+                <input type="checkbox" checked={nc.learnerIds.includes(l.id)} onChange={()=>toggleLearner(l.id)}/>
+                <span style={{fontSize:12.5,color:C.text}}>{l.name}</span>
+                <span style={{fontSize:11,color:C.textMut}}>{l.email}</span>
+              </label>
+            ))}
+          </div>
+
+          <button onClick={createCampaign} disabled={busy}
+            style={{padding:"9px 20px",borderRadius:8,border:"none",background:C.accent,color:C.bg,
+              fontSize:13,fontWeight:700,cursor:busy?"default":"pointer"}}>
+            {busy ? "Creating…" : "Create Draft"}
+          </button>
+        </div>
+      )}
+
+      {campaigns.length === 0 ? (
+        <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>
+          No campaigns yet. Create one above to send your first simulated phishing test.
+        </div>
+      ) : campaigns.map(c => (
+        <div key={c.id} style={{padding:"14px 16px",background:C.card,border:`1px solid ${C.border}`,
+          borderRadius:10,marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontSize:13.5,fontWeight:700,color:C.text}}>{c.name}</div>
+              <div style={{fontSize:11,color:C.textMut,marginTop:2}}>
+                {scenarios.find(s=>s.id===c.scenarioId)?.name || c.scenarioId} · {c.stats.targeted} learners ·{" "}
+                <span style={{fontWeight:700,textTransform:"capitalize",
+                  color:c.status==="draft"?C.amber:c.status==="sending"?C.accent:C.green}}>{c.status}</span>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {c.status === "sent" && c.stats.sent > 0 && (
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:18,fontWeight:800,
+                    color:c.stats.clickRatePct > 20 ? C.red : C.green}}>{c.stats.clickRatePct}%</div>
+                  <div style={{fontSize:9.5,color:C.textMut}}>clicked</div>
+                </div>
+              )}
+              <button onClick={()=>openDetail(c)}
+                style={{padding:"6px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                  color:C.textSec,fontSize:11.5,cursor:"pointer"}}>Details</button>
+              {c.status === "draft" && (
+                <>
+                  <button onClick={()=>sendCampaign(c.id)} disabled={busy}
+                    style={{padding:"6px 12px",background:C.accent,border:"none",borderRadius:7,
+                      color:C.bg,fontSize:11.5,fontWeight:700,cursor:"pointer"}}>Send Now</button>
+                  <button onClick={()=>deleteCampaign(c.id)} disabled={busy}
+                    style={{padding:"6px 12px",background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.textMut,fontSize:11.5,cursor:"pointer"}}>Delete</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {viewCampaign && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:80,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setViewCampaign(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+            borderRadius:14,maxWidth:520,width:"100%",maxHeight:"80vh",overflowY:"auto",padding:"24px 26px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:16,fontWeight:700,color:C.text}}>{viewCampaign.name}</div>
+              <button onClick={()=>setViewCampaign(null)}
+                style={{background:"none",border:"none",color:C.textMut,fontSize:20,cursor:"pointer"}}>×</button>
+            </div>
+            <div style={{fontSize:12,color:C.textMut,marginBottom:16}}>
+              {viewCampaign.stats.sent} sent · {viewCampaign.stats.clicked} clicked
+              {viewCampaign.stats.failed > 0 && ` · ${viewCampaign.stats.failed} failed`}
+            </div>
+            {viewCampaign.results.map(r => (
+              <div key={r.learnerId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                padding:"8px 4px",borderBottom:`1px solid ${C.border}`}}>
+                <div>
+                  <div style={{fontSize:12.5,color:C.text}}>{r.name}</div>
+                  <div style={{fontSize:10.5,color:C.textMut}}>{r.email}</div>
+                </div>
+                <div style={{fontSize:11,fontWeight:700,
+                  color:r.sendError?C.red:r.clickedAt?C.red:r.sentAt?C.green:C.textMut}}>
+                  {r.sendError ? "Send failed" : r.clickedAt ? "Clicked" : r.sentAt ? "Sent, no click" : "Pending"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -5814,6 +6079,78 @@ function LearnerPage({ token }) {
         )}
         <div style={{marginTop:30,textAlign:"center",fontSize:11,color:C.textMut}}>
           Powered by ShieldAI · Your progress is private to your organization.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  PHISH REVEAL PAGE — the public landing page a simulated-phishing link
+//  points to. No login, no fake credential form: this is the teaching
+//  moment, not the trap. Shows exactly what should have tipped off the
+//  reader for THIS specific email, not a generic phishing-awareness list.
+// ─────────────────────────────────────────────────────────────
+function PhishRevealPage({ token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const ink = C.text, dim = C.textSec, line = C.border, deep = C.bg;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/phish/${encodeURIComponent(token)}`);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "This link isn't valid.");
+        setData(d);
+      } catch (e) { setError(e.message); }
+      finally { setLoading(false); }
+    })();
+  }, [token]);
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{maxWidth:560,width:"100%"}}>
+        {loading ? (
+          <div style={{display:"flex",justifyContent:"center"}}><Spinner/></div>
+        ) : error ? (
+          <div style={{textAlign:"center",color:C.red,fontSize:14}}>{error}</div>
+        ) : (
+          <div style={{background:C.card,border:`1px solid ${C.amber}44`,borderRadius:16,padding:"32px 30px",textAlign:"center"}}>
+            <div style={{fontSize:36,marginBottom:14}}>🎣</div>
+            <div style={{display:"inline-block",padding:"5px 14px",borderRadius:20,background:`${C.amber}18`,
+              border:`1px solid ${C.amber}44`,color:C.amber,fontSize:11.5,fontWeight:700,letterSpacing:0.5,marginBottom:16}}>
+              SIMULATED PHISHING TEST
+            </div>
+            <h1 style={{fontSize:22,fontWeight:800,margin:"0 0 10px",lineHeight:1.3}}>
+              {data.learnerName ? `Hi ${data.learnerName.split(" ")[0]}, this` : "This"} was a security awareness test.
+            </h1>
+            <p style={{fontSize:14,color:dim,lineHeight:1.6,margin:"0 0 24px"}}>
+              No harm done — this email was sent by your organization's security program to help build
+              awareness of real phishing tactics. Here's what could have tipped you off in this specific message:
+            </p>
+            <div style={{textAlign:"left",background:C.surface,border:`1px solid ${line}`,borderRadius:12,
+              padding:"18px 20px"}}>
+              <div style={{fontSize:11,color:C.textMut,letterSpacing:1,marginBottom:10,fontWeight:700}}>
+                "{data.scenarioName}" — red flags
+              </div>
+              {data.redFlags.map((flag, i) => (
+                <div key={i} style={{display:"flex",gap:10,marginBottom:i<data.redFlags.length-1?12:0}}>
+                  <div style={{color:C.amber,fontSize:13,flexShrink:0}}>⚠</div>
+                  <div style={{fontSize:13,color:ink,lineHeight:1.6}}>{flag}</div>
+                </div>
+              ))}
+            </div>
+            <p style={{fontSize:12,color:C.textMut,marginTop:20,lineHeight:1.6}}>
+              If you clicked in a real situation, the right move is always the same: don't enter any
+              information, and report the email to your IT or security contact.
+            </p>
+          </div>
+        )}
+        <div style={{marginTop:24,textAlign:"center",fontSize:11,color:C.textMut}}>
+          Powered by ShieldAI
         </div>
       </div>
     </div>
@@ -14649,6 +14986,11 @@ export default function ShieldAI() {
   const trainMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/train\/([^/?#]+)/);
   if (trainMatch) {
     return <LearnerPage token={decodeURIComponent(trainMatch[1])}/>;
+  }
+
+  const phishMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/phish\/([^/?#]+)/);
+  if (phishMatch) {
+    return <PhishRevealPage token={decodeURIComponent(phishMatch[1])}/>;
   }
 
   // Checking for a persisted login + resumable page (see the mount effect

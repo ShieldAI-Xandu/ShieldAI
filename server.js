@@ -58,6 +58,7 @@ import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+import { registerPhishingRoutes } from "./phishingRoutes.js";
 // Reporting: aggregates posture/compliance/tasks/evidence/endpoints/training
 // plus the clientActions trail into four branded, Word-openable report types.
 // Clients self-serve status/update; staff produce compliance/insurance/legal
@@ -1595,6 +1596,7 @@ registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
+registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 
 // ─────────────────────────────────────────────────────────────
