@@ -229,6 +229,28 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
   //  CLIENT BILLING ROUTES (authenticated user, own billing)
   // ════════════════════════════════════════════════════════════
 
+  // Plan catalog for the client-facing "Plan & Billing" screen. Static data —
+  // works whether or not Stripe is configured, since the UI needs tier names/
+  // prices/features to render even before checkout is wired up. `configured`
+  // tells the frontend whether the "Upgrade" buttons will actually work yet.
+  app.get("/api/billing/plans", requireAuth, (req, res) => {
+    const plans = TIER_ORDER.map(id => {
+      const t = TIERS[id];
+      return {
+        id: t.id, name: t.name, priceCents: t.priceCents, interval: t.interval,
+        description: t.description, features: t.features,
+        selfServe: SELF_SERVE_PAID_TIERS.includes(t.id),
+        hasStripePrice: !!t.stripePriceId,
+      };
+    });
+    const addons = Object.values(ADDONS).map(a => ({
+      id: a.id, name: a.name, priceCents: a.priceCents, interval: a.interval,
+      description: a.description, availableFor: a.availableFor,
+      hasStripePrice: !!a.stripePriceId,
+    }));
+    res.json({ plans, addons, configured: !!stripe });
+  });
+
   // Start a Checkout Session to subscribe to a paid tier.
   // body: { tier: "starter"|"growth"|"guided" }  (free is set directly; managed = contact sales)
   app.post("/api/billing/checkout", requireAuth, async (req, res) => {
@@ -322,8 +344,13 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
   app.get("/api/billing/me", requireAuth, (req, res) => {
     const sub = getSub(req.userId);
     const user = findUser(req.userId);
+    const addonIds = new Set([
+      ...(Array.isArray(user?.addons) ? user.addons : []),
+      ...(Array.isArray(sub?.addons) ? sub.addons : []),
+    ]);
     res.json({
       tier: user?.tier || DEFAULT_TIER,
+      addons: [...addonIds],
       subscription: sub ? {
         status: sub.status, currentPeriodEnd: sub.currentPeriodEnd,
         hasStripe: !!sub.stripeCustomerId,

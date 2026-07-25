@@ -21,8 +21,28 @@
 //
 // THE DEADLINE
 // ------------
-// CMMC Phase 2 begins 10 November 2026. Assessors evaluate Level 2 against
-// Rev 2's 110 controls — not Rev 3. See nist800171.js for why that matters.
+// CMMC Phase 2 begins 10 November 2026. Third-party (C3PAO) certification
+// becomes a condition of contract award for contractors handling CUI on
+// that date. Treat this as the live, active planning deadline.
+//
+// On 13 July 2026 DoD announced a 60-day review of the CMMC program and
+// paused new Phase 2 solicitation requirements while that review runs
+// (RFI responses were due 14 August 2026). This is a pause for review, not
+// a repeal, and could as easily end in reinstating 10 November 2026 as in
+// changing it. Per direction (2026-07-24): ShieldAI keeps 10 November 2026
+// as the operative deadline clients plan against, rather than leading with
+// "suspended" — a client who stops preparing over a paused-not-cancelled
+// review is worse off than one who kept going. Re-verify as the date nears.
+//
+// NAMING
+// ------
+// Some recent DoD communications (including the CMMC program's own site)
+// brand the department as the "Department of War," following an executive
+// order and a House NDAA amendment. Renaming an executive department is a
+// legislative act, and only Congress can do it. Per direction (2026-07-24),
+// ShieldAI refers to it as the Department of Defense in all product content
+// until that legislation is actually enacted, regardless of the
+// department's current self-branding.
 //
 // COPYRIGHT: none. CMMC is a US Government programme; 32 CFR Part 170 is
 // federal regulation and public domain.
@@ -49,13 +69,13 @@ export const CMMC_META = {
   url: "https://dodcio.defense.gov/CMMC/",
   depth: "control-mapped",
   summary:
-    "The DoD's certification programme for defence contractors. It doesn't add new controls — it puts teeth on NIST SP 800-171 by requiring assessment and, at higher levels, third-party certification.",
+    "The DoD's certification programme for defense contractors. It doesn't add new controls — it puts teeth on NIST SP 800-171 by requiring assessment and, at higher levels, third-party certification.",
   whoMustComply:
     "Contractors and subcontractors in the Defense Industrial Base. Which level applies is written into your contract and depends on whether you handle Federal Contract Information (FCI) or Controlled Unclassified Information (CUI).",
   keyPoint:
     "CMMC is an assessment programme, not a control catalogue. Level 2 is NIST SP 800-171 Rev 2's 110 controls. If you've done the 800-171 work, you've done the CMMC work — what remains is evidence, an SSP, and the assessment itself.",
   deadline:
-    "Phase 2 begins 10 November 2026. Level 2 assessments are evaluated against Rev 2's 110 controls.",
+    "Phase 2 begins 10 November 2026. Level 2 assessments are evaluated against Rev 2's 110 controls. Keep preparing for this date. (Context: on 13 July 2026 DoD paused new Phase 2 solicitation requirements pending a 60-day program review — a pause for review, not a cancellation. Confirm current status with your contracting officer as the date nears.)",
   revisionNote:
     "CMMC Level 2 references NIST SP 800-171 **Rev 2**, not Rev 3. The CMMC Final Rule states Rev 3 is not currently applicable, and DoD holds a waiver keeping contractors on Rev 2. Rev 3 is expected to arrive through future rulemaking around late 2026–2027 with a transition period.",
 };

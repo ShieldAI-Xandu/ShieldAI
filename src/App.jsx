@@ -5241,6 +5241,7 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"report",      icon:"📋", label:"Exec Report",       badge:null },
     { id:"reports",     icon:"📑", label:"Reports",           badge:null },
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
+    { id:"billing",     icon:"💳", label:"Plan & Billing",    badge:null },
   ];
 
   // Locked teasers, shown instead of the real (or silently empty) component
@@ -5310,6 +5311,7 @@ function Dashboard({ assessment, results, onReset }) {
     report:     !hasPrograms ? lockedSections.report : <ExecReportSection assessment={assessment} results={results}/>,
     reports:    !hasReports ? lockedSections.reports : <ReportsSection/>,
     library:    !hasPrograms ? lockedSections.library : <PolicyLibrarySection assessment={assessment}/>,
+    billing:    <PlanBillingSection/>,
   };
 
 
@@ -13739,14 +13741,236 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  PLAN & BILLING (client-facing) — view current plan, self-serve upgrade,
+//  manage add-ons, open the Stripe portal. Every action degrades gracefully
+//  to a clear "not live yet, contact your admin" message when Stripe isn't
+//  configured (needStripe() on the backend returns 503) — nothing here
+//  requires Stripe to be live to be useful; it just won't complete checkout.
+// ─────────────────────────────────────────────────────────────
+function PlanBillingSection() {
+  const [plans, setPlans] = useState([]);
+  const [addons, setAddons] = useState([]);
+  const [configured, setConfigured] = useState(false);
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);   // tier id, addon id, or "portal"
+  const [msg, setMsg] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [plansRes, meRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/billing/plans`),
+        authFetch(`${API_BASE}/api/billing/me`),
+      ]);
+      const plansData = await plansRes.json();
+      const meData = await meRes.json();
+      if (!plansRes.ok) throw new Error(plansData.error || "Could not load plans.");
+      if (!meRes.ok) throw new Error(meData.error || "Could not load your billing info.");
+      setPlans(plansData.plans || []);
+      setAddons(plansData.addons || []);
+      setConfigured(!!plansData.configured);
+      setMe(meData);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function upgrade(tierId) {
+    setBusy(tierId); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/checkout`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: tierId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      setMsg(data.error || "Checkout isn't available yet. Contact your ShieldAI admin to upgrade.");
+    } catch {
+      setMsg("Couldn't start checkout. Contact your ShieldAI admin to upgrade.");
+    } finally { setBusy(null); }
+  }
+
+  async function buyAddon(addonId) {
+    setBusy(addonId); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/checkout-addon`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addon: addonId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      setMsg(data.error || "This add-on isn't available for checkout yet.");
+    } catch {
+      setMsg("Couldn't start checkout for this add-on.");
+    } finally { setBusy(null); }
+  }
+
+  async function openPortal() {
+    setBusy("portal"); setMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/portal`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      setMsg(data.error || "Billing portal isn't available yet.");
+    } catch {
+      setMsg("Couldn't open the billing portal.");
+    } finally { setBusy(null); }
+  }
+
+  if (loading) return <div style={{padding:"40px 0",display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error) return <div style={{padding:20,color:C.red,fontSize:13}}>{error}</div>;
+
+  const currentTierId = me?.tier || "free";
+  const currentIdx = plans.findIndex(p => p.id === currentTierId);
+  const current = currentIdx >= 0 ? plans[currentIdx] : null;
+
+  return (
+    <div>
+      <SectionLabel text="Plan & Billing"/>
+
+      {!configured && (
+        <div style={{padding:"10px 14px",background:`${C.amber}15`,border:`1px solid ${C.amber}44`,
+          borderRadius:8,color:C.amber,fontSize:12.5,marginBottom:16,lineHeight:1.5}}>
+          Self-serve billing isn't turned on for this account yet — contact your ShieldAI admin to
+          change plans. Everything below shows what's available.
+        </div>
+      )}
+      {msg && (
+        <div style={{padding:"10px 14px",background:`${C.amber}15`,border:`1px solid ${C.amber}44`,
+          borderRadius:8,color:C.amber,fontSize:12.5,marginBottom:16}}>
+          {msg}
+        </div>
+      )}
+
+      {/* Current plan summary */}
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px",marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <div style={{color:C.textMut,fontSize:11,letterSpacing:1,textTransform:"uppercase"}}>Current Plan</div>
+          {me?.subscription?.status && (
+            <div style={{fontSize:11,color:me.subscription.status==="active"?C.green:C.amber,
+              fontWeight:600,textTransform:"capitalize"}}>{me.subscription.status}</div>
+          )}
+        </div>
+        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:4}}>
+          <div style={{fontSize:22,fontWeight:800,color:C.text}}>{current?.name || currentTierId}</div>
+          <div style={{fontSize:14,color:C.textSec}}>
+            {current ? (current.priceCents === 0 ? "Free" : `$${(current.priceCents/100).toFixed(0)}/mo`) : ""}
+          </div>
+        </div>
+        {me?.subscription?.currentPeriodEnd && (
+          <div style={{fontSize:12,color:C.textMut}}>
+            Renews {new Date(me.subscription.currentPeriodEnd).toLocaleDateString()}
+          </div>
+        )}
+        {me?.addons?.includes("training_delivery") && (
+          <div style={{marginTop:8,fontSize:12,color:C.green}}>✓ Training Delivery add-on active</div>
+        )}
+        {me?.subscription?.hasStripe && (
+          <button onClick={openPortal} disabled={busy==="portal"}
+            style={{marginTop:12,padding:"8px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:12.5,cursor:busy==="portal"?"default":"pointer"}}>
+            {busy==="portal" ? "Opening…" : "Manage Billing →"}
+          </button>
+        )}
+      </div>
+
+      {/* Plan comparison */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:12,marginBottom:28}}>
+        {plans.map(p => {
+          const idx = plans.findIndex(x => x.id === p.id);
+          const isCurrent = p.id === currentTierId;
+          const isUpgrade = idx > currentIdx;
+          return (
+            <div key={p.id} style={{padding:"16px",background:isCurrent?`${C.accent}0d`:C.card,
+              border:`1px solid ${isCurrent?C.accent+"55":C.border}`,borderRadius:10,position:"relative"}}>
+              {isCurrent && <div style={{position:"absolute",top:10,right:10,fontSize:9,color:C.accent,
+                fontWeight:700,letterSpacing:0.5}}>CURRENT</div>}
+              <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{p.name}</div>
+              <div style={{fontSize:18,fontWeight:800,color:C.text,marginBottom:8}}>
+                {p.priceCents === 0 ? "Free" : `$${(p.priceCents/100).toFixed(0)}`}
+                {p.priceCents > 0 && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}>/mo</span>}
+              </div>
+              <div style={{fontSize:11,color:C.textMut,lineHeight:1.5,marginBottom:12,minHeight:44}}>{p.description}</div>
+              {isCurrent ? (
+                <div style={{fontSize:11,color:C.textMut,textAlign:"center",padding:"7px 0"}}>Your current plan</div>
+              ) : !p.selfServe ? (
+                <a href="mailto:sales@shieldai.com?subject=Managed%20vCISO%20inquiry"
+                  style={{display:"block",textAlign:"center",padding:"7px 0",background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:7,color:C.textSec,fontSize:12,textDecoration:"none"}}>
+                  Contact Sales
+                </a>
+              ) : isUpgrade ? (
+                <button onClick={() => upgrade(p.id)} disabled={busy === p.id}
+                  style={{width:"100%",padding:"7px 0",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                    border:"none",borderRadius:7,color:C.bg,fontSize:12,fontWeight:700,
+                    cursor:busy===p.id?"default":"pointer"}}>
+                  {busy === p.id ? "Starting…" : "Upgrade"}
+                </button>
+              ) : (
+                <div style={{fontSize:11,color:C.textMut,textAlign:"center",padding:"7px 0"}}>Contact admin to downgrade</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add-ons */}
+      {addons.length > 0 && (
+        <>
+          <SectionLabel text="Add-ons"/>
+          {addons.map(a => {
+            const active = me?.addons?.includes(a.id);
+            const available = a.availableFor.includes(currentTierId);
+            return (
+              <div key={a.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                gap:16,padding:"14px 16px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.text}}>{a.name}</div>
+                  <div style={{fontSize:11.5,color:C.textMut,marginTop:2,maxWidth:440}}>{a.description}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:6}}>
+                    ${(a.priceCents/100).toFixed(0)}/mo
+                  </div>
+                  {active ? (
+                    <div style={{fontSize:11,color:C.green,fontWeight:600}}>✓ Active</div>
+                  ) : available ? (
+                    <button onClick={() => buyAddon(a.id)} disabled={busy === a.id}
+                      style={{padding:"6px 14px",background:C.green,border:"none",borderRadius:7,
+                        color:C.bg,fontSize:11.5,fontWeight:700,cursor:busy===a.id?"default":"pointer"}}>
+                      {busy === a.id ? "Starting…" : "Add"}
+                    </button>
+                  ) : (
+                    <div style={{fontSize:11,color:C.textMut}}>Included in your plan</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  UPGRADE PROMPT (shown when a tier gate blocks an action)
 // ─────────────────────────────────────────────────────────────
 function UpgradeModal({ info, onClose }) {
   const [addonBusy, setAddonBusy] = useState(false);
   const [addonMsg, setAddonMsg] = useState(null);
+  const [tierBusy, setTierBusy] = useState(false);
+  const [tierMsg, setTierMsg] = useState(null);
   if (!info) return null;
   const isLimit = info.code === "LIMIT_REACHED";
   const isTrainingAddon = info.addon === "training_delivery";
+  // The backend names the specific tier that unlocks this (see tierGate.js).
+  // Older/hardcoded prompts that predate that change may not carry it — the
+  // UI falls back to a generic "contact your admin" message in that case.
+  const hasTierTarget = !isTrainingAddon && !!info.requiresTier;
 
   async function buyTrainingAddon() {
     setAddonBusy(true); setAddonMsg(null);
@@ -13762,6 +13986,22 @@ function UpgradeModal({ info, onClose }) {
     } catch {
       setAddonMsg("Couldn't start checkout. Contact your ShieldAI admin to add training delivery.");
     } finally { setAddonBusy(false); }
+  }
+
+  async function upgradeTier() {
+    setTierBusy(true); setTierMsg(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/billing/checkout`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: info.requiresTier }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      // Billing not yet live (Stripe price unset) — explain gracefully rather than error.
+      setTierMsg(data.error || "Self-serve upgrade isn't live yet. Contact your ShieldAI admin to change your plan.");
+    } catch {
+      setTierMsg("Couldn't start checkout. Contact your ShieldAI admin to upgrade your plan.");
+    } finally { setTierBusy(false); }
   }
 
   return (
@@ -13791,7 +14031,17 @@ function UpgradeModal({ info, onClose }) {
             </div>
           </div>
         )}
+        {hasTierTarget && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between"}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:14}}>{info.requiresTierName || info.requiresTier}</span>
+              {info.requiresPrice && <span style={{color:C.accent,fontWeight:800,fontSize:15}}>{info.requiresPrice}</span>}
+            </div>
+          </div>
+        )}
         {addonMsg && <div style={{color:C.amber,fontSize:12,marginBottom:12,lineHeight:1.5}}>{addonMsg}</div>}
+        {tierMsg && <div style={{color:C.amber,fontSize:12,marginBottom:12,lineHeight:1.5}}>{tierMsg}</div>}
 
         <div style={{display:"flex",gap:8,justifyContent:"center"}}>
           <button onClick={onClose}
@@ -13804,6 +14054,13 @@ function UpgradeModal({ info, onClose }) {
                 cursor:addonBusy?"default":"pointer",opacity:addonBusy?0.7:1}}>
               {addonBusy ? "Starting…" : "Add for $40/mo"}
             </button>
+          ) : hasTierTarget ? (
+            <button onClick={upgradeTier} disabled={tierBusy}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                cursor:tierBusy?"default":"pointer",opacity:tierBusy?0.7:1}}>
+              {tierBusy ? "Starting…" : `Upgrade to ${info.requiresTierName || info.requiresTier}`}
+            </button>
           ) : (
             <button onClick={onClose}
               style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -13815,7 +14072,9 @@ function UpgradeModal({ info, onClose }) {
         <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
           {isTrainingAddon
             ? "Or upgrade to Growth or higher, where training delivery is included."
-            : "Contact your ShieldAI admin to change your subscription tier."}
+            : hasTierTarget
+              ? "You can also view the full plan comparison under Plan & Billing."
+              : "Contact your ShieldAI admin to change your subscription tier."}
         </div>
       </div>
     </div>

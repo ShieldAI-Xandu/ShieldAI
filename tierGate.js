@@ -14,7 +14,7 @@
 //   { error, code: "UPGRADE_REQUIRED" | "LIMIT_REACHED", capability?, resource?,
 //     currentTier, limit?, current? }
 
-import { getTier, hasCapability, hasTrainingDelivery, DEFAULT_TIER } from "./tiers.js";
+import { getTier, hasCapability, hasTrainingDelivery, DEFAULT_TIER, minTierForCapability, nextTierForLimit, priceLabel } from "./tiers.js";
 
 export function makeTierGate(db) {
   function tierOf(userId) {
@@ -41,11 +41,15 @@ export function makeTierGate(db) {
       if (req.isAdmin || req.isAnalyst) return next();
       const tier = tierOf(req.userId);
       if (hasCapability(tier, cap)) return next();
+      const minTier = minTierForCapability(cap);
       return res.status(402).json({
         error: `Your current plan doesn't include this feature.`,
         code: "UPGRADE_REQUIRED",
         capability: cap,
         currentTier: tier,
+        requiresTier: minTier,
+        requiresTierName: minTier ? getTier(minTier).name : null,
+        requiresPrice: minTier ? priceLabel(minTier) : null,
       });
     };
   }
@@ -60,6 +64,7 @@ export function makeTierGate(db) {
       if (cap == null) return next();                 // unlimited
       const current = countFn(db, req.userId);
       if (current < cap) return next();
+      const nextTier = nextTierForLimit(tier, resource, current + 1);
       return res.status(402).json({
         error: `You've reached your plan's limit of ${cap} ${resource}. Upgrade for more.`,
         code: "LIMIT_REACHED",
@@ -67,6 +72,9 @@ export function makeTierGate(db) {
         currentTier: tier,
         limit: cap,
         current,
+        requiresTier: nextTier,
+        requiresTierName: nextTier ? getTier(nextTier).name : null,
+        requiresPrice: nextTier ? priceLabel(nextTier) : null,
       });
     };
   }
@@ -85,6 +93,9 @@ export function makeTierGate(db) {
         capability: "trainingDelivery",
         addon: "training_delivery",
         currentTier: tier,
+        requiresTier: "growth",
+        requiresTierName: getTier("growth").name,
+        requiresPrice: priceLabel("growth"),
       });
     };
   }

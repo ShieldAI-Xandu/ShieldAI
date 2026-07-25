@@ -8,7 +8,8 @@
     "build": "vite build",
     "start": "node server.js",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "stripe:setup": "node scripts/setupStripeProducts.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

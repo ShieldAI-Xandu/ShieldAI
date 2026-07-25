@@ -337,4 +337,31 @@ export function addonPriceLabel(addonId) {
   return `$${(a.priceCents / 100).toFixed(0)}/${a.interval}`;
 }
 
+// For a given capability flag, the lowest tier that includes it (per
+// FEATURE_CATALOG). Used by tierGate.js so a 402 response can tell the
+// frontend which tier would unlock the feature — a specific "Upgrade to
+// Growth ($349/mo)" CTA instead of a generic "contact your admin" message.
+// Returns null if the capability isn't in FEATURE_CATALOG (the gate still
+// works; the frontend just falls back to a generic prompt).
+export function minTierForCapability(capability) {
+  const entry = FEATURE_CATALOG.find(f => f.capability === capability);
+  return entry ? entry.minTier : null;
+}
+
+// For a numeric resource limit, the next tier (above `tierId`) that would
+// raise or remove the limit enough to allow `neededCount`. Walks TIER_ORDER
+// upward rather than assuming "the next tier up always fixes it" — a limit
+// could in principle jump by more than one tier's worth of headroom.
+// Returns null if already at the top tier or no higher tier clears it.
+export function nextTierForLimit(tierId, resource, neededCount) {
+  const idx = TIER_ORDER.indexOf(tierId);
+  if (idx === -1) return null;
+  for (let i = idx + 1; i < TIER_ORDER.length; i++) {
+    const candidate = TIER_ORDER[i];
+    const cap = getTier(candidate).limits?.[resource];
+    if (cap == null || cap >= neededCount) return candidate;
+  }
+  return null;
+}
+
 export default TIERS;
