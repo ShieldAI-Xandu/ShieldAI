@@ -622,7 +622,22 @@ function IntakeChat({ onComplete }) {
               display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20}/></div>
             <div style={{maxWidth:"75%",padding:"12px 16px",borderRadius:"4px 16px 16px 16px",
               background:C.card,border:`1px solid ${C.border}`,color:C.text,fontSize:14,lineHeight:1.7}}>
-              {streaming ? <ChatMarkdown text={streaming} color={C.text} mutedColor={C.textSec}/> : <Spinner/>}
+              {/* The intake system prompt outputs ONLY the raw <ASSESSMENT_DONE>
+                  {...json...} block once the interview is complete — no
+                  conversational preamble. Rendering that block as it streams
+                  in would show the raw tag/JSON in the chat bubble, which
+                  reads as broken/technical rather than "thinking". Any
+                  ordinary conversational reply always starts with a letter,
+                  never "<", so this is a safe way to detect that case and
+                  swap in a clean status message instead. */}
+              {streaming
+                ? (streaming.trimStart().startsWith("<")
+                    ? <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <Spinner/>
+                        <span style={{color:C.textSec}}>Compiling your assessment…</span>
+                      </div>
+                    : <ChatMarkdown text={streaming} color={C.text} mutedColor={C.textSec}/>)
+                : <Spinner/>}
             </div>
           </div>
         )}
