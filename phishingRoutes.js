@@ -3,14 +3,23 @@
 // enrolled learners, track who clicks, and turn the result into a teaching
 // moment (not a gotcha) via the public reveal page.
 //
-// Gated on the same `trainingDelivery` capability as the rest of the
-// training product (Growth+ bundled, Starter add-on) — this is treated as
-// an extension of employee training delivery, not a separate priced thing.
-// If that's wrong for how you want to price it, it's a one-line change in
-// the gate.trainingDelivery() calls in server.js.
+// PRICING (2026-07-25): ongoing campaigns are gated on the same
+// `trainingDelivery` capability as the rest of the training product (Growth+
+// bundled, Starter add-on) — treated as an extension of employee training
+// delivery, not a separate priced thing. BUT every client without
+// trainingDelivery gets exactly ONE free trial campaign, sent to up to 3
+// ad-hoc recipients (name/email typed directly — no learner enrollment
+// required, so it doesn't depend on the also-gated learner CRUD in
+// trainingProgramRoutes.js). This is the SMB-competitiveness lever: a
+// Starter prospect gets to see "2 of 3 people clicked" once, for real,
+// before being asked to pay for ongoing campaigns. See tiers.js for the
+// full reasoning.
 //
-// Reuses the existing `learners` collection from trainingProgramRoutes.js —
-// a campaign targets real enrolled learners, not a separate contact list.
+// Reuses the existing `learners` collection from trainingProgramRoutes.js for
+// paying customers — a normal campaign targets real enrolled learners. The
+// one-time trial campaign instead carries `adHocRecipients` directly on the
+// campaign/result rows (see ensureCollections below) so it never touches
+// learner enrollment at all.
 //
 // Requires emailService.js to be configured (RESEND_API_KEY) to actually
 // send. Without it, campaign creation still works; /send returns a clear
@@ -20,10 +29,34 @@
 import { randomUUID } from "crypto";
 import { getScenario, scenarioSummaries, renderScenario } from "./phishingScenarios.js";
 import { sendEmail, emailConfigured } from "./emailService.js";
+import { hasTrainingDelivery, getTier, priceLabel, getAddon } from "./tiers.js";
 
 function ensureCollections(db) {
-  db.data.phishingCampaigns ||= []; // { id, clientUserId, name, scenarioId, learnerIds[], status, createdBy, createdAt, sentAt }
-  db.data.phishingResults  ||= []; // { id, campaignId, learnerId, token, sentAt, sendError, clickedAt }
+  // isTrial: true marks the one free campaign a non-paying client is allowed.
+  // adHocRecipients: [{id,name,email}] populated ONLY on a trial campaign —
+  // normal campaigns keep targeting real learners via learnerIds.
+  db.data.phishingCampaigns ||= []; // { id, clientUserId, name, scenarioId, learnerIds[], adHocRecipients[]?, isTrial, status, createdBy, createdAt, sentAt }
+  db.data.phishingResults  ||= []; // { id, campaignId, learnerId?, recipientName?, recipientEmail?, token, sentAt, sendError, clickedAt }
+}
+
+// Has this client already used their one free trial campaign?
+function hasUsedTrial(db, clientUserId) {
+  return (db.data.phishingCampaigns || []).some(c => c.clientUserId === clientUserId && c.isTrial);
+}
+
+function upgradeMessage(tier) {
+  const addon = getAddon("training_delivery");
+  return {
+    error: "You've used your one free trial phishing campaign. Add Training Delivery ($40/mo) on your current plan, or upgrade to Growth, for ongoing campaigns.",
+    code: "UPGRADE_REQUIRED",
+    capability: "trainingDelivery",
+    currentTier: tier,
+    requiresTier: "growth",
+    requiresTierName: getTier("growth").name,
+    requiresPrice: priceLabel("growth"),
+    addon: "training_delivery",
+    addonPrice: addon ? `$${(addon.priceCents / 100).toFixed(0)}/mo` : null,
+  };
 }
 
 // Mirrors resolveClientScope in trainingProgramRoutes.js exactly — same
@@ -49,10 +82,11 @@ function campaignSummary(db, campaign) {
   const sent = results.filter(r => r.sentAt && !r.sendError);
   const failed = results.filter(r => r.sendError);
   const clicked = results.filter(r => r.clickedAt);
+  const targeted = campaign.learnerIds.length + (campaign.adHocRecipients?.length || 0);
   return {
     ...campaign,
     stats: {
-      targeted: campaign.learnerIds.length,
+      targeted,
       sent: sent.length,
       failed: failed.length,
       clicked: clicked.length,
@@ -106,27 +140,77 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     res.json({ configured: emailConfigured(), ...clientPhishingSummary(db, scope.clientUserId) });
   });
 
-  // Creating and sending a campaign is real training DELIVERY — the same
-  // capability that gates the rest of the training product. Viewing is not
-  // gated here since the frontend already only shows this tab to clients
-  // who have the capability; this is the backend's actual enforcement for
-  // the two actions that matter, per tierGate.js's own "UI hiding is
-  // cosmetic" principle.
-  app.post("/api/phishing/campaigns", requireAuth, gate.trainingDelivery(), (req, res) => {
+  // ── Trial eligibility (Starter/Free without trainingDelivery) ────
+  // `eligible` means: doesn't already have full delivery AND hasn't used the
+  // one free trial yet. Staff acting on behalf of a client see the CLIENT's
+  // eligibility, not their own (staff have no tier).
+  app.get("/api/phishing/trial-status", requireAuth, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
-    const { name, scenarioId, learnerIds } = req.body || {};
+    const tier = gate.tierOf(scope.clientUserId);
+    const hasFull = hasTrainingDelivery(tier, gate.addonsOf(scope.clientUserId));
+    res.json({
+      hasFullDelivery: hasFull,
+      used: hasUsedTrial(db, scope.clientUserId),
+      eligible: !hasFull && !hasUsedTrial(db, scope.clientUserId),
+      configured: emailConfigured(),
+    });
+  });
+
+  // Creating a campaign is real training DELIVERY for paying clients — same
+  // capability that gates the rest of the training product. A client WITHOUT
+  // that capability gets exactly one exception: a single trial campaign
+  // targeting up to 3 directly-typed recipients (no learner enrollment, which
+  // is itself gated). Viewing is not gated here since the frontend already
+  // only shows the full tab to clients who have the capability; this is the
+  // backend's actual enforcement, per tierGate.js's "UI hiding is cosmetic."
+  app.post("/api/phishing/campaigns", requireAuth, (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    const { name, scenarioId, learnerIds, adHocRecipients } = req.body || {};
     if (!name?.trim()) return res.status(400).json({ error: "Campaign name is required." });
     const scenario = getScenario(scenarioId);
     if (!scenario) return res.status(400).json({ error: "Unknown scenario." });
-    const ids = Array.isArray(learnerIds) ? learnerIds : [];
-    const validLearners = (db.data.learners || []).filter(l =>
-      l.clientUserId === scope.clientUserId && ids.includes(l.id) && l.status === "active");
-    if (!validLearners.length) return res.status(400).json({ error: "Select at least one active learner." });
+
+    const tier = gate.tierOf(scope.clientUserId);
+    const hasFull = hasTrainingDelivery(tier, gate.addonsOf(scope.clientUserId));
+    const isStaff = scope.role === "admin" || scope.role === "analyst";
+
+    if (hasFull || isStaff) {
+      // Normal path: real enrolled learners, unlimited campaigns.
+      const ids = Array.isArray(learnerIds) ? learnerIds : [];
+      const validLearners = (db.data.learners || []).filter(l =>
+        l.clientUserId === scope.clientUserId && ids.includes(l.id) && l.status === "active");
+      if (!validLearners.length) return res.status(400).json({ error: "Select at least one active learner." });
+
+      const campaign = {
+        id: randomUUID(), clientUserId: scope.clientUserId, name: name.trim(), scenarioId,
+        learnerIds: validLearners.map(l => l.id), adHocRecipients: [], isTrial: false, status: "draft",
+        createdBy: scope.role, createdAt: new Date().toISOString(), sentAt: null,
+      };
+      db.data.phishingCampaigns.push(campaign);
+      db.write();
+      return res.json(campaignSummary(db, campaign));
+    }
+
+    // Trial path — no trainingDelivery, and not staff acting with full access.
+    if (hasUsedTrial(db, scope.clientUserId)) {
+      return res.status(402).json(upgradeMessage(tier));
+    }
+    const recipients = Array.isArray(adHocRecipients) ? adHocRecipients : [];
+    const cleaned = recipients
+      .map(r => ({ id: randomUUID(), name: String(r?.name || "").trim().slice(0, 100), email: String(r?.email || "").trim().slice(0, 200) }))
+      .filter(r => r.name && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r.email));
+    if (!cleaned.length) {
+      return res.status(400).json({ error: "Add at least one recipient with a valid name and email for your trial test." });
+    }
+    if (cleaned.length > 3) {
+      return res.status(400).json({ error: "The free trial is limited to 3 recipients. Upgrade for ongoing campaigns with your full team." });
+    }
 
     const campaign = {
-      id: randomUUID(), clientUserId: scope.clientUserId, name: name.trim(), scenarioId,
-      learnerIds: validLearners.map(l => l.id), status: "draft",
+      id: randomUUID(), clientUserId: scope.clientUserId, name: name.trim() || "Free trial phishing test", scenarioId,
+      learnerIds: [], adHocRecipients: cleaned, isTrial: true, status: "draft",
       createdBy: scope.role, createdAt: new Date().toISOString(), sentAt: null,
     };
     db.data.phishingCampaigns.push(campaign);
@@ -140,9 +224,13 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === req.params.id && c.clientUserId === scope.clientUserId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
     const results = (db.data.phishingResults || []).filter(r => r.campaignId === campaign.id).map(r => {
-      const learner = (db.data.learners || []).find(l => l.id === r.learnerId);
-      return { learnerId: r.learnerId, name: learner?.name || "(removed)", email: learner?.email || "",
-        sentAt: r.sentAt, sendError: r.sendError || null, clickedAt: r.clickedAt || null };
+      const learner = r.learnerId ? (db.data.learners || []).find(l => l.id === r.learnerId) : null;
+      return {
+        learnerId: r.learnerId || null,
+        name: learner?.name || r.recipientName || "(removed)",
+        email: learner?.email || r.recipientEmail || "",
+        sentAt: r.sentAt, sendError: r.sendError || null, clickedAt: r.clickedAt || null,
+      };
     });
     res.json({ ...campaignSummary(db, campaign), results });
   });
@@ -160,31 +248,51 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
   });
 
   // ── Send ───────────────────────────────────────────────────────
-  app.post("/api/phishing/campaigns/:id/send", requireAuth, gate.trainingDelivery(), async (req, res) => {
+  app.post("/api/phishing/campaigns/:id/send", requireAuth, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === req.params.id && c.clientUserId === scope.clientUserId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
     if (campaign.status !== "draft") return res.status(400).json({ error: "This campaign has already been sent." });
+
+    // A trial campaign was already validated (one-per-client, ≤3 recipients)
+    // at creation time, so it's always sendable. Staff bypass entirely.
+    // Anyone else must currently have trainingDelivery to send.
+    const isStaff = scope.role === "admin" || scope.role === "analyst";
+    if (!campaign.isTrial && !isStaff) {
+      const tier = gate.tierOf(scope.clientUserId);
+      if (!hasTrainingDelivery(tier, gate.addonsOf(scope.clientUserId))) {
+        return res.status(402).json(upgradeMessage(tier));
+      }
+    }
+
     if (!emailConfigured()) {
       return res.status(503).json({ error: "Email sending is not configured. Set RESEND_API_KEY in the server environment — see PHISHING_SIMULATION_SETUP.md." });
     }
     const scenario = getScenario(campaign.scenarioId);
     const learners = (db.data.learners || []).filter(l => campaign.learnerIds.includes(l.id));
+    // Unify real learners and ad-hoc trial recipients into one send list.
+    const targets = [
+      ...learners.map(l => ({ email: l.email, name: l.name, learnerId: l.id })),
+      ...(campaign.adHocRecipients || []).map(r => ({ email: r.email, name: r.name, learnerId: null })),
+    ];
 
     campaign.status = "sending";
     await db.write();
 
     const APP_URL = process.env.APP_URL || "http://localhost:5173";
-    for (const learner of learners) {
+    for (const target of targets) {
       const token = randomUUID().replace(/-/g, "");
       const link = `${APP_URL}/phish/${token}`;
       const { subject, html, senderName } = renderScenario(scenario, { link });
       const result = await sendEmail({
-        to: learner.email, subject, html, fromName: senderName, fromLocal: scenario.senderLocal,
+        to: target.email, subject, html, fromName: senderName, fromLocal: scenario.senderLocal,
       });
       db.data.phishingResults.push({
-        id: randomUUID(), campaignId: campaign.id, learnerId: learner.id, token,
+        id: randomUUID(), campaignId: campaign.id, learnerId: target.learnerId,
+        recipientName: target.learnerId ? null : target.name,
+        recipientEmail: target.learnerId ? null : target.email,
+        token,
         sentAt: result.ok ? new Date().toISOString() : null,
         sendError: result.ok ? null : result.error,
         clickedAt: null,
@@ -209,11 +317,11 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     }
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === result.campaignId);
     const scenario = getScenario(campaign?.scenarioId);
-    const learner = (db.data.learners || []).find(l => l.id === result.learnerId);
+    const learner = result.learnerId ? (db.data.learners || []).find(l => l.id === result.learnerId) : null;
     res.json({
       scenarioName: scenario?.name || "Security Awareness Test",
       redFlags: scenario?.redFlags || [],
-      learnerName: learner?.name || null,
+      learnerName: learner?.name || result.recipientName || null,
     });
   });
 

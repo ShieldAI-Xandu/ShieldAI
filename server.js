@@ -59,6 +59,10 @@ import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
 import { registerPhishingRoutes } from "./phishingRoutes.js";
+// Ongoing vendor/third-party risk management (registry, reassessment cadence,
+// AI-grounded incoming-questionnaire assistant) — the layer that was missing
+// on top of the one-time vendor-risk policy template and checklist snapshot.
+import { registerVendorRoutes } from "./vendorRoutes.js";
 // Reporting: aggregates posture/compliance/tasks/evidence/endpoints/training
 // plus the clientActions trail into four branded, Word-openable report types.
 // Clients self-serve status/update; staff produce compliance/insurance/legal
@@ -1597,6 +1601,7 @@ registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extract
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
+registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 
 // ─────────────────────────────────────────────────────────────

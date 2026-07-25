@@ -34,6 +34,7 @@ export const TIERS = {
       trainingPrograms: 0,
       analystSupport: "none",        // none | limited | full
       complianceFrameworks: 0,       // additional (non-foundation) compliance frameworks
+      vendors: 0,                    // vendor registry entries (capped by tier; null = unlimited)
     },
     capabilities: {
       assessments: true,            // can run/view assessments
@@ -49,6 +50,8 @@ export const TIERS = {
       mastermindChat: false,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
       complianceAccess: false, // compliance workspace is paid-only — free sees the posture score only
       reportsAccess: false,    // status/update/compliance/insurance/legal reports are paid-only
+      vendorRegistry: false,             // ongoing vendor registry (add/track/reassess) — Starter+
+      vendorQuestionnaireAssistant: false, // AI-grounded incoming-questionnaire responder — Growth+
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -60,7 +63,7 @@ export const TIERS = {
     priceCents: 15900,              // $159/mo
     interval: "month",
     stripePriceId: null,
-    description: "Multiple assessments, programs, up to 6 policies, tool recommendations, and 2 compliance frameworks. Monitor up to 5 endpoints. Training and reports are add-ons or higher-tier features.",
+    description: "Multiple assessments, programs, up to 6 policies, tool recommendations, 2 compliance frameworks, and a vendor risk registry. Monitor up to 5 endpoints. Training delivery, phishing, and reports are add-ons or higher-tier features.",
     limits: {
       endpoints: 5,
       policies: 6,
@@ -68,6 +71,7 @@ export const TIERS = {
       trainingPrograms: 1,          // 1 recommended training plan
       analystSupport: "none",
       complianceFrameworks: 2,      // beyond the NIST/CIS foundation lens, chosen at intake
+      vendors: 5,                   // vendor registry entries — plenty for a small business's real vendor count
     },
     capabilities: {
       assessments: true,
@@ -85,10 +89,18 @@ export const TIERS = {
       reportsAccess: false,   // Reports are Growth+
       evidenceAccess: false,  // Evidence & audit-readiness are Growth+
       workflowsAccess: false, // Incident-response workflows are Growth+
+      // Split from a single flag (2026-07-25): the registry costs nothing to run
+      // (a DB record) and makes Starter feel like a complete program rather than
+      // a locked demo, so it's included here, capped via limits.vendors. The AI
+      // questionnaire responder has real per-call AI cost AND is the stronger
+      // Growth upsell moment (a Starter client's first real customer
+      // questionnaire is exactly when they'll feel this paywall) — Growth+ only.
+      vendorRegistry: true,                // capped at limits.vendors (5)
+      vendorQuestionnaireAssistant: false, // Growth+
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
-    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Recommended tool stack", "2 compliance frameworks", "5 endpoints", "View-only training plan (full generation via add-on)", "No reports, evidence, or workflows"],
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Recommended tool stack", "2 compliance frameworks", "5 endpoints", "Vendor risk registry (up to 5 vendors)", "View-only training plan (full generation via add-on)", "1 free trial phishing test", "No reports, evidence, or workflows"],
   },
 
   growth: {
@@ -106,6 +118,7 @@ export const TIERS = {
       trainingPrograms: null,
       analystSupport: "none",
       complianceFrameworks: 5,
+      vendors: null,
     },
     capabilities: {
       assessments: true,
@@ -123,8 +136,10 @@ export const TIERS = {
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,
+      vendorRegistry: true,                // uncapped from Growth up
+      vendorQuestionnaireAssistant: true,   // BUNDLED from Growth up
     },
-    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence & workflows", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
+    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
 
   guided: {
@@ -142,6 +157,7 @@ export const TIERS = {
       trainingPrograms: null,
       analystSupport: "limited",
       complianceFrameworks: 10,
+      vendors: null,
     },
     capabilities: {
       assessments: true,
@@ -159,8 +175,10 @@ export const TIERS = {
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,
+      vendorRegistry: true,
+      vendorQuestionnaireAssistant: true, // plus periodic analyst review of anything flagged needsHumanInput
     },
-    features: ["Everything in Growth", "Periodic engineer review", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
+    features: ["Everything in Growth", "Periodic engineer review", "Analyst review of flagged questionnaire answers", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
 
   managed: {
@@ -178,6 +196,7 @@ export const TIERS = {
       trainingPrograms: null,
       analystSupport: "full",
       complianceFrameworks: null,   // unlimited — everything
+      vendors: null,
     },
     capabilities: {
       assessments: true,
@@ -195,8 +214,10 @@ export const TIERS = {
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,
+      vendorRegistry: true,
+      vendorQuestionnaireAssistant: true, // engineer owns the registry and drafts/delivers responses white-glove
     },
-    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
 };
 
@@ -237,7 +258,9 @@ export const FEATURE_CATALOG = [
   { key: "trainingDelivery", capability: "trainingDelivery", name: "Full training generation & delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
   { key: "reportsAccess",    capability: "reportsAccess",    name: "Status, compliance & insurance reports", minTier: "growth" },
   { key: "evidenceAccess",   capability: "evidenceAccess",   name: "Evidence & audit readiness", minTier: "growth" },
-  { key: "workflowsAccess",  capability: "workflowsAccess",  name: "Incident response workflows", minTier: "growth" },
+  { key: "workflowsAccess",  capability: "workflowsAccess",   name: "Incident response workflows", minTier: "growth" },
+  { key: "vendorRegistry", capability: "vendorRegistry", name: "Vendor risk registry (add/track/reassess vendors)", minTier: "starter" },
+  { key: "vendorQuestionnaireAssistant", capability: "vendorQuestionnaireAssistant", name: "AI-assisted incoming security questionnaire responses", minTier: "growth" },
   { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
   { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
 ];

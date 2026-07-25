@@ -2617,6 +2617,491 @@ function EvidenceSection() {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  VENDOR RISK MANAGEMENT.
+//  The ongoing layer on top of the one-time vendor-risk POLICY template
+//  (policyCatalog.js) and the one-time checklist SNAPSHOT (securityChecklist.js's
+//  vendorInventory/vendorDueDiligence/vendorContracts questions): a real
+//  registry with a computed reassessment due-date per vendor, plus AI-assisted
+//  help answering a security questionnaire a client's OWN customer sends them
+//  — grounded only in facts the backend can verify (see vendorRiskService.js's
+//  buildGroundingFacts), never fabricated. Reads/writes /api/client/vendors*.
+// ─────────────────────────────────────────────────────────────
+const VENDOR_CRITICALITY_COLOR = { critical: C.red, high: C.amber, medium: C.accent, low: C.textSec };
+const VENDOR_REVIEW_TONE = {
+  overdue:  { color: C.red,    label: "Overdue" },
+  due_soon: { color: C.amber,  label: "Due soon" },
+  current:  { color: C.green,  label: "Current" },
+  not_set:  { color: C.textMut,label: "Not scheduled" },
+};
+
+function emptyVendorForm() {
+  return {
+    name: "", category: "Other", criticality: "medium", dataAccessLevel: "limited",
+    contactName: "", contactEmail: "", contractStartDate: "", hasDataAgreement: false,
+    securityCertification: "", notes: "",
+  };
+}
+
+function VendorFormModal({ initial, meta, onSave, onClose, busy }) {
+  const [form, setForm] = useState(initial ? {
+    name: initial.name || "", category: initial.category || "Other",
+    criticality: initial.criticality || "medium", dataAccessLevel: initial.dataAccessLevel || "limited",
+    contactName: initial.contactName || "", contactEmail: initial.contactEmail || "",
+    contractStartDate: (initial.contractStartDate || "").slice(0,10),
+    hasDataAgreement: !!initial.hasDataAgreement,
+    securityCertification: initial.securityCertification || "", notes: initial.notes || "",
+  } : emptyVendorForm());
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const lbl = { display:"block", fontSize:11.5, color:C.textSec, fontWeight:600, marginBottom:5, marginTop:10 };
+  const inp = { width:"100%", padding:"9px 11px", background:C.surface, border:`1px solid ${C.border}`,
+    borderRadius:7, color:C.text, fontSize:13, fontFamily:"Inter,system-ui,sans-serif", boxSizing:"border-box" };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,padding:24,width:"100%",maxWidth:520,maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:4}}>
+          {initial ? "Edit vendor" : "Add a vendor"}
+        </div>
+        <p style={{fontSize:12,color:C.textMut,margin:"0 0 6px"}}>
+          Criticality sets the default reassessment cadence — critical every 6 months, high/medium every 12, low every 24.
+        </p>
+
+        <label style={lbl}>Vendor name</label>
+        <input value={form.name} onChange={e=>set("name",e.target.value)}
+          placeholder="e.g. AWS, Gusto, Acme IT Support" style={inp}/>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div>
+            <label style={lbl}>Category</label>
+            <select value={form.category} onChange={e=>set("category",e.target.value)} style={inp}>
+              {(meta.categories||[]).map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Criticality</label>
+            <select value={form.criticality} onChange={e=>set("criticality",e.target.value)} style={inp}>
+              {(meta.criticalityLevels||[]).map(c=><option key={c} value={c}>{c[0].toUpperCase()+c.slice(1)}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <label style={lbl}>Data access level</label>
+        <select value={form.dataAccessLevel} onChange={e=>set("dataAccessLevel",e.target.value)} style={inp}>
+          {(meta.dataAccessLevels||[]).map(c=><option key={c} value={c}>{c[0].toUpperCase()+c.slice(1)}</option>)}
+        </select>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div>
+            <label style={lbl}>Contact name</label>
+            <input value={form.contactName} onChange={e=>set("contactName",e.target.value)} style={inp}/>
+          </div>
+          <div>
+            <label style={lbl}>Contact email</label>
+            <input value={form.contactEmail} onChange={e=>set("contactEmail",e.target.value)} style={inp}/>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div>
+            <label style={lbl}>Contract start date</label>
+            <input type="date" value={form.contractStartDate} onChange={e=>set("contractStartDate",e.target.value)} style={inp}/>
+          </div>
+          <div>
+            <label style={lbl}>Security cert on file</label>
+            <input value={form.securityCertification} onChange={e=>set("securityCertification",e.target.value)}
+              placeholder="e.g. SOC 2 Type II" style={inp}/>
+          </div>
+        </div>
+
+        <label style={{...lbl,display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+          <input type="checkbox" checked={form.hasDataAgreement} onChange={e=>set("hasDataAgreement",e.target.checked)}/>
+          <span style={{marginTop:0}}>Has a signed DPA/BAA (or equivalent data agreement) on file</span>
+        </label>
+
+        <label style={lbl}>Notes</label>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3}
+          style={{...inp,resize:"vertical",fontFamily:"inherit"}}/>
+
+        <div style={{display:"flex",gap:10,marginTop:18,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
+          <button onClick={()=>onSave(form)} disabled={busy||!form.name.trim()}
+            style={{...miniBtn(C.accent,busy||!form.name.trim()),padding:"9px 16px",fontWeight:700}}>
+            {busy ? "Saving…" : (initial ? "Save changes" : "Add vendor")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VendorQuestionnaireTool() {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  async function loadHistory() {
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/questionnaires`);
+      const data = await res.json();
+      if (res.ok) setHistory(Array.isArray(data) ? data : []);
+    } catch { /* history is a convenience, fail quietly */ }
+  }
+  useEffect(() => { loadHistory(); }, []);
+
+  async function generate() {
+    if (!text.trim()) return;
+    setBusy(true); setError(null); setResult(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/questionnaire/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ questionnaireText: text.trim() }),
+      });
+      const data = await res.json();
+      if (res.status === 402) return showUpgradePrompt(data);
+      if (!res.ok) throw new Error(data.error || "Could not draft responses.");
+      setResult(data);
+      loadHistory();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function openSaved(id) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/questionnaires/${id}`);
+      const data = await res.json();
+      if (res.ok) { setResult(data); setText(data.questionnaireText || ""); setHistoryOpen(false); }
+    } catch { /* noop */ }
+  }
+
+  const needsInputCount = (result?.answers || []).filter(a => a.needsHumanInput).length;
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+        <SectionLabel text="Respond to an Incoming Security Questionnaire"/>
+        <AIChip/>
+        {history.length > 0 && (
+          <button onClick={()=>setHistoryOpen(o=>!o)}
+            style={{marginLeft:"auto",padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:7,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
+            {historyOpen ? "Hide" : "View"} past responses ({history.length})
+          </button>
+        )}
+      </div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 12px"}}>
+        Paste a security questionnaire one of <strong style={{color:C.text}}>your customers</strong> sent
+        <strong style={{color:C.text}}> you</strong>. Every answer is grounded only in what's actually true
+        about your program — anything it can't verify gets flagged for you to fill in, never guessed at.
+      </p>
+
+      {historyOpen && (
+        <div style={{marginBottom:14,display:"flex",flexDirection:"column",gap:6}}>
+          {history.map(h => (
+            <div key={h.id} onClick={()=>openSaved(h.id)}
+              style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:C.surface,
+                border:`1px solid ${C.border}`,borderRadius:7,cursor:"pointer",fontSize:12.5}}>
+              <span style={{color:C.text,flex:1}}>{new Date(h.createdAt).toLocaleString()}</span>
+              <span style={{color:C.textMut}}>{h.questionCount} question{h.questionCount===1?"":"s"}</span>
+              {h.needsInputCount > 0 && (
+                <span style={{color:C.amber,fontWeight:600}}>{h.needsInputCount} need input</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      <textarea value={text} onChange={e=>setText(e.target.value)} rows={6}
+        placeholder="Paste the questionnaire text here (numbered questions, a form export, an email — any format is fine)…"
+        style={{width:"100%",padding:"11px 13px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}/>
+
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}>
+        <button onClick={generate} disabled={busy||!text.trim()}
+          style={{padding:"9px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
+            cursor:busy||!text.trim()?"default":"pointer",opacity:busy||!text.trim()?0.5:1}}>
+          {busy ? "Drafting…" : "Draft responses"}
+        </button>
+      </div>
+
+      {result && (
+        <div style={{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <span style={{fontSize:12.5,fontWeight:700,color:C.text}}>
+              {result.answers.length} question{result.answers.length===1?"":"s"} drafted
+            </span>
+            {needsInputCount > 0 && (
+              <Badge label={`${needsInputCount} need your input`} color={C.amber}/>
+            )}
+          </div>
+          {result.answers.map((a, i) => (
+            <div key={i} style={{padding:"12px 14px",marginBottom:8,borderRadius:8,
+              background:a.needsHumanInput?`${C.amber}0d`:C.surface,
+              border:`1px solid ${a.needsHumanInput?C.amber+"33":C.border}`}}>
+              <div style={{fontSize:12.5,fontWeight:600,color:C.text,marginBottom:6}}>{safeText(a.question)}</div>
+              {a.needsHumanInput ? (
+                <div style={{fontSize:12,color:C.amber,lineHeight:1.5}}>
+                  <strong>Needs your input: </strong>{safeText(a.note) || "Not covered by your verified profile — confirm this before answering."}
+                </div>
+              ) : (
+                <div style={{fontSize:12.5,color:C.textSec,lineHeight:1.5}}>{safeText(a.answer)}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// Compact inline upgrade nudge for the questionnaire assistant specifically —
+// used INSIDE VendorRiskSection (which Starter can otherwise fully use for
+// the registry), so the full-page LockedFeature teaser would be wrong here:
+// only this one piece of the section is gated, not the whole thing.
+function VendorQuestionnaireLockedCard() {
+  return (
+    <Card style={{marginBottom:14,textAlign:"center",padding:"28px 20px"}}>
+      <div style={{fontSize:22,marginBottom:8}}>🔒</div>
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:6}}>
+        AI-Assisted Questionnaire Responses
+      </div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 16px",maxWidth:440,marginInline:"auto"}}>
+        When one of your customers sends you a security questionnaire, ShieldAI can draft grounded answers
+        from your actual program in seconds. This is a Growth-plan feature.
+      </p>
+      <button onClick={() => showUpgradePrompt({
+          error: "AI-assisted questionnaire responses aren't included on your current plan.",
+          code: "UPGRADE_REQUIRED", capability: "vendorQuestionnaireAssistant", currentTier: "starter",
+        })}
+        style={{padding:"9px 20px",borderRadius:9,border:"none",cursor:"pointer",
+          background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+          color:C.bg,fontSize:13,fontWeight:700}}>
+        Upgrade to Growth
+      </button>
+    </Card>
+  );
+}
+
+function VendorRiskSection() {
+  const { can } = useCapabilities();
+  const hasQuestionnaire = can("vendorQuestionnaireAssistant");
+  const [vendors, setVendors] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [meta, setMeta] = useState({ categories: [], criticalityLevels: [], dataAccessLevels: [] });
+  const [vendorCap, setVendorCap] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [modal, setModal] = useState(null); // null | "new" | vendor object being edited
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load your vendor registry.");
+      setVendors(data.vendors || []);
+      setSummary(data.summary || null);
+      setMeta(data.meta || { categories: [], criticalityLevels: [], dataAccessLevels: [] });
+      setVendorCap(data.limits?.vendors ?? null);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function saveVendor(form) {
+    setBusy(true); setError(null);
+    try {
+      const editing = modal && modal !== "new";
+      const url = editing ? `${API_BASE}/api/client/vendors/${modal.id}` : `${API_BASE}/api/client/vendors`;
+      const res = await authFetch(url, {
+        method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (res.status === 402) { setModal(null); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not save that vendor.");
+      setModal(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function reassess(v) {
+    const note = window.prompt(`Mark "${v.name}" as reassessed today?\n\nOptionally add a note about the review (e.g. "Reviewed current SOC 2 report — no new concerns"):`);
+    if (note === null) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/${v.id}/reassess`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: note || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not update that vendor.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(v) {
+    if (!window.confirm(`Remove "${v.name}" from your vendor registry? This cannot be undone.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/${v.id}`, { method: "DELETE" });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || "Could not remove that vendor.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const statTiles = summary ? [
+    { label: "Total vendors", value: summary.total, color: C.text },
+    { label: "Overdue", value: summary.overdue, color: C.red },
+    { label: "Due soon", value: summary.dueSoon, color: C.amber },
+    { label: "Current", value: summary.current, color: C.green },
+  ] : [];
+
+  const activeCount = vendors.filter(v => v.status !== "offboarded").length;
+  const atCap = vendorCap != null && activeCount >= vendorCap;
+
+  function handleAddClick() {
+    if (atCap) {
+      return showUpgradePrompt({
+        error: `You've used all ${vendorCap} vendor slots on your current plan.`,
+        code: "LIMIT_REACHED", resource: "vendors", currentTier: null,
+      });
+    }
+    setModal("new");
+  }
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <SectionLabel text="Vendor Risk Management"/>
+        {vendorCap != null && (
+          <span style={{fontSize:11.5,color:atCap?C.amber:C.textMut,fontWeight:600}}>
+            {activeCount} of {vendorCap} vendor slots used
+          </span>
+        )}
+        <button onClick={handleAddClick}
+          style={{marginLeft:"auto",padding:"7px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+          + Add vendor
+        </button>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {summary && summary.total > 0 && (
+            <Card style={{marginBottom:14}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))",gap:14}}>
+                {statTiles.map(t => (
+                  <div key={t.label} style={{textAlign:"center"}}>
+                    <div style={{fontSize:28,fontWeight:800,color:t.color,lineHeight:1}}>{t.value}</div>
+                    <div style={{fontSize:10.5,color:C.textMut,letterSpacing:0.8,marginTop:4,textTransform:"uppercase"}}>{t.label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          <Card style={{marginBottom:14}}>
+            {vendors.length === 0 ? (
+              <div style={{textAlign:"center",padding:"24px 12px"}}>
+                <p style={{color:C.textSec,fontSize:13,margin:"0 0 14px"}}>
+                  No vendors on file yet. Add the third parties who handle your data or systems — cloud hosting,
+                  payroll, IT support — and ShieldAI will track when each one is due for reassessment.
+                </p>
+                <button onClick={handleAddClick}
+                  style={{padding:"9px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                    borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                  + Add your first vendor
+                </button>
+              </div>
+            ) : (
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5}}>
+                  <thead>
+                    <tr style={{textAlign:"left",color:C.textMut,fontSize:11,letterSpacing:0.5}}>
+                      <th style={{padding:"8px 10px"}}>VENDOR</th>
+                      <th style={{padding:"8px 10px"}}>CATEGORY</th>
+                      <th style={{padding:"8px 10px"}}>CRITICALITY</th>
+                      <th style={{padding:"8px 10px"}}>DATA ACCESS</th>
+                      <th style={{padding:"8px 10px"}}>REVIEW STATUS</th>
+                      <th style={{padding:"8px 10px"}}>NEXT DUE</th>
+                      <th style={{padding:"8px 10px"}}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vendors.map(v => {
+                      const tone = VENDOR_REVIEW_TONE[v.reviewStatus] || VENDOR_REVIEW_TONE.not_set;
+                      return (
+                        <tr key={v.id} style={{borderTop:`1px solid ${C.border}`}}>
+                          <td style={{padding:"9px 10px",color:C.text,fontWeight:600}}>
+                            {v.name}
+                            {v.status === "offboarded" && <span style={{marginLeft:6,color:C.textMut,fontWeight:400}}>(offboarded)</span>}
+                          </td>
+                          <td style={{padding:"9px 10px",color:C.textSec}}>{v.category}</td>
+                          <td style={{padding:"9px 10px"}}>
+                            <Badge label={v.criticality[0].toUpperCase()+v.criticality.slice(1)} color={VENDOR_CRITICALITY_COLOR[v.criticality]}/>
+                          </td>
+                          <td style={{padding:"9px 10px",color:C.textSec}}>{v.dataAccessLevel}</td>
+                          <td style={{padding:"9px 10px"}}>
+                            <span style={{color:tone.color,fontWeight:600}}>{tone.label}</span>
+                          </td>
+                          <td style={{padding:"9px 10px",color:C.textSec}}>
+                            {v.nextReassessmentDue ? new Date(v.nextReassessmentDue).toLocaleDateString() : "—"}
+                          </td>
+                          <td style={{padding:"9px 10px",whiteSpace:"nowrap"}}>
+                            <button onClick={()=>reassess(v)} disabled={busy} style={{...miniBtn(C.green,busy),marginRight:6}}>Reassess</button>
+                            <button onClick={()=>setModal(v)} disabled={busy} style={{...miniBtn(C.accent,busy),marginRight:6}}>Edit</button>
+                            <button onClick={()=>remove(v)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          {hasQuestionnaire ? <VendorQuestionnaireTool/> : <VendorQuestionnaireLockedCard/>}
+        </>
+      )}
+
+      {modal && (
+        <VendorFormModal
+          initial={modal === "new" ? null : modal}
+          meta={meta}
+          busy={busy}
+          onSave={saveVendor}
+          onClose={()=>setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  NOTIFICATIONS — persistent bell in the dashboard top bar.
 //  Reads /api/notifications ({ unread, notifications }), marks single/all
 //  read. Polls lightly so analyst review outcomes surface without a reload.
@@ -3939,6 +4424,171 @@ function ToolsSection({ results }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  PHISHING TRIAL CARD.
+//  Shown to any account without full training delivery (Starter without the
+//  add-on, or Free) inside the training plan view. One free trial campaign,
+//  up to 3 directly-typed recipients — no learner enrollment required, since
+//  that's itself gated. Reuses the same campaign/send/reveal pipeline as the
+//  paid product (see phishingRoutes.js), just with ad-hoc recipients instead
+//  of enrolled learners.
+// ─────────────────────────────────────────────────────────────
+function PhishingTrialCard() {
+  const [status, setStatus] = useState(null);       // trial-status response
+  const [scenarios, setScenarios] = useState([]);
+  const [scenarioId, setScenarioId] = useState("");
+  const [recipients, setRecipients] = useState([{ name: "", email: "" }]);
+  const [trialCampaign, setTrialCampaign] = useState(null); // the sent trial, if any
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [statusRes, scenarioRes, campaignsRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/phishing/trial-status`),
+        authFetch(`${API_BASE}/api/phishing/scenarios`),
+        authFetch(`${API_BASE}/api/phishing/campaigns`),
+      ]);
+      const statusData = await statusRes.json();
+      const scenarioData = await scenarioRes.json();
+      const campaignsData = await campaignsRes.json();
+      setStatus(statusData);
+      setScenarios(Array.isArray(scenarioData) ? scenarioData : []);
+      if (Array.isArray(scenarioData) && scenarioData.length) setScenarioId(scenarioData[0].id);
+      const prior = Array.isArray(campaignsData) ? campaignsData.find(c => c.isTrial) : null;
+      if (prior) setTrialCampaign(prior);
+    } catch (e) { /* card degrades quietly — it's a bonus, not core functionality */ }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  function updateRecipient(i, field, value) {
+    setRecipients(rs => rs.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
+  }
+  function addRecipient() {
+    setRecipients(rs => rs.length < 3 ? [...rs, { name: "", email: "" }] : rs);
+  }
+  function removeRecipient(i) {
+    setRecipients(rs => rs.filter((_, idx) => idx !== i));
+  }
+
+  async function sendTrial() {
+    const cleaned = recipients
+      .map(r => ({ name: r.name.trim(), email: r.email.trim() }))
+      .filter(r => r.name && r.email);
+    if (!cleaned.length) { setError("Add at least one name and email."); return; }
+    setBusy(true); setError(null);
+    try {
+      const createRes = await authFetch(`${API_BASE}/api/phishing/campaigns`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Free trial phishing test", scenarioId, adHocRecipients: cleaned }),
+      });
+      const created = await createRes.json();
+      if (createRes.status === 402) return showUpgradePrompt(created);
+      if (!createRes.ok) throw new Error(created.error || "Could not create the trial campaign.");
+
+      const sendRes = await authFetch(`${API_BASE}/api/phishing/campaigns/${created.id}/send`, { method: "POST" });
+      const sent = await sendRes.json();
+      if (sendRes.status === 402) return showUpgradePrompt(sent);
+      if (sendRes.status === 503) throw new Error(sent.error || "Email sending isn't configured yet.");
+      if (!sendRes.ok) throw new Error(sent.error || "Could not send the trial test.");
+      setTrialCampaign(sent);
+      setStatus(s => ({ ...s, used: true, eligible: false }));
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  if (loading) return <Card style={{marginBottom:16}}><Spinner/></Card>;
+  if (!status) return null; // couldn't load — stay quiet, this is a bonus card
+
+  return (
+    <Card style={{marginBottom:16}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+        <SectionLabel text="Free Trial: Phishing Test"/>
+        <span style={{fontSize:11,color:C.textMut,padding:"2px 10px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:20}}>1 free, no add-on required</span>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {trialCampaign ? (
+        <div>
+          <p style={{fontSize:13,color:C.text,fontWeight:600,margin:"0 0 6px"}}>
+            Trial test sent to {trialCampaign.stats.targeted} people.
+          </p>
+          <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 12px"}}>
+            {trialCampaign.stats.clicked > 0
+              ? `${trialCampaign.stats.clicked} of ${trialCampaign.stats.sent} clicked the link so far — that's exactly the kind of real-world gap employee training closes.`
+              : "Check back in a day or two to see who clicked. Nobody has yet, or results are still coming in."}
+          </p>
+          <button onClick={() => showUpgradePrompt({
+              error: "Ongoing phishing campaigns need Training Delivery.",
+              code: "UPGRADE_REQUIRED", capability: "trainingDelivery", currentTier: "starter",
+            })}
+            style={{padding:"8px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+              borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            Upgrade for ongoing campaigns
+          </button>
+        </div>
+      ) : (
+        <>
+          <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>
+            See who on your team would actually click. Send one real, safe test phishing email to up to 3
+            people — no employee enrollment needed, and it costs nothing. Ongoing campaigns for your whole
+            team are part of Training Delivery.
+          </p>
+
+          {scenarios.length > 0 && (
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",fontSize:11.5,color:C.textSec,fontWeight:600,marginBottom:5}}>Scenario</label>
+              <select value={scenarioId} onChange={e=>setScenarioId(e.target.value)}
+                style={{width:"100%",padding:"9px 11px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.text,fontSize:13,boxSizing:"border-box"}}>
+                {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          )}
+
+          {recipients.map((r, i) => (
+            <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+              <input value={r.name} onChange={e=>updateRecipient(i,"name",e.target.value)}
+                placeholder="Name" style={{flex:"1 1 40%",padding:"9px 11px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+              <input value={r.email} onChange={e=>updateRecipient(i,"email",e.target.value)}
+                placeholder="Email" style={{flex:"1 1 55%",padding:"9px 11px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+              {recipients.length > 1 && (
+                <button onClick={()=>removeRecipient(i)} style={miniBtn(C.textMut,false)}>✕</button>
+              )}
+            </div>
+          ))}
+          {recipients.length < 3 && (
+            <button onClick={addRecipient}
+              style={{marginBottom:14,padding:"6px 12px",background:"none",border:`1px dashed ${C.border}`,
+                borderRadius:7,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
+              + Add another recipient (up to 3)
+            </button>
+          )}
+
+          <div>
+            <button onClick={sendTrial} disabled={busy}
+              style={{padding:"9px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
+                cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+              {busy ? "Sending…" : "Send trial test"}
+            </button>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function TrainingSection({ results, assessment, canGenerateFull = true }) {
   const [activeModule, setActiveModule] = useState(0);
   const prog = results?.training?.trainingProgram;
@@ -4009,6 +4659,8 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
 
   return (
     <div>
+      {!canGenerateFull && <PhishingTrialCard/>}
+
       {/* ── Full Program Builder ── */}
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
         <SectionLabel text="Training Program Builder"/>
@@ -5585,6 +6237,7 @@ function Dashboard({ assessment, results, onReset }) {
   const hasEvidence = can("evidenceAccess");
   const hasThreatIntel = can("threatIntel");
   const hasReports = can("reportsAccess");
+  const hasVendorRegistry = can("vendorRegistry");
   const hasTrainingView = can("trainingPlan");       // Starter+: view the recommendation preview
   const hasTrainingFull = can("trainingDelivery");   // Growth+ (or Starter w/ add-on): full generation
 
@@ -5605,6 +6258,7 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"compliance",  icon:"✅", label:"Compliance",        badge:!hasCompliance?null:results?.compliance?.frameworks?.length },
     { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
     { id:"evidence",    icon:"📎", label:"Evidence",           badge:null },
+    { id:"vendors",     icon:"🤝", label:"Vendor Risk",        badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
     ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:!hasPrograms?null:results?.tools?.toolStack?.length },
@@ -5659,6 +6313,9 @@ function Dashboard({ assessment, results, onReset }) {
     evidence: <LockedFeature icon="📎" title="Evidence & Audit Readiness" capability="evidenceAccess"
       blurb="Attach proof to completed work and see a live audit-coverage score."
       points={["Upload evidence per control","Live audit-coverage scoring","The proof insurers and auditors ask for"]}/>,
+    vendors: <LockedFeature icon="🤝" title="Vendor Risk Management" capability="vendorRegistry"
+      blurb="Track your vendors as an ongoing program, not a one-time checklist."
+      points={["A registry with automatic reassessment due-dates by criticality","AI-assisted, fact-grounded help answering incoming security questionnaires (Growth+)","A staff-visible queue of vendors coming due for review"]}/>,
   };
 
   const sectionMap = {
@@ -5675,6 +6332,7 @@ function Dashboard({ assessment, results, onReset }) {
     compliance: !hasCompliance ? lockedSections.compliance : <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
     remediation: !hasEvidence ? lockedSections.remediation : <RemediationSection/>,
     evidence:    !hasEvidence ? lockedSections.evidence : <EvidenceSection/>,
+    vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
     vciso:       <VirtualCISOSection/>,
     threats:    !hasThreatIntel ? lockedSections.threats : <ThreatIntelSection results={results}/>,
     tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results}/>,
