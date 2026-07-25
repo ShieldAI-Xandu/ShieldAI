@@ -3726,6 +3726,111 @@ function DomainMonitoringCard() {
   );
 }
 
+// Live SPF/DKIM/DMARC check against whatever domain the client already has
+// on file for breach monitoring — no separate setup. Every check here is a
+// plain public DNS lookup, so unlike DomainMonitoringCard this doesn't wait
+// on ownership verification: checking SPF/DKIM/DMARC for a domain reveals
+// nothing private, so there's no privacy reason to gate it the way HIBP
+// monitoring is gated.
+function EmailSecurityCard() {
+  const [scan, setScan] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [noDomain, setNoDomain] = useState(false);
+
+  async function load(rescan = false) {
+    if (rescan) setBusy(true); else setLoading(true);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain/email-security${rescan ? "?rescan=1" : ""}`);
+      const data = await res.json();
+      if (res.status === 404) { setNoDomain(true); return; }
+      if (!res.ok) throw new Error(data.error || "Could not run email security scan.");
+      setNoDomain(false);
+      setScan(data);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); setBusy(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  // No domain on file yet — DomainMonitoringCard right above already owns
+  // the "add your domain" prompt, so stay quiet rather than duplicate it.
+  if (noDomain) return null;
+  if (loading) return <Card style={{marginBottom:14}}><Spinner/></Card>;
+
+  const STATUS_TONE = { good: C.green, warning: C.amber, missing: C.red, unknown: C.textMut };
+  const STATUS_ICON = { good: "✓", warning: "⚠", missing: "✕", unknown: "?" };
+  const checks = scan ? [
+    { key: "spf", label: "SPF", c: scan.checks.spf },
+    { key: "dkim", label: "DKIM", c: scan.checks.dkim },
+    { key: "dmarc", label: "DMARC", c: scan.checks.dmarc },
+  ] : [];
+  const remediations = scan ? [scan.checks.spf, scan.checks.dkim, scan.checks.dmarc].filter(c => c.remediation) : [];
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+        <SectionLabel text="Email Authentication (SPF / DKIM / DMARC)"/>
+        <button onClick={()=>load(true)} disabled={busy}
+          style={{marginLeft:"auto",padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:7,color:C.textSec,fontSize:11.5,cursor:busy?"default":"pointer"}}>
+          {busy ? "Scanning…" : "Rescan"}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {scan && (
+        <>
+          <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>
+            {scan.overallSummary} This checks whether someone else could send email that looks like
+            it came from <strong style={{color:C.text}}>{scan.domain}</strong> — business email
+            compromise is the most common way a business like this actually gets breached.
+          </p>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))",gap:10,marginBottom:14}}>
+            {checks.map(({ key, label, c }) => (
+              <div key={key} style={{padding:"12px 14px",background:C.surface,
+                border:`1px solid ${STATUS_TONE[c.status]}33`,borderRadius:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                  <span style={{color:STATUS_TONE[c.status],fontSize:12,fontWeight:800}}>{STATUS_ICON[c.status]}</span>
+                  <span style={{fontSize:12,fontWeight:700,color:C.text}}>{label}</span>
+                </div>
+                <div style={{fontSize:11,color:C.textSec,lineHeight:1.4}}>{c.summary}</div>
+              </div>
+            ))}
+          </div>
+
+          {scan.checks.mx?.summary && (
+            <div style={{fontSize:11.5,color:C.textMut,marginBottom:12}}>{scan.checks.mx.summary}</div>
+          )}
+
+          {remediations.map((c, i) => (
+            <div key={i} style={{padding:"10px 12px",background:`${C.amber}0d`,border:`1px solid ${C.amber}33`,
+              borderRadius:7,marginBottom:8,fontSize:12,color:C.text,lineHeight:1.5}}>
+              <strong style={{color:C.amber}}>Fix: </strong>{c.remediation}
+            </div>
+          ))}
+
+          {scan.checks.dkim.status === "unknown" && (
+            <div style={{fontSize:11,color:C.textMut,lineHeight:1.5,marginTop:4}}>
+              DKIM note: {scan.checks.dkim.detail}
+            </div>
+          )}
+
+          <div style={{fontSize:10.5,color:C.textMut,marginTop:12}}>
+            Last checked {new Date(scan.scannedAt).toLocaleString()}{scan.cached ? " (cached)" : ""}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function ThreatIntelSection({ results }) {
   const tl = results?.threatIntel?.threatLandscape;
   // generatedBy lives on the outer threatIntel object (the AI's raw JSON
@@ -3742,6 +3847,7 @@ function ThreatIntelSection({ results }) {
         </div>
         <CveExposureCard/>
         <DomainMonitoringCard/>
+        <EmailSecurityCard/>
         <DarkWebExposureCard/>
         <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
           The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
@@ -3764,6 +3870,7 @@ function ThreatIntelSection({ results }) {
           model-generated "recentCVEs" card that used to render here. */}
       <CveExposureCard/>
       <DomainMonitoringCard/>
+      <EmailSecurityCard/>
       <DarkWebExposureCard/>
       <div style={{marginBottom:14}}>
         <Card>
