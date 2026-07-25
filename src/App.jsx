@@ -5922,7 +5922,272 @@ function AccessCodeModal({ onClose, onRedeem }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  PUBLIC PAGES — About, Support, FAQ. Shared nav for consistency across
+//  all of them (and reachable from MarketingPage's footer). Cross-linked to
+//  each other rather than being dead ends.
+// ─────────────────────────────────────────────────────────────
+function PublicPageNav({ current, onNavigate }) {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const links = [
+    { id:"marketing", label:"Home" },
+    { id:"about",     label:"About" },
+    { id:"faq",       label:"FAQ" },
+    { id:"support",   label:"Support" },
+    { id:"investor",  label:"Investors" },
+  ];
+  return (
+    <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
+      background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
+      <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",
+        alignItems:"center",gap:22,flexWrap:"wrap"}}>
+        <button onClick={()=>onNavigate("marketing")}
+          style={{background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",alignItems:"center"}}>
+          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
+        </button>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+          {links.map(l=>(
+            <button key={l.id} onClick={()=>onNavigate(l.id)}
+              style={{background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",
+                fontSize:13,fontWeight:current===l.id?700:500,
+                color:current===l.id?cyan:dim}}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={()=>onNavigate("auth")}
+          style={{marginLeft:"auto",padding:"8px 16px",background:"none",
+            border:`1px solid ${cyan}66`,borderRadius:8,color:cyan,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+          Client Login
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AboutPage({ onNavigate }) {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <PublicPageNav current="about" onNavigate={onNavigate}/>
+      <div style={{maxWidth:820,margin:"0 auto",padding:"56px 24px 90px"}}>
+        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
+          fontSize:12,fontWeight:600,marginBottom:22}}>
+          <LivePulse/> Live in production
+        </div>
+        <h1 style={{fontSize:36,fontWeight:800,lineHeight:1.15,letterSpacing:-1,margin:"0 0 18px"}}>
+          Enterprise-grade security shouldn't require an enterprise budget.
+        </h1>
+        <p style={{fontSize:15.5,color:dim,lineHeight:1.75,margin:"0 0 36px",maxWidth:680}}>
+          Most small and mid-sized businesses can't justify a full-time Chief Information Security
+          Officer — the role typically runs well into six figures a year. But the risks a CISO exists
+          to manage don't shrink just because the company is smaller. ShieldAI closes that gap: a
+          working virtual CISO platform that builds a real security program — risk analysis, written
+          policies, compliance tracking, threat intelligence, and employee training — at a fraction of
+          the cost, with a human security engineer standing behind it.
+        </p>
+
+        <h2 style={{fontSize:20,fontWeight:800,margin:"0 0 12px"}}>AI advises. Humans act.</h2>
+        <p style={{fontSize:14.5,color:dim,lineHeight:1.75,margin:"0 0 36px",maxWidth:680}}>
+          Mastermind, ShieldAI's AI system, does real work — drafting policies, mapping compliance
+          controls, researching threats. But it never takes action on your systems by itself. The
+          monitoring agent is read-only with no channel for inbound commands, and every AI-drafted
+          deliverable is built to be reviewed, not blindly trusted. That's a deliberate design choice,
+          not a missing feature.
+        </p>
+
+        <h2 style={{fontSize:20,fontWeight:800,margin:"0 0 18px"}}>Founder</h2>
+        <div style={{display:"flex",gap:22,alignItems:"flex-start",flexWrap:"wrap",marginBottom:36}}>
+          <img src="/founder.jpg" alt="Derrick Brooks, Founder and CEO of ShieldAI"
+            style={{width:112,height:112,borderRadius:14,objectFit:"cover",border:`1px solid ${line}`,flexShrink:0}}/>
+          <div style={{flex:"1 1 300px",minWidth:260}}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:2}}>Derrick Brooks</div>
+            <div style={{fontSize:12.5,color:cyan,fontWeight:600,marginBottom:10}}>Founder & CEO, Xandu Limited LLC</div>
+            <p style={{fontSize:13.5,color:dim,lineHeight:1.7,margin:0}}>
+              Nearly 20 years in cybersecurity spanning national-security roles, enterprise CISO work,
+              and hands-on delivery for small and mid-sized businesses. A Navy Lieutenant Commander and
+              offensive security practitioner, with hands-on Zero Trust and Azure implementation
+              experience. CISSP, CISM, and CompTIA Security+ certified; holds a dual M.S. in
+              Cybersecurity from National University and an MBA in IT Management from SNHU; currently
+              completing a doctorate in Cybersecurity at Westcliff University.
+            </p>
+          </div>
+        </div>
+
+        <div style={{padding:"20px 22px",background:C.card,border:`1px solid ${line}`,borderRadius:12,textAlign:"center"}}>
+          <div style={{fontSize:14.5,color:ink,marginBottom:12}}>Have questions about ShieldAI?</div>
+          <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>onNavigate("faq")}
+              style={{padding:"9px 18px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+                color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Read the FAQ</button>
+            <button onClick={()=>onNavigate("support")}
+              style={{padding:"9px 18px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
+                border:"none",borderRadius:8,color:deep,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              Contact Support
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FaqItem({ q, a, open, onToggle }) {
+  const line = C.border;
+  return (
+    <div style={{border:`1px solid ${line}`,borderRadius:10,marginBottom:10,overflow:"hidden",background:C.card}}>
+      <button onClick={onToggle}
+        style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"15px 18px",background:"none",border:"none",cursor:"pointer",textAlign:"left",
+          fontFamily:"inherit"}}>
+        <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{q}</span>
+        <span style={{fontSize:16,color:C.textMut,flexShrink:0,marginLeft:12}}>{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <div style={{padding:"0 18px 16px",fontSize:13.5,color:C.textSec,lineHeight:1.7}}>{a}</div>
+      )}
+    </div>
+  );
+}
+
+function FaqPage({ onNavigate }) {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const FAQS = [
+    { q: "What is a virtual CISO (vCISO)?",
+      a: "A vCISO delivers the same function a full-time Chief Information Security Officer would — risk assessment, security strategy, policy, compliance oversight, incident response planning — without the six-figure full-time salary. ShieldAI delivers this as software: an AI-driven engine handles the bulk of the analysis and drafting, with a human security engineer reviewing and standing behind the output." },
+    { q: "How is ShieldAI different from hiring a full-time CISO?",
+      a: "Cost and speed, mainly. A full-time CISO is usually a six-figure hire most SMBs can't justify. ShieldAI starts at $159/mo, generates a complete security program in minutes rather than months, and scales up to periodic or full engineer involvement (Guided and Managed vCISO tiers) as your needs grow." },
+    { q: "What does \"AI advises, humans act\" actually mean?",
+      a: "It's ShieldAI's core architectural boundary: Mastermind (the AI system) drafts policies, maps compliance controls, and analyzes risk — but it never takes action on your systems. The monitoring agent that watches your endpoints is permanently read-only, with no channel for it to receive or execute commands. Anything that changes your environment goes through a human." },
+    { q: "Is my data safe with an AI-powered platform?",
+      a: "We follow standard security practices — encrypted connections, role-based access control, and strict data isolation between clients (an analyst assigned to one client can't see another's data). We never store your payment details ourselves; all billing runs through Stripe's own PCI-compliant systems. If you have specific data-handling questions for your industry, our Support team can walk through your situation directly." },
+    { q: "Which compliance frameworks does ShieldAI support?",
+      a: "Twelve frameworks today, including SOC 2, PCI DSS v4.0, ISO 27001, HIPAA Security Rule, CMMC 2.0, NIST SP 800-171, NIST SP 800-53, the FTC Safeguards Rule, CIS Controls v8.1, and state privacy laws — plus a NIST CSF/CIS Controls foundation you choose at intake to set your baseline scoring model." },
+    { q: "Does the monitoring agent have any control over my systems?",
+      a: "No. It's read-only by design — it reports what it observes (installed software, versions, basic posture signals) and has no inbound command channel at all. It cannot be used to push changes, run remote commands, or take any action on your endpoints, now or as a future feature." },
+    { q: "How much does ShieldAI cost?",
+      a: "Free (assessment and posture score only), Starter at $159/mo, Growth at $349/mo, and Guided at $699/mo are all self-serve. Managed vCISO ($1,950/mo, a full engineer running your program end-to-end) is available by contacting our sales team. See the pricing section on the homepage for what's included at each tier." },
+    { q: "Can I try it before committing to a paid plan?",
+      a: "Yes — the Free tier runs a real security assessment and gives you your NIST/CIS posture score at no cost, no card required. Upgrading unlocks the full program: policies, compliance tracking, threat intelligence, training, and more." },
+    { q: "Can I change or cancel my plan anytime?",
+      a: "Yes. Self-serve plans are month-to-month with no long-term contract, and you can upgrade, add on features, or manage your subscription directly from your account. If self-serve billing isn't available for your account yet, our Support team can help make the change." },
+    { q: "What if I need help beyond what the platform automates?",
+      a: "It depends on your tier. Starter and Growth include Mastermind AI chat for questions about your own program. Guided adds periodic review from a ShieldAI security engineer. Managed vCISO puts an engineer on your program full-time, running it end-to-end. And Support is available at every tier for account and product questions." },
+  ];
+  const [openIdx, setOpenIdx] = useState(0);
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <PublicPageNav current="faq" onNavigate={onNavigate}/>
+      <div style={{maxWidth:760,margin:"0 auto",padding:"56px 24px 90px"}}>
+        <h1 style={{fontSize:34,fontWeight:800,letterSpacing:-1,margin:"0 0 12px"}}>Frequently asked questions</h1>
+        <p style={{fontSize:15,color:dim,lineHeight:1.6,margin:"0 0 32px"}}>
+          Can't find what you're looking for? <button onClick={()=>onNavigate("support")}
+            style={{background:"none",border:"none",color:cyan,fontSize:15,cursor:"pointer",
+              padding:0,textDecoration:"underline",fontFamily:"inherit"}}>Contact Support</button>.
+        </p>
+        {FAQS.map((f,i)=>(
+          <FaqItem key={i} q={f.q} a={f.a} open={openIdx===i} onToggle={()=>setOpenIdx(openIdx===i?-1:i)}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SupportPage({ onNavigate }) {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  const [form, setForm] = useState({ name:"", email:"", company:"", topic:"Technical question", message:"" });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [err, setErr] = useState(null);
+  const TOPICS = ["Technical question", "Billing question", "Compliance question", "Sales question", "Something else"];
+
+  async function submit() {
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
+    if (!form.name.trim() || !emailOk) {
+      setErr("Please enter your name and a valid email."); return;
+    }
+    if (!form.message.trim()) { setErr("Please describe what you need help with."); return; }
+    setSubmitting(true); setErr(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/leads`, {
+        method:"POST", headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          name: form.name, email: form.email, company: form.company, employees: "",
+          message: `[SUPPORT REQUEST: ${form.topic}] ${form.message}`.trim(),
+        }),
+      });
+      if (!res.ok) throw new Error("Submission failed");
+      setSubmitted(true);
+    } catch { setErr("Something went wrong. Please try again, or email us directly."); }
+    finally { setSubmitting(false); }
+  }
+
+  const field = { width:"100%", padding:"11px 13px", background:C.bg, border:`1px solid ${line}`,
+    borderRadius:9, color:ink, fontSize:14, boxSizing:"border-box", marginBottom:11,
+    fontFamily:"inherit" };
+
+  return (
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+      <PublicPageNav current="support" onNavigate={onNavigate}/>
+      <div style={{maxWidth:640,margin:"0 auto",padding:"56px 24px 90px"}}>
+        <h1 style={{fontSize:34,fontWeight:800,letterSpacing:-1,margin:"0 0 12px"}}>We're here to help</h1>
+        <p style={{fontSize:15,color:dim,lineHeight:1.6,margin:"0 0 8px"}}>
+          Already a ShieldAI customer? Sign in and use Mastermind chat (Starter and up) for questions
+          about your own program, or reach your assigned analyst directly if you're on Guided or
+          Managed vCISO.
+        </p>
+        <p style={{fontSize:15,color:dim,lineHeight:1.6,margin:"0 0 28px"}}>
+          For everything else — billing, compliance questions, or anything before you sign up — check
+          the <button onClick={()=>onNavigate("faq")}
+            style={{background:"none",border:"none",color:cyan,fontSize:15,cursor:"pointer",
+              padding:0,textDecoration:"underline",fontFamily:"inherit"}}>FAQ</button> or use the form below.
+        </p>
+
+        <div style={{padding:"24px 26px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+          {submitted ? (
+            <div style={{textAlign:"center",padding:"20px 0"}}>
+              <div style={{fontSize:30,marginBottom:10}}>✅</div>
+              <div style={{fontSize:16,fontWeight:700,marginBottom:6}}>Message sent</div>
+              <div style={{fontSize:13.5,color:dim,lineHeight:1.6}}>
+                We'll get back to you at {form.email}, usually within one business day.
+              </div>
+            </div>
+          ) : (
+            <>
+              <select value={form.topic} onChange={e=>setForm({...form,topic:e.target.value})} style={field}>
+                {TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <input placeholder="Your name" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={field}/>
+              <input placeholder="Email address" type="email" value={form.email}
+                onChange={e=>setForm({...form,email:e.target.value})} style={field}/>
+              <input placeholder="Company (optional)" value={form.company}
+                onChange={e=>setForm({...form,company:e.target.value})} style={field}/>
+              <textarea placeholder="How can we help?" rows={5} value={form.message}
+                onChange={e=>setForm({...form,message:e.target.value})}
+                style={{...field, resize:"vertical", fontFamily:"inherit"}}/>
+              {err && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{err}</div>}
+              <button onClick={submit} disabled={submitting}
+                style={{width:"100%",padding:"13px",background:`linear-gradient(135deg,${cyan},${C.accentDm})`,
+                  color:deep,border:"none",borderRadius:9,fontSize:15,fontWeight:700,
+                  cursor:submitting?"wait":"pointer"}}>
+                {submitting ? "Sending…" : "Send message"}
+              </button>
+              <div style={{fontSize:11,color:C.textMut,textAlign:"center",marginTop:10}}>
+                Or email us directly at <a href="mailto:support@shieldai.com" style={{color:dim}}>support@shieldai.com</a>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenInvestor,
+                        onOpenAbout, onOpenSupport, onOpenFaq,
                         openCodeEntry, onCodeEntryOpened }) {
   const [form, setForm] = useState({ name: "", email: "", company: "", employees: "", message: "" });
   const [submitting, setSubmitting] = useState(false);
@@ -6074,6 +6339,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           style={{borderTop:`1px solid ${line}`,background:deep}}>
           <a href="#how" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>How it works</a>
           <a href="#pricing" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Pricing</a>
+          <button onClick={()=>{setMobileMenu(false);onOpenAbout();}}
+            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>About</button>
+          <button onClick={()=>{setMobileMenu(false);onOpenFaq();}}
+            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>FAQ</button>
+          <button onClick={()=>{setMobileMenu(false);onOpenSupport();}}
+            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Support</button>
           <button onClick={()=>{setMobileMenu(false);onOpenInvestor();}}
             style={{background:"none",border:"none",padding:"10px 0",color:cyan,fontSize:15,fontWeight:600,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
           <a href="#contact" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Contact</a>
@@ -6541,6 +6812,9 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           <ShieldLockup logoSize={24} textSize={16} ink={ink}/>
           <span style={{fontSize:12,color:dim}}>Virtual CISO for small business</span>
           <div style={{marginLeft:"auto",display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={onOpenAbout} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>About</button>
+            <button onClick={onOpenFaq} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>FAQ</button>
+            <button onClick={onOpenSupport} style={{background:"none",border:"none",color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Support</button>
             <a href="/legal/privacy.pdf" target="_blank" rel="noreferrer"
               style={{color:dim,fontSize:13,textDecoration:"none"}}>Privacy</a>
             <a href="/legal/terms.pdf" target="_blank" rel="noreferrer"
@@ -14168,7 +14442,7 @@ export default function ShieldAI() {
   // flash of the marketing page (or Home) before we've had a chance to
   // restore an existing login + the page the user was actually on.
   const [restoringSession, setRestoringSession] = useState(true);
-  const [publicView, setPublicView] = useState("marketing"); // marketing | investor | auth (when logged out)
+  const [publicView, setPublicView] = useState("marketing"); // marketing | investor | auth | about | support | faq (when logged out)
   const [pendingCodeEntry, setPendingCodeEntry] = useState(false); // open the code modal on marketing mount
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAnalyst, setShowAnalyst] = useState(false);
@@ -14399,12 +14673,18 @@ export default function ShieldAI() {
         onBack={() => setPublicView("marketing")}
         onOpenCode={() => { setPublicView("marketing"); setTimeout(() => setPendingCodeEntry(true), 0); }}/>;
     }
+    if (publicView === "about")   return <AboutPage onNavigate={setPublicView}/>;
+    if (publicView === "support") return <SupportPage onNavigate={setPublicView}/>;
+    if (publicView === "faq")     return <FaqPage onNavigate={setPublicView}/>;
     return <MarketingPage
       onEnterApp={() => setPublicView("auth")}
       onLogin={() => setPublicView("auth")}
       onStartDemo={handleStartDemo}
       onRedeemCode={handleRedeemCode}
       onOpenInvestor={() => setPublicView("investor")}
+      onOpenAbout={() => setPublicView("about")}
+      onOpenSupport={() => setPublicView("support")}
+      onOpenFaq={() => setPublicView("faq")}
       openCodeEntry={pendingCodeEntry}
       onCodeEntryOpened={() => setPendingCodeEntry(false)}/>;
   }
