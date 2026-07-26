@@ -5812,9 +5812,217 @@ function ReportsSection() {
 //  POLICY LIBRARY
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+//  TEAM ROSTER PANEL.
+//  A lightweight "who works here" list — the same `learners` collection the
+//  training product uses, but reachable from Starter up (see
+//  trainingProgramRoutes.js's roster/delivery split) since it costs nothing
+//  to run and is what makes policy acknowledgment possible without paying
+//  for full training delivery. Deliberately NOT placed inside
+//  TrainingProgramSection, which stays fully gated behind trainingDelivery.
+// ─────────────────────────────────────────────────────────────
+function TeamRosterPanel() {
+  const [learners, setLearners] = useState([]);
+  const [cap, setCap] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", department: "" });
+  const [expanded, setExpanded] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners`);
+      const data = await res.json();
+      if (res.ok) setLearners(Array.isArray(data) ? data : []);
+    } catch { /* noop */ }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function addMember() {
+    if (!form.name.trim() || !form.email.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (res.status === 402) { setCap(data.limit ?? cap); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not add that team member.");
+      setForm({ name: "", email: "", department: "" });
+      setAdding(false);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeMember(l) {
+    if (!window.confirm(`Remove ${l.name} from your team roster? This also removes any training/policy history tied to them.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Could not remove that team member.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Card style={{marginBottom:20}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+        <SectionLabel text="Team Roster"/>
+        <span style={{fontSize:11,color:C.textMut,padding:"2px 10px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:20}}>{learners.length} people</span>
+        <button onClick={()=>setExpanded(e=>!e)}
+          style={{marginLeft:"auto",padding:"5px 12px",background:"none",border:`1px solid ${C.border}`,
+            borderRadius:7,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
+          {expanded ? "Hide" : "Manage"}
+        </button>
+      </div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 4px"}}>
+        Who works here — used to assign policies for read-and-sign-off below. (Full training module
+        delivery is a separate, paid feature; this list is just your roster.)
+      </p>
+
+      {expanded && (
+        <div style={{marginTop:14}}>
+          {error && (
+            <div style={{marginBottom:10,padding:"9px 12px",background:`${C.red}15`,
+              border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+          )}
+          {loading ? <Spinner/> : (
+            <>
+              {learners.length === 0 && !adding && (
+                <p style={{fontSize:12.5,color:C.textMut,margin:"0 0 10px"}}>No one on your roster yet.</p>
+              )}
+              {learners.map(l => (
+                <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 4px",
+                  borderBottom:`1px solid ${C.border}`,fontSize:12.5}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
+                    <span style={{color:C.textMut}}> · {l.email}{l.department ? ` · ${l.department}` : ""}</span>
+                  </div>
+                  <button onClick={()=>removeMember(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                </div>
+              ))}
+
+              {adding ? (
+                <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+                  <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Name"
+                    style={{flex:"1 1 140px",padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:7,color:C.text,fontSize:12.5,boxSizing:"border-box"}}/>
+                  <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email"
+                    style={{flex:"1 1 180px",padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:7,color:C.text,fontSize:12.5,boxSizing:"border-box"}}/>
+                  <input value={form.department} onChange={e=>setForm(f=>({...f,department:e.target.value}))} placeholder="Department (optional)"
+                    style={{flex:"1 1 140px",padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:7,color:C.text,fontSize:12.5,boxSizing:"border-box"}}/>
+                  <button onClick={addMember} disabled={busy||!form.name.trim()||!form.email.trim()}
+                    style={{...miniBtn(C.accent,busy),padding:"8px 14px"}}>Add</button>
+                  <button onClick={()=>{setAdding(false);setForm({name:"",email:"",department:""});}}
+                    style={{...miniBtn(C.textSec,false),padding:"8px 14px"}}>Cancel</button>
+                </div>
+              ) : (
+                <button onClick={()=>setAdding(true)}
+                  style={{marginTop:12,padding:"7px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                    borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                  + Add team member
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PolicyAssignModal({ policy, onClose, onAssigned }) {
+  const [learners, setLearners] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/training-program/learners`).then(r => r.json()).then(data => {
+      setLearners(Array.isArray(data) ? data.filter(l => l.status === "active") : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  function toggle(id) {
+    setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+  }
+
+  async function submit() {
+    if (!selectedIds.length) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/policies/${policy.id}/assign`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ learnerIds: selectedIds }),
+      });
+      const data = await res.json();
+      if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not assign this policy.");
+      onAssigned();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,padding:24,width:"100%",maxWidth:440,maxHeight:"80vh",overflowY:"auto"}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>Assign for acknowledgment</div>
+        <p style={{fontSize:12.5,color:C.textSec,margin:"0 0 14px"}}>
+          {policy.policyName} — pick who needs to read and confirm it.
+        </p>
+
+        {error && (
+          <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+            border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+        )}
+
+        {loading ? <Spinner/> : learners.length === 0 ? (
+          <p style={{fontSize:12.5,color:C.textMut}}>
+            Your team roster is empty. Add people to your roster above first, then come back to assign.
+          </p>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+            {learners.map(l => (
+              <label key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
+                background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontSize:12.5}}>
+                <input type="checkbox" checked={selectedIds.includes(l.id)} onChange={()=>toggle(l.id)}/>
+                <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
+                <span style={{color:C.textMut}}>{l.email}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
+          <button onClick={submit} disabled={busy||!selectedIds.length}
+            style={{...miniBtn(C.accent,busy||!selectedIds.length),padding:"9px 16px",fontWeight:700}}>
+            {busy ? "Assigning…" : `Assign to ${selectedIds.length || ""}`.trim()}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PolicyLibrarySection({ assessment }) {
   const { can } = useCapabilities();
   const canDownload = can("downloadExports");
+  const hasRoster = can("employeeRoster");
   const [catalog, setCatalog] = useState([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [selected, setSelected] = useState(null); // policy catalog entry
@@ -5826,6 +6034,22 @@ function PolicyLibrarySection({ assessment }) {
   const [savedPolicies, setSavedPolicies] = useState([]);
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [openingSaved, setOpeningSaved] = useState(null);
+  const [ackByPolicy, setAckByPolicy] = useState({}); // policyId -> {assigned, acknowledged, pending}
+  const [assignModalPolicy, setAssignModalPolicy] = useState(null); // {id, policyName} | null
+
+  async function loadAcknowledgments() {
+    if (!hasRoster) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/policies/acknowledgments`);
+      if (res.ok) {
+        const data = await res.json();
+        const map = {};
+        for (const b of (data.byPolicy || [])) map[b.policyId] = b;
+        setAckByPolicy(map);
+      }
+    } catch { /* status badges are a bonus, fail quietly */ }
+  }
+  useEffect(() => { loadAcknowledgments(); }, [hasRoster]);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/policy-catalog`)
@@ -6114,6 +6338,8 @@ function PolicyLibrarySection({ assessment }) {
   // ── Catalog browse view ──────────────────────────────
   return (
     <div>
+      {hasRoster && <TeamRosterPanel/>}
+
       {/* My Saved Policies */}
       <div style={{marginBottom:28}}>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
@@ -6142,16 +6368,30 @@ function PolicyLibrarySection({ assessment }) {
           </Card>
         ) : (
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {savedPolicies.map(p => (
+            {savedPolicies.map(p => {
+              const ack = ackByPolicy[p.id];
+              return (
               <Card key={p.id} style={{padding:"14px 18px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:14}}>
+                <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
                   <span style={{fontSize:20}}>📄</span>
-                  <div style={{flex:1}}>
+                  <div style={{flex:1,minWidth:160}}>
                     <div style={{color:C.text,fontWeight:600,fontSize:14}}>{p.policyName}</div>
                     <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
                       Generated {new Date(p.createdAt).toLocaleDateString()}
+                      {ack && ack.assigned > 0 && (
+                        <span style={{marginLeft:8,color:ack.pending>0?C.amber:C.green,fontWeight:600}}>
+                          · {ack.acknowledged} of {ack.assigned} acknowledged
+                        </span>
+                      )}
                     </div>
                   </div>
+                  {hasRoster && (
+                    <button onClick={() => setAssignModalPolicy({ id: p.id, policyName: p.policyName })}
+                      style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
+                      👥 Assign
+                    </button>
+                  )}
                   <button onClick={() => openSavedPolicy(p.id)} disabled={openingSaved===p.id}
                     style={{padding:"8px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
                       color:C.bg,border:"none",borderRadius:8,fontSize:12,fontWeight:700,
@@ -6165,10 +6405,16 @@ function PolicyLibrarySection({ assessment }) {
                   </button>
                 </div>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
+
+      {assignModalPolicy && (
+        <PolicyAssignModal policy={assignModalPolicy} onClose={()=>setAssignModalPolicy(null)}
+          onAssigned={()=>{ setAssignModalPolicy(null); loadAcknowledgments(); }}/>
+      )}
 
       <SectionLabel text="Policy Library — Request a Custom Policy"/>
       <p style={{color:C.textSec,fontSize:13,marginBottom:16,lineHeight:1.6}}>
@@ -6735,6 +6981,14 @@ function LearnerPage({ token }) {
   const [openMod, setOpenMod] = useState(null); // { assignmentId, topicId }
   const [busy, setBusy] = useState(false);
 
+  const [policies, setPolicies] = useState([]);
+  const [openPolicyId, setOpenPolicyId] = useState(null);
+  const [policyDetail, setPolicyDetail] = useState(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [confirmChecked, setConfirmChecked] = useState(false);
+  const [ackBusy, setAckBusy] = useState(false);
+  const [ackError, setAckError] = useState(null);
+
   const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
 
   async function load() {
@@ -6748,6 +7002,41 @@ function LearnerPage({ token }) {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, [token]);
+
+  async function loadPolicies() {
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/policies`);
+      const d = await res.json();
+      if (res.ok) setPolicies(d.policies || []);
+    } catch { /* a link with no policies assigned is the common case, not an error */ }
+  }
+  useEffect(() => { loadPolicies(); }, [token]);
+
+  async function openPolicyDetail(id) {
+    if (openPolicyId === id) { setOpenPolicyId(null); setPolicyDetail(null); return; }
+    setOpenPolicyId(id); setPolicyDetail(null); setConfirmChecked(false); setAckError(null); setPolicyLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/policies/${id}`);
+      const d = await res.json();
+      if (res.ok) setPolicyDetail(d);
+    } catch { /* noop */ }
+    finally { setPolicyLoading(false); }
+  }
+
+  async function acknowledgePolicy(id) {
+    setAckBusy(true); setAckError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/policies/${id}/acknowledge`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save your confirmation.");
+      setOpenPolicyId(null); setPolicyDetail(null);
+      await loadPolicies();
+    } catch (e) { setAckError(e.message); }
+    finally { setAckBusy(false); }
+  }
 
   async function complete(assignmentId, topicId, score) {
     setBusy(true);
@@ -6786,6 +7075,73 @@ function LearnerPage({ token }) {
               Here's your assigned security training. Work through each module and mark it complete.
               Your progress is saved automatically.
             </p>
+
+            {policies.length > 0 && (
+              <div style={{marginBottom:28}}>
+                <div style={{fontSize:13,fontWeight:700,color:ink,marginBottom:10,letterSpacing:0.3}}>
+                  POLICIES TO REVIEW
+                </div>
+                {policies.map(p => {
+                  const isOpen = openPolicyId === p.id;
+                  return (
+                    <div key={p.id} style={{marginBottom:10,background:C.card,
+                      border:`1px solid ${line}`,borderRadius:14,overflow:"hidden"}}>
+                      <div onClick={()=>openPolicyDetail(p.id)}
+                        style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",flexWrap:"wrap"}}>
+                        <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
+                          alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
+                          background:p.acknowledgedAt?C.green:`${cyan}22`,color:p.acknowledgedAt?"#04121F":cyan}}>
+                          {p.acknowledgedAt ? "✓" : "📄"}
+                        </span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:14,fontWeight:700,color:ink}}>{safeText(p.policyName)}</div>
+                          <div style={{fontSize:11.5,color:dim,marginTop:2}}>
+                            {p.acknowledgedAt
+                              ? `Acknowledged ${new Date(p.acknowledgedAt).toLocaleDateString()}`
+                              : "Needs your review and confirmation"}
+                          </div>
+                        </div>
+                        <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                      </div>
+                      {isOpen && (
+                        <div style={{padding:"0 18px 18px"}}>
+                          {policyLoading ? <Spinner/> : policyDetail && (
+                            <>
+                              <div style={{padding:"20px 22px",background:"#fff",borderRadius:10,
+                                border:`1px solid ${line}`,maxHeight:420,overflowY:"auto",marginBottom:14}}>
+                                <MarkdownDocLight text={policyDetail.content}/>
+                              </div>
+                              {!p.acknowledgedAt && (
+                                <>
+                                  {ackError && (
+                                    <div style={{marginBottom:10,padding:"9px 12px",background:`${C.red}15`,
+                                      border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{ackError}</div>
+                                  )}
+                                  <label style={{display:"flex",alignItems:"flex-start",gap:8,cursor:"pointer",marginBottom:12}}>
+                                    <input type="checkbox" checked={confirmChecked}
+                                      onChange={e=>setConfirmChecked(e.target.checked)} style={{marginTop:3}}/>
+                                    <span style={{fontSize:12.5,color:dim,lineHeight:1.5}}>
+                                      I have read this policy and agree to comply with it.
+                                    </span>
+                                  </label>
+                                  <button onClick={()=>acknowledgePolicy(p.id)} disabled={!confirmChecked||ackBusy}
+                                    style={{padding:"9px 20px",borderRadius:9,border:"none",
+                                      cursor:!confirmChecked||ackBusy?"not-allowed":"pointer",
+                                      background:!confirmChecked||ackBusy?C.border:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                                      color:!confirmChecked||ackBusy?C.textMut:C.bg,fontSize:13,fontWeight:700}}>
+                                    {ackBusy ? "Saving…" : "Confirm I've Read This"}
+                                  </button>
+                                </>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {(data?.assignments || []).length === 0 ? (
               <div style={{padding:"24px",background:C.card,border:`1px solid ${line}`,borderRadius:14,

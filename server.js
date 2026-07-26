@@ -58,6 +58,9 @@ import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+// Policy read-and-sign-off tracking — reuses the training product's employee
+// roster and public token link (see trainingProgramRoutes.js's roster split).
+import { registerPolicyAcknowledgmentRoutes } from "./policyAcknowledgmentRoutes.js";
 import { registerPhishingRoutes } from "./phishingRoutes.js";
 // Ongoing vendor/third-party risk management (registry, reassessment cadence,
 // AI-grounded incoming-questionnaire assistant) — the layer that was missing
@@ -1600,6 +1603,7 @@ registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
+registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });

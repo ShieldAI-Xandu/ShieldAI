@@ -179,6 +179,21 @@ export function registerTrainingProgramRoutes(app, {
     ? gate.trainingDelivery()
     : (req, res, next) => next();
 
+  // Roster gate (2026-07-25 pricing pass — do not re-merge with gateDelivery):
+  // "who works here" is decoupled from paid training DELIVERY. A roster entry
+  // is a DB record with zero marginal cost, so it's available from Starter up
+  // (capped via limits.employees) — this is what lets a Starter client who can
+  // already generate policies actually assign them for acknowledgment/sign-off
+  // without needing to buy training delivery too. Assigning real training
+  // MODULES, scheduling quarters, and running ongoing phishing campaigns all
+  // stay behind gateDelivery below, unchanged.
+  const gateRoster = (gate && gate.capability)
+    ? gate.capability("employeeRoster")
+    : (req, res, next) => next();
+  const gateRosterLimit = (gate && gate.limit)
+    ? gate.limit("employees", (d, userId) => (d.data.learners || []).filter(l => l.clientUserId === userId && l.status !== "inactive").length)
+    : (req, res, next) => next();
+
   // === CATALOG (topics available to assign) ===================
   app.get("/api/training-program/catalog", requireAuth, (req, res) => {
     res.json(TRAINING_TOPICS.map(t => ({
@@ -206,7 +221,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json(list);
   });
 
-  app.post("/api/training-program/learners", requireAuth, gateDelivery, async (req, res) => {
+  app.post("/api/training-program/learners", requireAuth, gateRoster, gateRosterLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { name, email, department } = req.body || {};
@@ -230,7 +245,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json({ ...learner, link: `/train/${learner.token}` });
   });
 
-  app.patch("/api/training-program/learners/:id", requireAuth, gateDelivery, async (req, res) => {
+  app.patch("/api/training-program/learners/:id", requireAuth, gateRoster, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === scope.clientUserId);
@@ -241,7 +256,7 @@ export function registerTrainingProgramRoutes(app, {
     res.json(learner);
   });
 
-  app.delete("/api/training-program/learners/:id", requireAuth, gateDelivery, async (req, res) => {
+  app.delete("/api/training-program/learners/:id", requireAuth, gateRoster, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const before = (db.data.learners || []).length;

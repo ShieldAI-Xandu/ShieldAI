@@ -35,6 +35,7 @@ export const TIERS = {
       analystSupport: "none",        // none | limited | full
       complianceFrameworks: 0,       // additional (non-foundation) compliance frameworks
       vendors: 0,                    // vendor registry entries (capped by tier; null = unlimited)
+      employees: 0,                  // employee roster entries (capped by tier; null = unlimited)
     },
     capabilities: {
       assessments: true,            // can run/view assessments
@@ -52,6 +53,7 @@ export const TIERS = {
       reportsAccess: false,    // status/update/compliance/insurance/legal reports are paid-only
       vendorRegistry: false,             // ongoing vendor registry (add/track/reassess) — Starter+
       vendorQuestionnaireAssistant: false, // AI-grounded incoming-questionnaire responder — Growth+
+      employeeRoster: false,             // a roster of who works here — Starter+ (separate from paid training delivery)
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -72,6 +74,7 @@ export const TIERS = {
       analystSupport: "none",
       complianceFrameworks: 2,      // beyond the NIST/CIS foundation lens, chosen at intake
       vendors: 5,                   // vendor registry entries — plenty for a small business's real vendor count
+      employees: 10,                 // employee roster entries — enough for this tier's target business size
     },
     capabilities: {
       assessments: true,
@@ -97,10 +100,17 @@ export const TIERS = {
       // questionnaire is exactly when they'll feel this paywall) — Growth+ only.
       vendorRegistry: true,                // capped at limits.vendors (5)
       vendorQuestionnaireAssistant: false, // Growth+
+      // Same split logic (2026-07-25) applied to employees: an employee roster
+      // (name/email/department) is a DB record, zero marginal cost, and lets
+      // Starter clients actually USE the policies they generate — assigning
+      // them for acknowledgment/sign-off. Paid training DELIVERY (real
+      // modules, quarterly scheduling, ongoing phishing campaigns) stays on
+      // trainingDelivery — this flag only covers "who works here."
+      employeeRoster: true,                // capped at limits.employees (10)
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
-    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Recommended tool stack", "2 compliance frameworks", "5 endpoints", "Vendor risk registry (up to 5 vendors)", "View-only training plan (full generation via add-on)", "1 free trial phishing test", "No reports, evidence, or workflows"],
+    features: ["Multiple assessments", "Build programs", "Up to 6 policies", "Recommended tool stack", "2 compliance frameworks", "5 endpoints", "Vendor risk registry (up to 5 vendors)", "Employee roster & policy acknowledgment tracking (up to 10)", "View-only training plan (full generation via add-on)", "1 free trial phishing test", "No reports, evidence, or workflows"],
   },
 
   growth: {
@@ -119,6 +129,7 @@ export const TIERS = {
       analystSupport: "none",
       complianceFrameworks: 5,
       vendors: null,
+      employees: null,
     },
     capabilities: {
       assessments: true,
@@ -138,6 +149,7 @@ export const TIERS = {
       workflowsAccess: true,
       vendorRegistry: true,                // uncapped from Growth up
       vendorQuestionnaireAssistant: true,   // BUNDLED from Growth up
+      employeeRoster: true,                 // uncapped from Growth up (trainingDelivery already implies this)
     },
     features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
@@ -158,6 +170,7 @@ export const TIERS = {
       analystSupport: "limited",
       complianceFrameworks: 10,
       vendors: null,
+      employees: null,
     },
     capabilities: {
       assessments: true,
@@ -177,6 +190,7 @@ export const TIERS = {
       workflowsAccess: true,
       vendorRegistry: true,
       vendorQuestionnaireAssistant: true, // plus periodic analyst review of anything flagged needsHumanInput
+      employeeRoster: true,
     },
     features: ["Everything in Growth", "Periodic engineer review", "Analyst review of flagged questionnaire answers", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
@@ -197,6 +211,7 @@ export const TIERS = {
       analystSupport: "full",
       complianceFrameworks: null,   // unlimited — everything
       vendors: null,
+      employees: null,
     },
     capabilities: {
       assessments: true,
@@ -216,6 +231,7 @@ export const TIERS = {
       workflowsAccess: true,
       vendorRegistry: true,
       vendorQuestionnaireAssistant: true, // engineer owns the registry and drafts/delivers responses white-glove
+      employeeRoster: true,
     },
     features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
@@ -261,6 +277,7 @@ export const FEATURE_CATALOG = [
   { key: "workflowsAccess",  capability: "workflowsAccess",   name: "Incident response workflows", minTier: "growth" },
   { key: "vendorRegistry", capability: "vendorRegistry", name: "Vendor risk registry (add/track/reassess vendors)", minTier: "starter" },
   { key: "vendorQuestionnaireAssistant", capability: "vendorQuestionnaireAssistant", name: "AI-assisted incoming security questionnaire responses", minTier: "growth" },
+  { key: "employeeRoster", capability: "employeeRoster", name: "Employee roster & policy acknowledgment tracking", minTier: "starter" },
   { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
   { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
 ];
