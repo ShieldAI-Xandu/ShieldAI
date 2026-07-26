@@ -2780,6 +2780,18 @@ function VendorQuestionnaireTool() {
     } catch { /* noop */ }
   }
 
+  async function deleteSaved(id, e) {
+    e.stopPropagation(); // don't also trigger the row's openSaved click
+    if (!window.confirm("Delete this saved response? This cannot be undone.")) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/vendors/questionnaires/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setHistory(h => h.filter(x => x.id !== id));
+        if (result?.id === id) setResult(null);
+      }
+    } catch { /* noop */ }
+  }
+
   const needsInputCount = (result?.answers || []).filter(a => a.needsHumanInput).length;
 
   return (
@@ -2812,6 +2824,11 @@ function VendorQuestionnaireTool() {
               {h.needsInputCount > 0 && (
                 <span style={{color:C.amber,fontWeight:600}}>{h.needsInputCount} need input</span>
               )}
+              <button onClick={(e)=>deleteSaved(h.id, e)}
+                style={{padding:"3px 9px",background:"none",border:`1px solid ${C.border}`,
+                  borderRadius:6,color:C.textMut,fontSize:11,cursor:"pointer"}}>
+                Delete
+              </button>
             </div>
           ))}
         </div>
@@ -6296,6 +6313,9 @@ function PolicyLibrarySection({ assessment }) {
   const [loadingSaved, setLoadingSaved] = useState(true);
   const [openingSaved, setOpeningSaved] = useState(null);
   const [ackByPolicy, setAckByPolicy] = useState({}); // policyId -> {assigned, acknowledged, pending}
+  const [ackRows, setAckRows] = useState([]); // full acknowledgment rows, for the per-person breakdown
+  const [expandedAckPolicyId, setExpandedAckPolicyId] = useState(null);
+  const [ackActionBusy, setAckActionBusy] = useState(null); // id of the row currently being acted on
   const [assignModalPolicy, setAssignModalPolicy] = useState(null); // {id, policyName} | null
 
   async function loadAcknowledgments() {
@@ -6307,10 +6327,33 @@ function PolicyLibrarySection({ assessment }) {
         const map = {};
         for (const b of (data.byPolicy || [])) map[b.policyId] = b;
         setAckByPolicy(map);
+        setAckRows(data.rows || []);
       }
     } catch { /* status badges are a bonus, fail quietly */ }
   }
   useEffect(() => { loadAcknowledgments(); }, [hasRoster]);
+
+  async function remindSigner(row) {
+    setAckActionBusy(row.id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/policies/acknowledgments/${row.id}/remind`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not send that reminder.");
+      await loadAcknowledgments();
+    } catch (e) { setError(e.message); }
+    finally { setAckActionBusy(null); }
+  }
+
+  async function unassignSigner(row) {
+    if (!window.confirm(`Remove this assignment for ${row.learnerName}?`)) return;
+    setAckActionBusy(row.id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/policies/acknowledgments/${row.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Could not remove that assignment.");
+      await loadAcknowledgments();
+    } catch (e) { setError(e.message); }
+    finally { setAckActionBusy(null); }
+  }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/policy-catalog`)
@@ -6631,6 +6674,8 @@ function PolicyLibrarySection({ assessment }) {
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {savedPolicies.map(p => {
               const ack = ackByPolicy[p.id];
+              const isExpanded = expandedAckPolicyId === p.id;
+              const rowsForPolicy = ackRows.filter(r => r.policyId === p.id);
               return (
               <Card key={p.id} style={{padding:"14px 18px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
@@ -6640,8 +6685,10 @@ function PolicyLibrarySection({ assessment }) {
                     <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
                       Generated {new Date(p.createdAt).toLocaleDateString()}
                       {ack && ack.assigned > 0 && (
-                        <span style={{marginLeft:8,color:ack.pending>0?C.amber:C.green,fontWeight:600}}>
-                          · {ack.acknowledged} of {ack.assigned} acknowledged
+                        <span onClick={()=>setExpandedAckPolicyId(isExpanded ? null : p.id)}
+                          style={{marginLeft:8,color:ack.pending>0?C.amber:C.green,fontWeight:600,
+                            cursor:"pointer",textDecoration:"underline",textUnderlineOffset:2}}>
+                          · {ack.acknowledged} of {ack.assigned} acknowledged {isExpanded ? "▲" : "▼"}
                         </span>
                       )}
                     </div>
@@ -6665,6 +6712,33 @@ function PolicyLibrarySection({ assessment }) {
                     Delete
                   </button>
                 </div>
+
+                {isExpanded && (
+                  <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                    display:"flex",flexDirection:"column",gap:6}}>
+                    {rowsForPolicy.map(row => (
+                      <div key={row.id} style={{display:"flex",alignItems:"center",gap:10,
+                        padding:"7px 10px",background:C.surface,borderRadius:7,fontSize:12.5}}>
+                        <span style={{flex:1,color:C.text,fontWeight:600}}>{row.learnerName}</span>
+                        {row.acknowledgedAt ? (
+                          <span style={{color:C.green,fontWeight:600}}>
+                            ✓ Acknowledged {new Date(row.acknowledgedAt).toLocaleDateString()}
+                          </span>
+                        ) : (
+                          <>
+                            <span style={{color:C.amber,fontWeight:600}}>
+                              Pending{row.remindedAt ? ` · reminded ${new Date(row.remindedAt).toLocaleDateString()}` : ""}
+                            </span>
+                            <button onClick={()=>remindSigner(row)} disabled={ackActionBusy===row.id}
+                              style={miniBtn(C.accent, ackActionBusy===row.id)}>Remind</button>
+                          </>
+                        )}
+                        <button onClick={()=>unassignSigner(row)} disabled={ackActionBusy===row.id}
+                          style={miniBtn(C.textMut, ackActionBusy===row.id)}>Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Card>
               );
             })}
@@ -13895,6 +13969,19 @@ function AnalystConsole({ user, onExit }) {
       .catch(e => { if (live) setPortfolioErr(e.message); });
     return () => { live = false; };
   }, []);
+
+  // Cross-client vendor reassessment triage — which of my clients have vendors
+  // coming due or overdue for reassessment. See vendorRoutes.js's
+  // portfolioOverdueQueue(); a bonus widget, so it fails quietly.
+  const [vendorQueue, setVendorQueue] = useState([]);
+  useEffect(() => {
+    let live = true;
+    authFetch(`${API_BASE}/api/staff/vendors/overdue-queue`)
+      .then(r => r.ok ? r.json() : { queue: [] })
+      .then(d => { if (live) setVendorQueue(d.queue || []); })
+      .catch(() => { /* bonus widget — fail quietly */ });
+    return () => { live = false; };
+  }, []);
   const clients = portfolio || [];
   // KPIs computed from real data, with null meaning "we don't have this".
   //
@@ -14878,6 +14965,42 @@ function AnalystConsole({ user, onExit }) {
             })}
           </div>
         </div>
+
+        {vendorQueue.length > 0 && (
+          <div style={{marginTop:24}}>
+            <div style={{display:"flex",alignItems:"center",marginBottom:12}}>
+              <div style={{width:3,height:14,background:SOC.amber,borderRadius:2,marginRight:9}}/>
+              <span style={{color:SOC.text,fontSize:12,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Vendor Risk Across Portfolio</span>
+              <span style={{marginLeft:10,fontSize:10,color:SOC.textMut}}>Clients with vendors coming due for reassessment</span>
+            </div>
+            <div style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderRadius:12,overflow:"hidden"}}>
+              {vendorQueue.map((q,i) => {
+                const c = clients.find(x => x.id === q.userId);
+                return (
+                  <div key={q.userId}
+                    onClick={()=>{ if (c) { setActive(c); setView("client"); } }}
+                    style={{display:"flex",alignItems:"center",gap:14,padding:"12px 16px",
+                      cursor:c?"pointer":"default",borderTop:i>0?`1px solid ${SOC.border}`:"none"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(q.companyName)}</div>
+                      <div style={{color:SOC.textMut,fontSize:11,marginTop:2}}>
+                        {q.vendors.slice(0,3).map(v=>v.name).join(", ")}{q.vendors.length>3?` +${q.vendors.length-3} more`:""}
+                      </div>
+                    </div>
+                    {q.overdue > 0 && (
+                      <span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10,
+                        background:`${SOC.red}22`,color:SOC.red}}>{q.overdue} OVERDUE</span>
+                    )}
+                    {q.dueSoon > 0 && (
+                      <span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10,
+                        background:`${SOC.amber}22`,color:SOC.amber}}>{q.dueSoon} DUE SOON</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
           border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
