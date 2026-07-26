@@ -61,6 +61,9 @@ import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
 // Policy read-and-sign-off tracking — reuses the training product's employee
 // roster and public token link (see trainingProgramRoutes.js's roster split).
 import { registerPolicyAcknowledgmentRoutes } from "./policyAcknowledgmentRoutes.js";
+// Unified view of everything coming due — reads vendor/policy/training data
+// live rather than duplicating it, plus custom client-entered reminders.
+import { registerComplianceCalendarRoutes } from "./complianceCalendarRoutes.js";
 import { registerPhishingRoutes } from "./phishingRoutes.js";
 // Ongoing vendor/third-party risk management (registry, reassessment cadence,
 // AI-grounded incoming-questionnaire assistant) — the layer that was missing
@@ -1604,6 +1607,7 @@ registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extract
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate });
+registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });

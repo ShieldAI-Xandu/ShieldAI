@@ -2894,6 +2894,267 @@ function VendorQuestionnaireLockedCard() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  COMPLIANCE CALENDAR.
+//  Unified view of everything coming due — gap #5. Auto-surfaces vendor
+//  reassessments, pending policy sign-offs, and training due-dates live from
+//  their own data (nothing duplicated), plus custom reminders the client
+//  types in for things ShieldAI can't know about (insurance, licenses,
+//  audits). Reads/writes /api/client/calendar*.
+// ─────────────────────────────────────────────────────────────
+const CALENDAR_SOURCE_ICON = { vendor: "🤝", policy: "📄", training: "🎓", custom: "🗓️" };
+const CALENDAR_STATUS_TONE = {
+  overdue:  { color: C.red,    label: "Overdue" },
+  due_soon: { color: C.amber,  label: "Due soon" },
+  current:  { color: C.green,  label: "Upcoming" },
+  not_set:  { color: C.textMut,label: "No date set" },
+};
+const CALENDAR_CATEGORY_LABEL = {
+  insurance: "Insurance", license: "License", audit: "Audit",
+  contract: "Contract", regulatory: "Regulatory", other: "Other",
+  vendor: "Vendor", policy: "Policy", training: "Training",
+};
+
+function emptyCalendarForm() {
+  return { title: "", category: "other", dueDate: "", recurrenceMonths: "", notes: "" };
+}
+
+function CalendarEntryModal({ initial, onSave, onClose, busy }) {
+  const [form, setForm] = useState(initial ? {
+    title: initial.title || "", category: ["insurance","license","audit","contract","regulatory","other"].includes(initial.category) ? initial.category : "other",
+    dueDate: (initial.dueDate || "").slice(0, 10),
+    recurrenceMonths: initial.recurrenceMonths ? String(initial.recurrenceMonths) : "",
+    notes: initial.notes || "",
+  } : emptyCalendarForm());
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const lbl = { display:"block", fontSize:11.5, color:C.textSec, fontWeight:600, marginBottom:5, marginTop:10 };
+  const inp = { width:"100%", padding:"9px 11px", background:C.surface, border:`1px solid ${C.border}`,
+    borderRadius:7, color:C.text, fontSize:13, fontFamily:"Inter,system-ui,sans-serif", boxSizing:"border-box" };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,padding:24,width:"100%",maxWidth:480,maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:14}}>
+          {initial ? "Edit reminder" : "Add a compliance reminder"}
+        </div>
+
+        <label style={lbl}>What is this?</label>
+        <input value={form.title} onChange={e=>set("title",e.target.value)}
+          placeholder="e.g. Cyber insurance renewal, Business license renewal" style={inp}/>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div>
+            <label style={lbl}>Category</label>
+            <select value={form.category} onChange={e=>set("category",e.target.value)} style={inp}>
+              {["insurance","license","audit","contract","regulatory","other"].map(c =>
+                <option key={c} value={c}>{CALENDAR_CATEGORY_LABEL[c]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Due date</label>
+            <input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)} style={inp}/>
+          </div>
+        </div>
+
+        <label style={lbl}>Repeats every (months, optional)</label>
+        <input type="number" min="1" value={form.recurrenceMonths} onChange={e=>set("recurrenceMonths",e.target.value)}
+          placeholder="Leave blank for a one-time reminder" style={inp}/>
+
+        <label style={lbl}>Notes</label>
+        <textarea value={form.notes} onChange={e=>set("notes",e.target.value)} rows={3}
+          style={{...inp,resize:"vertical",fontFamily:"inherit"}}/>
+
+        <div style={{display:"flex",gap:10,marginTop:18,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
+          <button onClick={()=>onSave(form)} disabled={busy||!form.title.trim()||!form.dueDate}
+            style={{...miniBtn(C.accent,busy||!form.title.trim()||!form.dueDate),padding:"9px 16px",fontWeight:700}}>
+            {busy ? "Saving…" : (initial ? "Save changes" : "Add reminder")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComplianceCalendarSection({ onNavigate }) {
+  const [items, setItems] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [cap, setCap] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [modal, setModal] = useState(null); // null | "new" | custom item being edited
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/calendar`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load your calendar.");
+      setItems(data.items || []);
+      setSummary(data.summary || null);
+      setCap(data.limits?.calendarEntries ?? null);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function saveEntry(form) {
+    setBusy(true); setError(null);
+    try {
+      const editing = modal && modal !== "new";
+      const url = editing ? `${API_BASE}/api/client/calendar/${modal.id}` : `${API_BASE}/api/client/calendar`;
+      const body = { ...form, recurrenceMonths: form.recurrenceMonths ? Number(form.recurrenceMonths) : null };
+      const res = await authFetch(url, {
+        method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.status === 402) { setModal(null); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not save that reminder.");
+      setModal(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function completeEntry(item) {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/calendar/${item.id}/complete`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not update that reminder.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeEntry(item) {
+    if (!window.confirm(`Remove "${item.title}"?`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/calendar/${item.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Could not remove that reminder.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const customCount = items.filter(i => i.sourceType === "custom").length;
+  const atCap = cap != null && customCount >= cap;
+
+  function handleAddClick() {
+    if (atCap) {
+      return showUpgradePrompt({ error: `You've used all ${cap} custom reminder slots on your current plan.`, code: "LIMIT_REACHED", resource: "calendarEntries", currentTier: null });
+    }
+    setModal("new");
+  }
+
+  const statTiles = summary ? [
+    { label: "Overdue", value: summary.overdue, color: C.red },
+    { label: "Due soon", value: summary.dueSoon, color: C.amber },
+    { label: "Upcoming", value: summary.current, color: C.green },
+  ] : [];
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <SectionLabel text="Compliance Calendar"/>
+        {cap != null && (
+          <span style={{fontSize:11.5,color:atCap?C.amber:C.textMut,fontWeight:600}}>
+            {customCount} of {cap} custom reminders used
+          </span>
+        )}
+        <button onClick={handleAddClick}
+          style={{marginLeft:"auto",padding:"7px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+          + Add reminder
+        </button>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : (
+        <>
+          {summary && summary.total > 0 && (
+            <Card style={{marginBottom:14}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(120px, 1fr))",gap:14}}>
+                {statTiles.map(t => (
+                  <div key={t.label} style={{textAlign:"center"}}>
+                    <div style={{fontSize:28,fontWeight:800,color:t.color,lineHeight:1}}>{t.value}</div>
+                    <div style={{fontSize:10.5,color:C.textMut,letterSpacing:0.8,marginTop:4,textTransform:"uppercase"}}>{t.label}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {items.length === 0 ? (
+            <Card style={{textAlign:"center",padding:"24px 12px"}}>
+              <p style={{color:C.textSec,fontSize:13,margin:"0 0 14px"}}>
+                Nothing on your calendar yet. Vendor reassessments, policy sign-offs, and training deadlines
+                will show up here automatically as you use those features — or add your own reminder for
+                things like insurance renewals or audit dates.
+              </p>
+              <button onClick={handleAddClick}
+                style={{padding:"9px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                  borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                + Add your first reminder
+              </button>
+            </Card>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {items.map(item => {
+                const tone = CALENDAR_STATUS_TONE[item.reviewStatus] || CALENDAR_STATUS_TONE.not_set;
+                return (
+                  <Card key={`${item.sourceType}-${item.id}`} style={{padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                      <span style={{fontSize:18}}>{CALENDAR_SOURCE_ICON[item.sourceType]}</span>
+                      <div style={{flex:1,minWidth:180}}>
+                        <div style={{color:C.text,fontWeight:600,fontSize:13.5}}>{safeText(item.title)}</div>
+                        <div style={{color:C.textMut,fontSize:11.5,marginTop:2}}>
+                          {CALENDAR_CATEGORY_LABEL[item.category] || item.category}
+                          {item.notes ? ` · ${safeText(item.notes)}` : ""}
+                          {item.dueDate ? ` · Due ${new Date(item.dueDate).toLocaleDateString()}` : ""}
+                          {item.recurrenceMonths ? ` · Repeats every ${item.recurrenceMonths}mo` : ""}
+                        </div>
+                      </div>
+                      <span style={{color:tone.color,fontWeight:700,fontSize:12,whiteSpace:"nowrap"}}>{tone.label}</span>
+                      {item.sourceType === "custom" ? (
+                        <div style={{display:"flex",gap:6}}>
+                          <button onClick={()=>completeEntry(item)} disabled={busy} style={miniBtn(C.green,busy)}>Mark done</button>
+                          <button onClick={()=>setModal(item)} disabled={busy} style={miniBtn(C.accent,busy)}>Edit</button>
+                          <button onClick={()=>removeEntry(item)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                        </div>
+                      ) : item.detailPath ? (
+                        <button onClick={()=>onNavigate && onNavigate(item.detailPath)} style={miniBtn(C.accent,false)}>View</button>
+                      ) : null}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {modal && (
+        <CalendarEntryModal
+          initial={modal === "new" ? null : modal}
+          busy={busy}
+          onSave={saveEntry}
+          onClose={()=>setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function VendorRiskSection() {
   const { can } = useCapabilities();
   const hasQuestionnaire = can("vendorQuestionnaireAssistant");
@@ -6484,6 +6745,7 @@ function Dashboard({ assessment, results, onReset }) {
   const hasThreatIntel = can("threatIntel");
   const hasReports = can("reportsAccess");
   const hasVendorRegistry = can("vendorRegistry");
+  const hasCalendar = can("complianceCalendar");
   const hasTrainingView = can("trainingPlan");       // Starter+: view the recommendation preview
   const hasTrainingFull = can("trainingDelivery");   // Growth+ (or Starter w/ add-on): full generation
 
@@ -6505,6 +6767,7 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
     { id:"evidence",    icon:"📎", label:"Evidence",           badge:null },
     { id:"vendors",     icon:"🤝", label:"Vendor Risk",        badge:null },
+    { id:"calendar",    icon:"🗓️", label:"Calendar",           badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
     ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:!hasPrograms?null:results?.tools?.toolStack?.length },
@@ -6562,6 +6825,9 @@ function Dashboard({ assessment, results, onReset }) {
     vendors: <LockedFeature icon="🤝" title="Vendor Risk Management" capability="vendorRegistry"
       blurb="Track your vendors as an ongoing program, not a one-time checklist."
       points={["A registry with automatic reassessment due-dates by criticality","AI-assisted, fact-grounded help answering incoming security questionnaires (Growth+)","A staff-visible queue of vendors coming due for review"]}/>,
+    calendar: <LockedFeature icon="🗓️" title="Compliance Calendar" capability="complianceCalendar"
+      blurb="Everything coming due — vendor reassessments, policy sign-offs, training deadlines — in one place."
+      points={["Auto-pulled from your vendor, policy, and training data — nothing to re-enter","Add your own reminders for insurance, licenses, audits, and contracts","One-time or recurring, with overdue items surfaced first"]}/>,
   };
 
   const sectionMap = {
@@ -6579,6 +6845,7 @@ function Dashboard({ assessment, results, onReset }) {
     remediation: !hasEvidence ? lockedSections.remediation : <RemediationSection/>,
     evidence:    !hasEvidence ? lockedSections.evidence : <EvidenceSection/>,
     vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
+    calendar:    !hasCalendar ? lockedSections.calendar : <ComplianceCalendarSection onNavigate={setSection}/>,
     vciso:       <VirtualCISOSection/>,
     threats:    !hasThreatIntel ? lockedSections.threats : <ThreatIntelSection results={results}/>,
     tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results}/>,
