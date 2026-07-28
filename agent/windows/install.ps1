@@ -39,8 +39,12 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item (Join-Path $here "collect.ps1")   (Join-Path $InstallDir "collect.ps1")   -Force
 Copy-Item (Join-Path $here "agent-run.ps1") (Join-Path $InstallDir "agent-run.ps1") -Force
 
-# 2. Write config (server URL + one-time enrollment token)
+# 2. Write config (server URL + one-time enrollment token). Also clear any
+# agent.json from a prior install — otherwise agent-run.ps1 finds an existing
+# (possibly stale/revoked) agent token and never uses the fresh enrollment
+# token we just wrote, so a reinstall silently fails to re-enroll.
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+Remove-Item (Join-Path $DataDir "agent.json") -Force -ErrorAction SilentlyContinue
 @{ serverUrl = $ServerUrl; enrollmentToken = $EnrollmentToken } |
   ConvertTo-Json | Out-File -FilePath (Join-Path $DataDir "config.json") -Encoding utf8
 

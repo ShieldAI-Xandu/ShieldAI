@@ -43,8 +43,12 @@ mkdir -p "$INSTALL_DIR"
 install -m 0755 "$HERE/collect.sh"   "$INSTALL_DIR/collect.sh"
 install -m 0755 "$HERE/../shared/agent-run.sh" "$INSTALL_DIR/agent-run.sh"
 
-# 2. Write config (root-only)
+# 2. Write config (root-only). Also clear any agent.json from a prior install
+# — otherwise agent-run.sh finds an existing (possibly stale/revoked) agent
+# token and never uses the fresh enrollment token we just wrote, so a
+# reinstall silently fails to re-enroll.
 mkdir -p "$DATA_DIR"
+rm -f "$DATA_DIR/agent.json"
 umask 077
 cat > "$DATA_DIR/config.json" <<EOF
 {"serverUrl":"$SERVER_URL","enrollmentToken":"$ENROLL_TOKEN"}
