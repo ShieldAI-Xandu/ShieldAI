@@ -22,6 +22,7 @@ import { fileURLToPath } from "url";
 import JSZip from "jszip";
 import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 import { refreshClientExposure } from "./cveService.js";
+import { buildInstaller } from "./agentInstallerBuilder.js";
 
 // ── agent installer package (served from the source-of-truth agent/ dir) ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -492,6 +493,32 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     }
   });
 
+  // Download a SINGLE, pre-configured installer for an OS — the server URL
+  // and enrollment token are baked in as the script's defaults, so the
+  // client only has to download and run one file (no zip, no extraction, no
+  // copy/pasting flags). Same auth + boundary as the plain package download
+  // above; this only changes packaging, not what the agent does.
+  app.post("/api/agent/download/:os", requireAuth, async (req, res) => {
+    const os = String(req.params.os || "").toLowerCase();
+    const { serverUrl, enrollmentToken, intervalMinutes } = req.body || {};
+    if (!serverUrl || !enrollmentToken) {
+      return res.status(400).json({ error: "serverUrl and enrollmentToken are required." });
+    }
+    try {
+      const { filename, content, contentType } = await buildInstaller(os, { serverUrl, enrollmentToken, intervalMinutes });
+      res.set({
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Length": String(Buffer.byteLength(content, "utf8")),
+      });
+      res.send(content);
+    } catch (err) {
+      const isBadInput = /Unsupported OS|is required\./.test(err.message);
+      if (!isBadInput) console.error("Personalized installer build error:", err.message);
+      res.status(isBadInput ? 400 : 500).json({ error: isBadInput ? err.message : "Could not build the installer." });
+    }
+  });
+
   // List my endpoints (with latest posture summary).
   app.get("/api/admin/endpoints", requireAuth, (req, res) => {
     const mine = (db.data.agents || []).filter(a => a.ownerUserId === req.userId);
@@ -638,7 +665,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     await db.write();
 
     res.json({
-      hostname: agent.hostname, os,
+      hostname: agent.hostname, os, serverUrl,
       fromVersion: agent.agentVersion || "unknown",
       toVersion: AGENT_LATEST_VERSION,
       enrollmentToken: raw,           // shown once

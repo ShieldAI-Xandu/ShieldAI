@@ -2409,6 +2409,30 @@ async function downloadAgentPackage(os) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Download a SINGLE, pre-configured installer for the given OS — the server
+// URL and enrollment token are baked in server-side, so this is the whole
+// install: download and run one file, no zip/extraction/flags. Same
+// auth-protected blob pattern as the other downloads above.
+async function downloadPersonalizedInstaller(os, { serverUrl, enrollmentToken, intervalMinutes }) {
+  const res = await authFetch(`${API_BASE}/api/agent/download/${os}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serverUrl, enrollmentToken, intervalMinutes }),
+  });
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = os === "windows" ? "ShieldAI-Install.ps1" : `ShieldAI-Install-${os}.sh`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 // Shared metadata for the report types (icons, labels, one-line descriptions).
 const REPORT_TYPE_META = {
   status:     { icon: "📋", label: "Status Report",      blurb: "Plain-language snapshot of where you stand today." },
@@ -15092,35 +15116,47 @@ const AGENT_OS_OPTIONS = [
   { os: "macos", label: "macOS" },
 ];
 
+const AGENT_RUN_HINT = {
+  windows: "Run as Administrator: powershell -ExecutionPolicy Bypass -File .\\ShieldAI-Install.ps1",
+  linux: "Run as root: sudo bash ShieldAI-Install-linux.sh",
+  macos: "Run as root: sudo bash ShieldAI-Install-macos.sh",
+};
+
 function AddEndpointModal({ onClose }) {
   const [token, setToken] = useState(null);
   const [expires, setExpires] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [installingOs, setInstallingOs] = useState(null);
+  const [zipDownloadingOs, setZipDownloadingOs] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [downloadingOs, setDownloadingOs] = useState(null);
 
-  async function handleDownload(os) {
-    setDownloadingOs(os); setError(null);
+  // Reuse the current token if we already have one (it's still one-time /
+  // single-endpoint either way), otherwise mint a fresh one.
+  async function ensureToken() {
+    if (token) return token;
+    const res = await authFetch(`${API_BASE}/api/admin/endpoints/enroll-token`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to create token.");
+    setToken(data.enrollmentToken);
+    setExpires(data.expiresInMinutes);
+    return data.enrollmentToken;
+  }
+
+  async function handleInstall(os) {
+    setInstallingOs(os); setError(null);
+    try {
+      const t = await ensureToken();
+      await downloadPersonalizedInstaller(os, { serverUrl: API_BASE, enrollmentToken: t, intervalMinutes: 60 });
+    } catch (e) { setError(e.message); }
+    finally { setInstallingOs(null); }
+  }
+
+  async function handleZipDownload(os) {
+    setZipDownloadingOs(os); setError(null);
     try { await downloadAgentPackage(os); }
     catch (e) { setError(e.message); }
-    finally { setDownloadingOs(null); }
+    finally { setZipDownloadingOs(null); }
   }
-
-  async function generate() {
-    setLoading(true); setError(null);
-    try {
-      const res = await authFetch(`${API_BASE}/api/admin/endpoints/enroll-token`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create token.");
-      setToken(data.enrollmentToken);
-      setExpires(data.expiresInMinutes);
-    } catch (e) { setError(e.message); } finally { setLoading(false); }
-  }
-
-  const installCmd = token
-    ? `powershell -ExecutionPolicy Bypass -File .\\install.ps1 \`\n  -ServerUrl "${API_BASE}" \`\n  -EnrollmentToken "${token}" \`\n  -IntervalMinutes 60`
-    : "";
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
@@ -15135,67 +15171,68 @@ function AddEndpointModal({ onClose }) {
         </div>
         <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
           The ShieldAI agent is <strong>read-only</strong> — it collects security posture and
-          uploads it for analysis. It never changes anything on the machine. Download the agent
-          package for the target OS, generate a one-time enrollment token, then run the installer
-          on the target server or workstation.
+          uploads it for analysis. It never changes anything on the machine. Pick the target OS
+          below: it generates a one-time enrollment token and downloads a single, ready-to-run
+          installer with that token already built in.
         </p>
 
-        <div style={{marginBottom:18}}>
-          <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
-            1. Download the agent package
-          </div>
+        <div style={{marginBottom:14}}>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {AGENT_OS_OPTIONS.map(({ os, label }) => (
-              <button key={os} onClick={()=>handleDownload(os)} disabled={downloadingOs===os}
-                style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,
-                  cursor:downloadingOs===os?"wait":"pointer"}}>
-                {downloadingOs===os ? "Downloading…" : `${label} (.zip)`}
+              <button key={os} onClick={()=>handleInstall(os)} disabled={installingOs===os}
+                style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                  cursor:installingOs===os?"wait":"pointer"}}>
+                {installingOs===os ? "Preparing…" : `Install on ${label}`}
               </button>
+            ))}
+          </div>
+          <div style={{marginTop:10,color:C.textMut,fontSize:11.5,lineHeight:1.6}}>
+            {AGENT_OS_OPTIONS.map(({ os, label }) => (
+              <div key={os}><strong style={{color:C.textSec}}>{label}:</strong> {AGENT_RUN_HINT[os]}</div>
             ))}
           </div>
         </div>
 
-        <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
-          2. Generate an enrollment token
-        </div>
-        {!token ? (
-          <button onClick={generate} disabled={loading}
-            style={{padding:"11px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color:C.bg,border:"none",borderRadius:9,fontSize:14,fontWeight:700,
-              cursor:loading?"wait":"pointer"}}>
-            {loading ? "Generating…" : "Generate Enrollment Token"}
-          </button>
-        ) : (
-          <div>
-            <div style={{marginBottom:14,padding:"12px 14px",background:`${C.amber}12`,
-              border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
-              This token is shown once and is valid for {expires} minutes. It can enroll a single endpoint.
-            </div>
-
-            <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>Enrollment token</div>
-            <div style={{display:"flex",gap:8,marginBottom:16}}>
-              <code style={{flex:1,padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
-                borderRadius:8,color:C.text,fontSize:12,wordBreak:"break-all"}}>{token}</code>
+        {token && (
+          <div style={{marginBottom:14,padding:"12px 14px",background:`${C.amber}12`,
+            border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
+            Enrollment token generated (valid {expires} min, enrolls a single endpoint). It's already
+            embedded in the file(s) downloaded above.
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <code style={{flex:1,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:7,color:C.text,fontSize:11.5,wordBreak:"break-all"}}>{token}</code>
               <button onClick={()=>{navigator.clipboard.writeText(token);setCopied(true);setTimeout(()=>setCopied(false),1500);}}
-                style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:8,color:copied?C.green:C.textSec,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
+                style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:copied?C.green:C.textSec,fontSize:11.5,cursor:"pointer",whiteSpace:"nowrap"}}>
                 {copied ? "Copied ✓" : "Copy"}
               </button>
             </div>
-
-            <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
-              3. Run the installer (Windows shown; run as Administrator)
-            </div>
-            <pre style={{margin:0,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
-              borderRadius:8,color:C.text,fontSize:11.5,overflowX:"auto",whiteSpace:"pre-wrap",lineHeight:1.5}}>{installCmd}</pre>
-            <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.5,margin:"12px 0 0"}}>
-              Linux & macOS installers use the same token. The endpoint enrolls and sends its first
-              report within ~1 minute, then reports on a schedule.
-            </p>
           </div>
         )}
-        {error && <div style={{marginTop:14,color:C.red,fontSize:13}}>{error}</div>}
+
+        {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+        <details>
+          <summary style={{color:C.textSec,fontSize:12,fontWeight:600,cursor:"pointer",userSelect:"none"}}>
+            Advanced: download the raw package instead
+          </summary>
+          <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:"8px 0 10px"}}>
+            For review before running with a real token, or manual installs: a zip of the
+            collector + runner scripts, no token embedded. You'll need to generate a token above
+            and pass it (plus the server URL) as flags yourself.
+          </p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {AGENT_OS_OPTIONS.map(({ os, label }) => (
+              <button key={os} onClick={()=>handleZipDownload(os)} disabled={zipDownloadingOs===os}
+                style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,
+                  cursor:zipDownloadingOs===os?"wait":"pointer"}}>
+                {zipDownloadingOs===os ? "Downloading…" : `${label} (.zip)`}
+              </button>
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -15834,10 +15871,12 @@ function MastermindConsole({ onClose }) {
                     <pre style={{margin:0,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
                       borderRadius:8,color:C.text,fontSize:11.5,overflowX:"auto",whiteSpace:"pre-wrap",lineHeight:1.5}}>{upgradeInfo.command}</pre>
                     <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap"}}>
-                      <button onClick={()=>downloadAgentPackage(upgradeInfo.os).catch(()=>{})}
+                      <button onClick={()=>downloadPersonalizedInstaller(upgradeInfo.os, {
+                          serverUrl: upgradeInfo.serverUrl, enrollmentToken: upgradeInfo.enrollmentToken, intervalMinutes: 60,
+                        }).catch(e=>setError(e.message))}
                         style={{padding:"6px 13px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
                           borderRadius:7,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                        Download {upgradeInfo.os} package
+                        Download installer
                       </button>
                       <button onClick={()=>{navigator.clipboard.writeText(upgradeInfo.command);}}
                         style={{padding:"6px 13px",background:C.surface,border:`1px solid ${C.border}`,
