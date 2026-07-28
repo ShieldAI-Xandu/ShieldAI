@@ -2391,6 +2391,24 @@ async function downloadReport(report) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Download the ShieldAI monitoring-agent installer package (a small zip of
+// read-only collector scripts) for the given OS. Auth-protected like the
+// other downloads above, so fetch as a blob rather than a bare href.
+async function downloadAgentPackage(os) {
+  const res = await authFetch(`${API_BASE}/api/agent/download/${os}`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `shieldai-agent-${os}.zip`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 // Shared metadata for the report types (icons, labels, one-line descriptions).
 const REPORT_TYPE_META = {
   status:     { icon: "📋", label: "Status Report",      blurb: "Plain-language snapshot of where you stand today." },
@@ -15068,12 +15086,26 @@ function isOnline(lastSeen) {
 }
 
 // ── Add Endpoint modal: generates a one-time enrollment token ──
+const AGENT_OS_OPTIONS = [
+  { os: "windows", label: "Windows" },
+  { os: "linux", label: "Linux" },
+  { os: "macos", label: "macOS" },
+];
+
 function AddEndpointModal({ onClose }) {
   const [token, setToken] = useState(null);
   const [expires, setExpires] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [downloadingOs, setDownloadingOs] = useState(null);
+
+  async function handleDownload(os) {
+    setDownloadingOs(os); setError(null);
+    try { await downloadAgentPackage(os); }
+    catch (e) { setError(e.message); }
+    finally { setDownloadingOs(null); }
+  }
 
   async function generate() {
     setLoading(true); setError(null);
@@ -15103,10 +15135,30 @@ function AddEndpointModal({ onClose }) {
         </div>
         <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
           The ShieldAI agent is <strong>read-only</strong> — it collects security posture and
-          uploads it for analysis. It never changes anything on the machine. Generate a one-time
-          enrollment token, then run the installer on the target server or workstation.
+          uploads it for analysis. It never changes anything on the machine. Download the agent
+          package for the target OS, generate a one-time enrollment token, then run the installer
+          on the target server or workstation.
         </p>
 
+        <div style={{marginBottom:18}}>
+          <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
+            1. Download the agent package
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {AGENT_OS_OPTIONS.map(({ os, label }) => (
+              <button key={os} onClick={()=>handleDownload(os)} disabled={downloadingOs===os}
+                style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,
+                  cursor:downloadingOs===os?"wait":"pointer"}}>
+                {downloadingOs===os ? "Downloading…" : `${label} (.zip)`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
+          2. Generate an enrollment token
+        </div>
         {!token ? (
           <button onClick={generate} disabled={loading}
             style={{padding:"11px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -15133,7 +15185,7 @@ function AddEndpointModal({ onClose }) {
             </div>
 
             <div style={{marginBottom:6,color:C.textSec,fontSize:12,fontWeight:600}}>
-              Windows install (run as Administrator)
+              3. Run the installer (Windows shown; run as Administrator)
             </div>
             <pre style={{margin:0,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.text,fontSize:11.5,overflowX:"auto",whiteSpace:"pre-wrap",lineHeight:1.5}}>{installCmd}</pre>
@@ -15781,7 +15833,12 @@ function MastermindConsole({ onClose }) {
                     </ol>
                     <pre style={{margin:0,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
                       borderRadius:8,color:C.text,fontSize:11.5,overflowX:"auto",whiteSpace:"pre-wrap",lineHeight:1.5}}>{upgradeInfo.command}</pre>
-                    <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center"}}>
+                    <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap"}}>
+                      <button onClick={()=>downloadAgentPackage(upgradeInfo.os).catch(()=>{})}
+                        style={{padding:"6px 13px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                          borderRadius:7,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                        Download {upgradeInfo.os} package
+                      </button>
                       <button onClick={()=>{navigator.clipboard.writeText(upgradeInfo.command);}}
                         style={{padding:"6px 13px",background:C.surface,border:`1px solid ${C.border}`,
                           borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>Copy command</button>

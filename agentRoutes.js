@@ -16,8 +16,37 @@
 // deterministic drafts (built directly from the failing checks) are still used.
 
 import { randomUUID, randomBytes, createHash } from "crypto";
+import { readFile } from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+import JSZip from "jszip";
 import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 import { refreshClientExposure } from "./cveService.js";
+
+// ── agent installer package (served from the source-of-truth agent/ dir) ──
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AGENT_SRC_DIR = path.join(__dirname, "agent");
+
+// Each entry maps a file on disk (relative to agent/) to its path inside the
+// downloaded zip. Linux/macOS keep the OS folder + shared/ sibling structure
+// intact so install.sh's `$HERE/../shared/agent-run.sh` reference still resolves.
+const AGENT_PACKAGE_FILES = {
+  windows: [
+    { src: "windows/install.ps1", zip: "install.ps1" },
+    { src: "windows/collect.ps1", zip: "collect.ps1" },
+    { src: "windows/agent-run.ps1", zip: "agent-run.ps1" },
+  ],
+  linux: [
+    { src: "linux/install.sh", zip: "linux/install.sh" },
+    { src: "linux/collect.sh", zip: "linux/collect.sh" },
+    { src: "shared/agent-run.sh", zip: "shared/agent-run.sh" },
+  ],
+  macos: [
+    { src: "macOS/install.sh", zip: "macos/install.sh" },
+    { src: "macOS/collect.sh", zip: "macos/collect.sh" },
+    { src: "shared/agent-run.sh", zip: "shared/agent-run.sh" },
+  ],
+};
 
 // ── small helpers ─────────────────────────────────────────────
 const nowIso = () => new Date().toISOString();
@@ -429,6 +458,37 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     } catch (err) {
       console.error("Enroll-token error:", err.message);
       res.status(500).json({ error: "Could not create enrollment token." });
+    }
+  });
+
+  // Download the agent installer package for an OS (the scripts themselves —
+  // read-only source files, no client data, no secrets). Any authenticated
+  // user (client admin, analyst, or platform admin) may fetch it.
+  app.get("/api/agent/download/:os", requireAuth, async (req, res) => {
+    const os = String(req.params.os || "").toLowerCase();
+    const files = AGENT_PACKAGE_FILES[os];
+    if (!files) {
+      return res.status(400).json({ error: "Unsupported OS. Use windows, linux, or macos." });
+    }
+    try {
+      const zip = new JSZip();
+      for (const f of files) {
+        const content = await readFile(path.join(AGENT_SRC_DIR, f.src));
+        zip.file(f.zip, content, f.zip.endsWith(".sh") ? { unixPermissions: 0o755 } : undefined);
+      }
+      // Force "UNIX" so the .sh files' 0o755 mode survives regardless of the
+      // host OS running the server (JSZip defaults to DOS attrs otherwise,
+      // which silently drops the executable bit).
+      const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", platform: "UNIX" });
+      res.set({
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="shieldai-agent-${os}-v${AGENT_LATEST_VERSION}.zip"`,
+        "Content-Length": String(buf.length),
+      });
+      res.send(buf);
+    } catch (err) {
+      console.error("Agent package download error:", err.message);
+      res.status(500).json({ error: "Could not build the agent package." });
     }
   });
 
