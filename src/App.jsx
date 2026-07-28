@@ -15146,7 +15146,13 @@ function AddEndpointModal({ onClose }) {
     setInstallingOs(os); setError(null);
     try {
       const t = await ensureToken();
-      await downloadPersonalizedInstaller(os, { serverUrl: API_BASE, enrollmentToken: t, intervalMinutes: 60 });
+      // API_BASE is intentionally "" in production (relative paths for our own
+      // fetch calls) and an absolute localhost URL in dev. Either way the
+      // installer runs on a different machine, so it needs an absolute origin
+      // to phone home to — fall back to the page's own origin when API_BASE
+      // is empty (production).
+      const agentServerUrl = API_BASE || window.location.origin;
+      await downloadPersonalizedInstaller(os, { serverUrl: agentServerUrl, enrollmentToken: t, intervalMinutes: 60 });
     } catch (e) { setError(e.message); }
     finally { setInstallingOs(null); }
   }
