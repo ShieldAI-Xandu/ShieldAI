@@ -57,7 +57,7 @@ const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 c
 // The latest agent version ShieldAI ships. Surfaced to agents (so they can note
 // staleness) and used by the human-gated upgrade flow. Bump when you release a
 // new collector/runner.
-const AGENT_LATEST_VERSION = "1.0.0";
+const AGENT_LATEST_VERSION = "1.1.0";
 
 // Ensure all agent collections exist on the lowdb instance.
 function ensureCollections(db) {

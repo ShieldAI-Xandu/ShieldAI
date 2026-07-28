@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
   [string]$OutFile = "",
-  [string]$AgentVersion = "1.0.0"
+  [string]$AgentVersion = "1.1.0"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -61,7 +61,10 @@ function Try-Run { param([scriptblock]$Do, [scriptblock]$OnError)
 $os   = Get-CimInstance Win32_OperatingSystem
 $cs   = Get-CimInstance Win32_ComputerSystem
 $boot = $null
-Try-Run { $boot = $os.LastBootUpTime.ToUniversalTime().ToString("o") }
+# Plain try/catch, not Try-Run — see the note further down (AV productState
+# decode) for why: Try-Run's scriptblock runs in a child scope, so
+# `Try-Run { $boot = ... }` would silently never update this $boot.
+try { $boot = $os.LastBootUpTime.ToUniversalTime().ToString("o") } catch { }
 
 $hostInfo = [ordered]@{
   hostname     = $env:COMPUTERNAME
@@ -73,7 +76,11 @@ $hostInfo = [ordered]@{
 }
 
 $inventory = [ordered]@{
-  localAdmins = @(); installedSecurityTools = @();
+  # installedSecurityTools must be a mutable list (not a plain @() array) —
+  # several checks below call .Add() on it, which throws on a fixed-size
+  # array and was silently swallowed by the enclosing Try-Run, breaking AV
+  # tool reporting.
+  localAdmins = @(); installedSecurityTools = (New-Object System.Collections.ArrayList);
   diskEncryption = "unknown"; pendingPatches = 0; firewall = "unknown";
   software = @()
 }
@@ -94,7 +101,11 @@ Try-Run {
     }
     # Signature freshness
     $age = $null
-    Try-Run { $age = (New-TimeSpan -Start $mp.AntivirusSignatureLastUpdated -End (Get-Date)).Days }
+    # Plain try/catch, not Try-Run — see the note further down (AV productState
+    # decode) for why: Try-Run's scriptblock runs in a child scope, so this
+    # assignment to $age would silently never reach the check below,
+    # permanently disabling the signature-freshness check.
+    try { $age = (New-TimeSpan -Start $mp.AntivirusSignatureLastUpdated -End (Get-Date)).Days } catch { }
     if ($age -ne $null) {
       if ($age -le 3) {
         Add-Check -Id "av_signatures" -Category "Protect" -Title "Antivirus signature freshness" `
@@ -146,6 +157,59 @@ Try-Run {
       -Status "pass" -Severity "info" -Observed "None recorded" `
       -Detail "No recent Defender threat detections." -CisControl "10"
   }
+}
+
+# ── 1b. Full AV/security product enumeration (Security Center) ──
+# Get-MpComputerStatus only reports on Defender itself. Windows Security
+# Center tracks EVERY registered AV product on the machine — this is how we
+# catch a third-party AV/EDR (Norton, Sophos, CrowdStrike, SentinelOne, etc.)
+# instead of only ever reporting Defender's state, which is what an SMB is
+# actually protected by if they've replaced/augmented Defender.
+Try-Run {
+  $avProducts = @(Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop)
+  $seenNames = @{}
+  foreach ($p in $avProducts) {
+    $name = "$($p.displayName)".Trim()
+    if ([string]::IsNullOrWhiteSpace($name) -or $seenNames.ContainsKey($name)) { continue }
+    $seenNames[$name] = $true
+    if (-not ($inventory.installedSecurityTools -contains $name)) {
+      [void]$inventory.installedSecurityTools.Add($name)
+    }
+    # Best-effort decode of the long-standing community convention for the
+    # productState bitmask (Microsoft publishes no official schema for it,
+    # but this decode is widely used and stable across Windows versions).
+    # Falls back to just reporting the product's presence if decoding fails.
+    $statusText = "registered with Security Center"
+    $checkStatus = "pass"; $checkSeverity = "info"
+    # Plain try/catch (not the Try-Run helper) — Try-Run invokes its
+    # scriptblock via `&`, which runs in a child scope, so assignments to
+    # $statusText/$checkStatus/$checkSeverity inside it would shadow rather
+    # than update these outer variables. A bare try/catch shares this scope.
+    try {
+      $stateHex = "{0:X6}" -f [int]$p.productState
+      $rtOn = $stateHex.Substring(2,2) -in @("10","11")
+      $defUpToDate = $stateHex.Substring(4,2) -eq "00"
+      if ($rtOn -and $defUpToDate) {
+        $statusText = "enabled, definitions current"; $checkStatus = "pass"; $checkSeverity = "info"
+      } elseif ($rtOn) {
+        $statusText = "enabled, definitions may be stale"; $checkStatus = "warn"; $checkSeverity = "medium"
+      } else {
+        $statusText = "protection appears disabled"; $checkStatus = "fail"; $checkSeverity = "high"
+      }
+    } catch { }
+    Add-Check -Id "av_product_$($name -replace '[^a-zA-Z0-9]','_')" -Category "Protect" `
+      -Title "Registered AV product: $name" -Status $checkStatus -Severity $checkSeverity `
+      -Observed $statusText -Detail "Reported by Windows Security Center." -CisControl "10"
+  }
+  if ($avProducts.Count -eq 0) {
+    Add-Check -Id "av_registered" -Category "Protect" -Title "Registered AV products" `
+      -Status "warn" -Severity "medium" -Observed "None registered with Security Center" `
+      -Detail "No antivirus product is registered with Windows Security Center." -CisControl "10"
+  }
+} {
+  # Non-fatal: Security Center's WMI provider isn't present on Server SKUs
+  # (no Action Center service) or may be restricted — the Defender-specific
+  # checks above still provide baseline AV visibility in that case.
 }
 
 # ── 2. Firewall ───────────────────────────────────────────────
@@ -230,7 +294,59 @@ Try-Run {
     -Detail "Screens should auto-lock after a short idle period and require a password." -CisControl "4"
 }
 
-# ── 7. Installed software inventory (read-only) ───────────────
+# ── 7. Guest account ────────────────────────────────────────────
+Try-Run {
+  $guest = Get-LocalUser -Name "Guest" -ErrorAction Stop
+  Add-Check -Id "guest_account" -Category "Protect" -Title "Guest account disabled" `
+    -Status ($(if (-not $guest.Enabled) {"pass"} else {"fail"})) `
+    -Severity ($(if (-not $guest.Enabled) {"info"} else {"high"})) `
+    -Observed ($(if ($guest.Enabled) {"Enabled"} else {"Disabled"})) `
+    -Detail "The built-in Guest account should stay disabled - it's a common low-friction entry point." -CisControl "5"
+} {
+  Add-Check -Id "guest_account" -Category "Protect" -Title "Guest account disabled" -Status "unknown" `
+    -Severity "low" -Observed "Not determinable" -Detail "Could not query the local Guest account." -CisControl "5"
+}
+
+# ── 8. Legacy SMBv1 protocol ────────────────────────────────────
+Try-Run {
+  $smb1 = Get-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -ErrorAction Stop
+  $on = $smb1.State -eq "Enabled"
+  Add-Check -Id "smb1" -Category "Protect" -Title "Legacy SMBv1 protocol" `
+    -Status ($(if (-not $on) {"pass"} else {"fail"})) `
+    -Severity ($(if (-not $on) {"info"} else {"critical"})) `
+    -Observed ($(if ($on) {"Enabled"} else {"Disabled"})) `
+    -Detail "SMBv1 is a legacy, vulnerable protocol (e.g. EternalBlue/WannaCry) and should stay disabled unless a specific legacy device requires it." -CisControl "4"
+} {
+  Add-Check -Id "smb1" -Category "Protect" -Title "Legacy SMBv1 protocol" -Status "unknown" `
+    -Severity "low" -Observed "Not determinable" -Detail "Could not query the SMB1Protocol optional feature." -CisControl "4"
+}
+
+# ── 9. Remote Desktop (RDP) exposure ────────────────────────────
+Try-Run {
+  $rdpDeny = (Get-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -ErrorAction Stop).fDenyTSConnections
+  if ($rdpDeny -eq 0) {
+    $nlaOn = $false
+    # Plain try/catch, not Try-Run — see the note above the AV productState
+    # decode for why: Try-Run's scriptblock invocation would shadow $nlaOn
+    # instead of updating it.
+    try {
+      $nlaOn = ((Get-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -ErrorAction Stop).UserAuthentication -eq 1)
+    } catch { }
+    Add-Check -Id "rdp_exposure" -Category "Protect" -Title "Remote Desktop (RDP)" `
+      -Status ($(if ($nlaOn) {"warn"} else {"fail"})) `
+      -Severity ($(if ($nlaOn) {"medium"} else {"critical"})) `
+      -Observed ($(if ($nlaOn) {"Enabled, NLA required"} else {"Enabled, NLA NOT required"})) `
+      -Detail "RDP is a common ransomware entry point. If it must stay enabled, Network Level Authentication should be required and access restricted (VPN/firewall)." -CisControl "4"
+  } else {
+    Add-Check -Id "rdp_exposure" -Category "Protect" -Title "Remote Desktop (RDP)" `
+      -Status "pass" -Severity "info" -Observed "Disabled" -Detail "Remote Desktop is disabled." -CisControl "4"
+  }
+} {
+  Add-Check -Id "rdp_exposure" -Category "Protect" -Title "Remote Desktop (RDP)" -Status "unknown" `
+    -Severity "low" -Observed "Not determinable" -Detail "Could not query Remote Desktop configuration." -CisControl "4"
+}
+
+# ── 10. Installed software inventory (read-only) ───────────────
 # Enumerates installed applications with versions from the registry uninstall
 # keys — the standard, fast, read-only method (avoids the slow Win32_Product
 # WMI query, which can trigger MSI reconfiguration). Covers 64-bit, 32-bit, and

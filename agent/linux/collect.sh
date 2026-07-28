@@ -17,7 +17,7 @@
 # string escaping; if absent, a built-in escaper is used.
 
 set -u
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.1.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -116,13 +116,17 @@ fi
 add_check "disk_encryption" "Protect" "Disk encryption" "$ENC_STATUS" "$ENC_SEV" "$ENC_OBSERVED" \
   "Disks holding sensitive data should be encrypted at rest." "3"
 
-# ── 3. Antivirus presence (ClamAV or vendor) ──────────────────
-AV_FOUND=""
-if have clamscan || have clamdscan; then AV_FOUND="ClamAV"; add_tool "ClamAV"; fi
-if systemctl is-active --quiet falcon-sensor 2>/dev/null; then AV_FOUND="CrowdStrike Falcon"; add_tool "CrowdStrike Falcon"; fi
-if systemctl is-active --quiet sentinelone 2>/dev/null || have sentinelctl; then AV_FOUND="SentinelOne"; add_tool "SentinelOne"; fi
-if [ -n "$AV_FOUND" ]; then
-  add_check "av_present" "Protect" "Endpoint protection installed" "pass" "info" "$AV_FOUND" \
+# ── 3. Antivirus / EDR presence (ClamAV or vendor agents) ──────
+AV_TOOLS=""
+add_av() { AV_TOOLS="${AV_TOOLS:+$AV_TOOLS, }$1"; add_tool "$1"; }
+if have clamscan || have clamdscan; then add_av "ClamAV"; fi
+if systemctl is-active --quiet falcon-sensor 2>/dev/null; then add_av "CrowdStrike Falcon"; fi
+if systemctl is-active --quiet sentinelone 2>/dev/null || have sentinelctl; then add_av "SentinelOne"; fi
+if systemctl is-active --quiet sophos-spl 2>/dev/null || have savdstatus; then add_av "Sophos"; fi
+if systemctl is-active --quiet wazuh-agent 2>/dev/null; then add_av "Wazuh Agent"; fi
+if systemctl is-active --quiet esets 2>/dev/null || have esets_daemon; then add_av "ESET"; fi
+if [ -n "$AV_TOOLS" ]; then
+  add_check "av_present" "Protect" "Endpoint protection installed" "pass" "info" "$AV_TOOLS" \
     "An endpoint protection product is installed." "10"
 else
   add_check "av_present" "Protect" "Endpoint protection installed" "warn" "medium" "None detected" \

@@ -13,7 +13,7 @@
 # Pure bash + built-in macOS utilities. Uses `plutil`/`python3` only if present.
 
 set -u
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.1.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -132,9 +132,12 @@ else
   add_check "av_present" "Protect" "Built-in malware protection" "unknown" "low" "XProtect not found" \
     "Could not confirm XProtect presence." "10"
 fi
-# Third-party EDR detection
+# Third-party EDR/AV detection
 if [ -d "/Applications/Falcon.app" ] || pgrep -q falcon 2>/dev/null; then add_tool "CrowdStrike Falcon"; fi
 if [ -d "/Applications/SentinelOne" ] || pgrep -q SentinelAgent 2>/dev/null; then add_tool "SentinelOne"; fi
+if [ -d "/Applications/Sophos Endpoint.app" ] || pgrep -qi "Sophos" 2>/dev/null; then add_tool "Sophos"; fi
+if [ -d "/Applications/Malwarebytes.app" ]; then add_tool "Malwarebytes"; fi
+if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon" 2>/dev/null; then add_tool "ESET"; fi
 
 # ── 6. Pending software updates ───────────────────────────────
 if have softwareupdate; then
