@@ -13370,169 +13370,6 @@ function AnalystDarkWebPanel({ clientId }) {
   );
 }
 
-// ── Training Manager overlay (analyst-side training management for a client) ──
-function TrainingManager({ client, onClose }) {
-  const t = client.training || {};
-  const hasProgram = (t.enrolled || 0) > 0;
-  const [tab, setTab] = useState("overview"); // overview | modules | campaigns
-  const [building, setBuilding] = useState(false);
-  const [built, setBuilt] = useState(false);
-
-  function buildProgram() {
-    setBuilding(true);
-    setTimeout(() => { setBuilding(false); setBuilt(true); }, 1100);
-  }
-
-  const Stat = ({ label, value, color }) => (
-    <div style={{flex:1,background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"14px",textAlign:"center"}}>
-      <div style={{fontSize:24,fontWeight:800,color:color||SOC.cyan}}>{value}</div>
-      <div style={{fontSize:10,color:SOC.textMut,marginTop:3}}>{label}</div>
-    </div>
-  );
-
-  return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(3,7,18,0.75)",
-      zIndex:60,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 20px",overflowY:"auto"}}>
-      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:760,background:SOC.panel,
-        border:`1px solid ${SOC.border}`,borderRadius:14,overflow:"hidden"}}>
-        {/* Header */}
-        <div style={{padding:"16px 20px",borderBottom:`1px solid ${SOC.border}`,
-          display:"flex",alignItems:"center",gap:10,background:`linear-gradient(135deg,${SOC.cyan}18,transparent)`}}>
-          <span style={{fontSize:18}}>🎓</span>
-          <div style={{flex:1}}>
-            <div style={{color:SOC.text,fontWeight:700,fontSize:15}}>Training Management</div>
-            <div style={{color:SOC.textMut,fontSize:11}}>{safeText(client.name)} · {client.employees} employees</div>
-          </div>
-          <button onClick={onClose} style={{background:"none",border:"none",color:SOC.textMut,fontSize:20,cursor:"pointer"}}>×</button>
-        </div>
-
-        {/* No program yet → build CTA */}
-        {!hasProgram && !built ? (
-          <div style={{padding:"40px 24px",textAlign:"center"}}>
-            <div style={{fontSize:36,marginBottom:12}}>📚</div>
-            <div style={{color:SOC.text,fontWeight:700,fontSize:16,marginBottom:8}}>No training program deployed</div>
-            <div style={{color:SOC.textSec,fontSize:13,lineHeight:1.6,maxWidth:440,margin:"0 auto 20px"}}>
-              Generate a CISA/NIST-aligned awareness program tailored to {safeText(client.name)}'s industry
-              ({client.industry}) and roll it out to all {client.employees} employees.
-            </div>
-            <button onClick={buildProgram} disabled={building}
-              style={{padding:"11px 24px",background:building?SOC.bg:SOC.cyan,color:building?SOC.textMut:SOC.bg,
-                border:building?`1px solid ${SOC.border}`:"none",borderRadius:9,fontSize:13,fontWeight:700,
-                cursor:building?"wait":"pointer"}}>
-              {building ? "Building tailored program…" : "✦ Build & Assign Training Program"}
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Tabs */}
-            <div style={{display:"flex",gap:6,padding:"12px 20px 0"}}>
-              {[["overview","Overview"],["modules","Module Progress"],["campaigns","Phishing Campaigns"]].map(([id,label])=>(
-                <button key={id} onClick={()=>setTab(id)}
-                  style={{padding:"8px 14px",background:tab===id?`${SOC.cyan}22`:"transparent",
-                    border:"none",borderBottom:`2px solid ${tab===id?SOC.cyan:"transparent"}`,
-                    color:tab===id?SOC.cyan:SOC.textSec,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div style={{padding:"18px 20px 24px"}}>
-              {tab==="overview" && (
-                <>
-                  <div style={{display:"flex",gap:10,marginBottom:16}}>
-                    <Stat label="Enrolled" value={t.enrolled || client.employees} color={SOC.cyan}/>
-                    <Stat label="Completion" value={`${built?12:t.completion}%`} color={SOC.green}/>
-                    <Stat label="Modules" value={(t.modules||[]).length || 12} color={SOC.purple}/>
-                    <Stat label="Avg Quiz Score" value={`${avgScore(t)}%`} color={SOC.amber}/>
-                  </div>
-                  <div style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"14px 16px"}}>
-                    <div style={{color:SOC.text,fontSize:13,fontWeight:600,marginBottom:6}}>
-                      {built ? "CISA/NIST Awareness Program (just deployed)" : t.active}
-                    </div>
-                    <div style={{color:SOC.textSec,fontSize:12,lineHeight:1.6}}>
-                      {built
-                        ? `A tailored program for ${client.name} has been generated and assigned to all ${client.employees} employees. Completion tracking begins as staff work through the modules.`
-                        : `Active program with a completion deadline of ${t.nextDue}. ${t.enrolled} employees enrolled across ${(t.modules||[]).length} modules.`}
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:8,marginTop:16}}>
-                    <button style={{flex:1,padding:"9px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,
-                      borderRadius:8,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>Send Reminder to Incomplete</button>
-                    <button style={{flex:1,padding:"9px",background:`${SOC.purple}18`,border:`1px solid ${SOC.purple}44`,
-                      borderRadius:8,color:SOC.purple,fontSize:12,fontWeight:600,cursor:"pointer"}}>Push New Campaign</button>
-                  </div>
-                </>
-              )}
-
-              {tab==="modules" && (
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {(t.modules||[]).length === 0 ? (
-                    <div style={{color:SOC.textSec,fontSize:13,padding:"10px 0"}}>Modules will populate once the program is deployed.</div>
-                  ) : t.modules.map((m,i)=>{
-                    const pct = Math.round((m.done/(t.enrolled||1))*100);
-                    return (
-                      <div key={i} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:9,padding:"12px 14px"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:7}}>
-                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(m.name)}</span>
-                          <span style={{color:SOC.textMut,fontSize:11}}>{m.done}/{t.enrolled} done · avg {m.avgScore}%</span>
-                        </div>
-                        <div style={{height:6,background:SOC.grid,borderRadius:3,overflow:"hidden"}}>
-                          <div style={{width:`${pct}%`,height:"100%",
-                            background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {tab==="campaigns" && (
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  <button style={{alignSelf:"flex-start",padding:"8px 16px",background:SOC.purple,color:SOC.bg,
-                    border:"none",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                    + Launch Phishing Simulation
-                  </button>
-                  {(t.campaigns||[]).length === 0 ? (
-                    <div style={{color:SOC.textSec,fontSize:13,padding:"4px 0"}}>No campaigns run yet.</div>
-                  ) : t.campaigns.map((c,i)=>{
-                    const clickRate = Math.round((c.clicked/c.sent)*100);
-                    const reportRate = Math.round((c.reported/c.sent)*100);
-                    return (
-                      <div key={i} style={{background:SOC.bg,border:`1px solid ${SOC.border}`,borderRadius:10,padding:"13px 15px"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                          <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{safeText(c.name)}</span>
-                          <span style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:10,
-                            background:c.status==="active"?`${SOC.green}22`:`${SOC.textMut}22`,
-                            color:c.status==="active"?SOC.green:SOC.textMut,textTransform:"uppercase"}}>{c.status}</span>
-                        </div>
-                        <div style={{display:"flex",gap:16,fontSize:11}}>
-                          <span style={{color:SOC.textSec}}>Sent: <b style={{color:SOC.text}}>{c.sent}</b></span>
-                          <span style={{color:clickRate>15?SOC.red:SOC.textSec}}>Clicked: <b style={{color:clickRate>15?SOC.red:SOC.amber}}>{c.clicked}</b> ({clickRate}%)</span>
-                          <span style={{color:SOC.textSec}}>Reported: <b style={{color:SOC.green}}>{c.reported}</b> ({reportRate}%)</span>
-                          <span style={{color:SOC.textMut,marginLeft:"auto"}}>{c.date}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-        <div style={{padding:"10px 20px",borderTop:`1px solid ${SOC.border}`,
-          fontSize:10,color:SOC.textMut,textAlign:"center"}}>
-          Vision mockup · live program generation uses ShieldAI's CISA/NIST training engine
-        </div>
-      </div>
-    </div>
-  );
-}
-function avgScore(t) {
-  const mods = t.modules || [];
-  if (!mods.length) return 0;
-  return Math.round(mods.reduce((s,m)=>s+(m.avgScore||0),0)/mods.length);
-}
-
 // ── ShieldAI Mastermind — scripted diagnostic-AI responses ──
 // Context-aware canned exchanges for the demo. Each quick-action returns
 // an expert-sounding, structured response. Some are tailored per client.
@@ -13995,7 +13832,6 @@ function AnalystConsole({ user, onExit }) {
   ]);
   const [mmDraft, setMmDraft] = useState("");
   const [mmThinking, setMmThinking] = useState(false);
-  const [trainingClient, setTrainingClient] = useState(null); // client whose training mgmt is open
   const [fleet, setFleet] = useState(null);          // live endpoints from backend
   const [myClients, setMyClients] = useState(null);
   const [actionsFor, setActionsFor] = useState(null); // { client, actions }
@@ -14661,7 +14497,6 @@ function AnalystConsole({ user, onExit }) {
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title={c.name} backTo={{ label:"Portfolio", fn:()=>{setView("portfolio");setActive(null);} }}/>
         <Mastermind/>
-        {trainingClient && <TrainingManager client={trainingClient} onClose={()=>setTrainingClient(null)}/>}
         <div style={{maxWidth:1180,margin:"0 auto",padding:"20px"}}>
 
           {/* Top band: posture + agent + compliance + plan */}
@@ -14715,7 +14550,13 @@ function AnalystConsole({ user, onExit }) {
           <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:14,marginBottom:14}}>
             {/* Posture trend */}
             <SocPanel title="Security Posture — 12 Month Trend" accent={SOC.cyan}>
-              <TrendChart data={c.history} color={clr}/>
+              {hist.length < 2 ? (
+                <div style={{color:SOC.textMut,fontSize:12,padding:"30px 0",textAlign:"center"}}>
+                  Not enough posture history yet to chart a trend.
+                </div>
+              ) : (
+                <TrendChart data={hist} color={clr}/>
+              )}
             </SocPanel>
 
             {/* Live threat feed */}
@@ -14829,7 +14670,7 @@ function AnalystConsole({ user, onExit }) {
             <ClientReportsPanel clientId={c.id}/>
           </div>
 
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
             {/* Program health — from the client's actual answers, not inferred.
                 These four rows previously read:
                   { label:"Patch compliance", val: c.posture>50?78:34 }
@@ -14906,50 +14747,6 @@ function AnalystConsole({ user, onExit }) {
                 </>
               )}
             </SocPanel>
-
-            {/* Training program — real rollup from clientTrainingSummary (same
-                source the client's own Training tab and the admin fleet view
-                use). `c.training` guarded with `|| {}` since older cached
-                portfolio rows (or a future schema change) shouldn't crash this
-                view — a missing field renders as "no data", not an exception. */}
-            <SocPanel title="Training Program" accent={SOC.cyan}>
-              {(() => {
-                const t = c.training || {};
-                const enrolled = t.enrolled || 0;
-                return (
-                  <>
-                    <div style={{fontSize:12,color:SOC.text,fontWeight:600,marginBottom:4}}>
-                      {t.active || "No data to report"}
-                    </div>
-                    {enrolled > 0 ? (
-                      <>
-                        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:SOC.textMut,marginBottom:6}}>
-                          <span>{enrolled} enrolled</span>
-                          <span>{t.overdue > 0 ? <span style={{color:SOC.amber}}>{t.overdue} overdue</span> : "none overdue"}</span>
-                        </div>
-                        <div style={{position:"relative",height:8,background:SOC.grid,borderRadius:4,overflow:"hidden"}}>
-                          <div style={{width:`${t.completion || 0}%`,height:"100%",
-                            background:`linear-gradient(90deg,${SOC.cyan},${SOC.green})`}}/>
-                        </div>
-                        <div style={{fontSize:18,fontWeight:800,color:SOC.cyan,marginTop:8,textAlign:"center"}}>
-                          {t.completion || 0}%<span style={{fontSize:10,color:SOC.textMut,fontWeight:400}}> complete</span>
-                        </div>
-                      </>
-                    ) : (
-                      <div style={{color:SOC.textSec,fontSize:11,padding:"10px 0",lineHeight:1.6}}>
-                        No active program. Deploy a tailored awareness campaign for this client.
-                      </div>
-                    )}
-                    <button onClick={()=>setTrainingClient(c)} style={{marginTop:10,width:"100%",padding:"8px",
-                      background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}44`,borderRadius:7,
-                      color:SOC.cyan,fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                      {enrolled>0?"Manage Training":"Build Training Program"} →
-                    </button>
-                  </>
-                );
-              })()}
-            </SocPanel>
-
           </div>
 
           <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
@@ -15149,7 +14946,7 @@ function AnalystConsole({ user, onExit }) {
               const compColor = comp>=90?SOC.green:comp>=60?SOC.cyan:comp>0?SOC.amber:SOC.textMut;
               const activeCampaign = (tr.campaigns||[]).find(x=>x.status==="active");
               return (
-                <div key={c.id} onClick={()=>{setActive(c);setView("client");setTrainingClient(c);}}
+                <div key={c.id} onClick={()=>{setActive(c);setView("client");}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"12px 16px",cursor:"pointer",
                     borderTop:i>0?`1px solid ${SOC.border}`:"none"}}>
                   <div style={{flex:1,minWidth:0}}>
