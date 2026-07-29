@@ -7421,19 +7421,23 @@ function LearnerPage({ token }) {
     finally { setAckBusy(false); }
   }
 
-  async function complete(assignmentId, topicId, score) {
+  // Submits real quiz answers; the server grades them and returns the score +
+  // per-question results. Throws on failure so LearnerModule can show the
+  // error inline (next to the quiz) rather than a page-level banner, and
+  // deliberately does NOT collapse the module afterward — the learner should
+  // see their results before moving on.
+  async function complete(assignmentId, topicId, answers) {
     setBusy(true);
     try {
       const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/complete`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignmentId, topicId, score }),
+        body: JSON.stringify({ assignmentId, topicId, answers }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not save your progress.");
-      setOpenMod(null);
       await load();
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+      return d;
+    } finally { setBusy(false); }
   }
 
   return (
@@ -7570,8 +7574,8 @@ function LearnerPage({ token }) {
                           <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
                         </div>
                         {isOpen && (
-                          <LearnerModule module={m} busy={busy}
-                            onComplete={(score)=>complete(a.assignmentId, m.topicId, score)}/>
+                          <LearnerModule module={m} token={token} busy={busy}
+                            onComplete={(answers)=>complete(a.assignmentId, m.topicId, answers)}/>
                         )}
                       </div>
                     );
@@ -7661,46 +7665,174 @@ function PhishRevealPage({ token }) {
   );
 }
 
-// A single module: objectives + a one-question knowledge check → mark complete.
-function LearnerModule({ module, onComplete, busy }) {
-  const [answered, setAnswered] = useState(module.completed);
+// A single module: real AI-generated teaching slides, then a real scored
+// quiz. The quiz is graded server-side (see /api/train/:token/complete) —
+// this component never sees the correct answers until after it submits.
+function LearnerModule({ module, token, onComplete, busy }) {
+  const [content, setContent] = useState(null);       // { slides, quiz, generatedBy }
+  const [loading, setLoading] = useState(!module.completed);
+  const [loadError, setLoadError] = useState(null);
+  const [stage, setStage] = useState("slides");        // slides | quiz | results
+  const [slideIdx, setSlideIdx] = useState(0);
+  const [answers, setAnswers] = useState({});           // qIndex -> optionIndex
+  const [results, setResults] = useState(null);         // { score, details }
+  const [submitError, setSubmitError] = useState(null);
   const line = C.border, dim = C.textSec, cyan = C.accent, deep = C.bg;
+
+  useEffect(() => {
+    if (module.completed) return;
+    let cancelled = false;
+    setLoading(true); setLoadError(null);
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/train/${encodeURIComponent(token)}/content/${encodeURIComponent(module.topicId)}`);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "Could not load training content.");
+        if (!cancelled) setContent(d);
+      } catch (e) { if (!cancelled) setLoadError(e.message); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [module.topicId]);
+
+  async function submitQuiz() {
+    setSubmitError(null);
+    const answerArray = content.quiz.map((_, i) => answers[i] ?? -1);
+    try {
+      const d = await onComplete(answerArray);
+      setResults({ score: d.score, details: d.results });
+      setStage("results");
+    } catch (e) { setSubmitError(e.message); }
+  }
+
+  if (module.completed) {
+    return (
+      <div style={{padding:"6px 12px 16px 48px"}}>
+        <div style={{fontSize:12.5,color:C.green,fontWeight:600}}>
+          ✓ Completed{module.completedAt ? ` on ${new Date(module.completedAt).toLocaleDateString()}` : ""}
+          {module.score != null ? ` — Score ${module.score}%` : ""}
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) return <div style={{padding:"24px 12px 24px 48px"}}><Spinner/></div>;
+
+  if (loadError) {
+    return <div style={{padding:"14px 12px 16px 48px",color:C.red,fontSize:13}}>{loadError}</div>;
+  }
+  if (!content) return null;
 
   return (
     <div style={{padding:"6px 12px 16px 48px"}}>
       {module.source && (
         <div style={{fontSize:11,color:C.textMut,marginBottom:10}}>Source: {module.source}</div>
       )}
-      <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:8}}>
-        WHAT YOU'LL LEARN
-      </div>
-      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
-        {(module.objectives || []).map((o,i)=>(
-          <div key={i} style={{display:"flex",gap:9,fontSize:13,color:C.text,lineHeight:1.5}}>
-            <span style={{color:cyan,flexShrink:0}}>›</span>{o}
-          </div>
-        ))}
-        {(!module.objectives || module.objectives.length === 0) && (
-          <div style={{fontSize:13,color:dim}}>Review this topic and confirm you understand the key practices.</div>
-        )}
-      </div>
 
-      {module.completed ? (
-        <div style={{fontSize:12.5,color:C.green,fontWeight:600}}>
-          ✓ Completed{module.completedAt ? ` on ${new Date(module.completedAt).toLocaleDateString()}` : ""}
-        </div>
-      ) : (
-        <div style={{padding:"14px 16px",background:deep,borderRadius:10,border:`1px solid ${line}`}}>
-          <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:10}}>
-            Knowledge check: Confirm you've reviewed and understand the objectives above.
+      {stage === "slides" && (
+        <div>
+          <div style={{padding:"20px 22px",background:deep,borderRadius:10,border:`1px solid ${line}`,minHeight:160}}>
+            <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:10}}>
+              SLIDE {slideIdx+1} OF {content.slides.length}
+            </div>
+            <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:14}}>
+              {safeText(content.slides[slideIdx].title)}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:9}}>
+              {(content.slides[slideIdx].bullets || []).map((b,i)=>(
+                <div key={i} style={{display:"flex",gap:9,fontSize:13.5,color:C.text,lineHeight:1.5}}>
+                  <span style={{color:cyan,flexShrink:0}}>›</span>{safeText(b)}
+                </div>
+              ))}
+            </div>
           </div>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <button onClick={()=>onComplete(100)} disabled={busy}
-              style={{padding:"10px 18px",borderRadius:8,border:"none",background:cyan,color:deep,
-                fontSize:13,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
-              {busy ? "Saving…" : "I understand — mark complete"}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
+            <button onClick={()=>setSlideIdx(i=>Math.max(0,i-1))} disabled={slideIdx===0}
+              style={{padding:"8px 16px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+                color:slideIdx===0?C.textMut:dim,fontSize:12.5,cursor:slideIdx===0?"default":"pointer"}}>
+              ← Back
             </button>
+            {slideIdx < content.slides.length-1 ? (
+              <button onClick={()=>setSlideIdx(i=>i+1)}
+                style={{padding:"8px 20px",background:cyan,border:"none",borderRadius:8,
+                  color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                Next →
+              </button>
+            ) : (
+              <button onClick={()=>setStage("quiz")}
+                style={{padding:"8px 20px",background:cyan,border:"none",borderRadius:8,
+                  color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                Continue to Knowledge Check →
+              </button>
+            )}
           </div>
+        </div>
+      )}
+
+      {stage === "quiz" && (
+        <div>
+          <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:10}}>
+            KNOWLEDGE CHECK
+          </div>
+          {content.quiz.map((q,qi)=>(
+            <div key={qi} style={{marginBottom:14,padding:"14px 16px",background:C.surface,borderRadius:8}}>
+              <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
+                {qi+1}. {safeText(q.question)}
+              </div>
+              {q.options.map((opt,oi)=>{
+                const chosen = answers[qi]===oi;
+                return (
+                  <div key={oi} onClick={()=>setAnswers(a=>({...a,[qi]:oi}))}
+                    style={{padding:"8px 12px",marginBottom:5,borderRadius:6,fontSize:12,cursor:"pointer",
+                      background:chosen?`${cyan}22`:deep,border:`1px solid ${chosen?cyan:line}`,
+                      color:chosen?cyan:dim}}>
+                    {String.fromCharCode(65+oi)}. {safeText(opt)}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {submitError && (
+            <div style={{marginBottom:10,padding:"9px 12px",background:`${C.red}15`,
+              border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{submitError}</div>
+          )}
+          <button onClick={submitQuiz} disabled={busy || Object.keys(answers).length < content.quiz.length}
+            style={{padding:"10px 20px",borderRadius:8,border:"none",
+              background:(busy || Object.keys(answers).length<content.quiz.length)?C.surface:cyan,
+              color:(busy || Object.keys(answers).length<content.quiz.length)?C.textMut:deep,
+              fontSize:13,fontWeight:700,cursor:busy?"wait":"pointer"}}>
+            {busy ? "Submitting…" : `Submit Answers (${Object.keys(answers).length}/${content.quiz.length})`}
+          </button>
+        </div>
+      )}
+
+      {stage === "results" && results && (
+        <div>
+          <div style={{padding:"16px 18px",borderRadius:10,marginBottom:14,
+            background:results.score>=80?`${C.green}15`:`${C.amber}15`,
+            border:`1px solid ${results.score>=80?C.green:C.amber}44`}}>
+            <div style={{fontSize:22,fontWeight:800,color:results.score>=80?C.green:C.amber}}>
+              {results.score}% {results.score>=80?"— Nice work":"— Review recommended"}
+            </div>
+            <div style={{fontSize:13,color:C.textSec,marginTop:4}}>
+              {results.details.filter(r=>r.correct).length} of {results.details.length} correct.
+            </div>
+          </div>
+          {content.quiz.map((q,qi)=>{
+            const r = results.details[qi];
+            return (
+              <div key={qi} style={{marginBottom:10,padding:"12px 14px",background:C.surface,borderRadius:8}}>
+                <div style={{color:C.text,fontSize:12.5,fontWeight:600,marginBottom:6}}>
+                  {qi+1}. {safeText(q.question)}
+                </div>
+                <div style={{fontSize:12,color:r.correct?C.green:C.red,marginBottom:4}}>
+                  {r.correct ? "✓ Correct" : `✗ Correct answer: ${safeText(q.options[r.correctOption])}`}
+                </div>
+                {r.explanation && <div style={{fontSize:11.5,color:C.textMut,fontStyle:"italic"}}>{safeText(r.explanation)}</div>}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

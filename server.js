@@ -1411,7 +1411,10 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
 
     let content;
     try {
-      const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 3000 });
+      // 6 quiz questions (4 options + explanation each) plus 5-7 slides with
+      // speaker notes risk truncating mid-JSON at a tighter budget (observed
+      // in testing: a fallback-provider response cut off mid-object).
+      const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 4096 });
       content = extractJson(text);
       content.generatedBy = provider;
       if (!Array.isArray(content.slides) || !Array.isArray(content.fullQuiz) || !content.slides.length || !content.fullQuiz.length) {
@@ -1605,7 +1608,7 @@ registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsCli
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
-registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
+registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate });
 registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });

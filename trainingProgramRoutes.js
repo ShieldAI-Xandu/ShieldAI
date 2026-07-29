@@ -40,6 +40,7 @@ function ensureCollections(db) {
   db.data.learners            ||= []; // { id, clientUserId, name, email, department, token, status, createdAt }
   db.data.trainingAssignments ||= []; // { id, clientUserId, learnerId, source, title, modules[], status, progress, score, dueDate, assignedBy, assignedAt, startedAt, completedAt, moduleState{}, quarterId? }
   db.data.trainingQuarters    ||= []; // { id, clientUserId, label, year, quarter, topicIds[], dueDate, createdBy, createdAt, learnerCount }
+  db.data.moduleContent       ||= []; // { id, clientUserId, topicId, slides[], quiz[{question,options,correct,explanation}], generatedBy, generatedAt }
 }
 
 // ── scope helpers ─────────────────────────────────────────────
@@ -66,6 +67,91 @@ function modulesFromTopics(topicIds) {
   return TRAINING_TOPICS
     .filter(t => topicIds.includes(t.id))
     .map(t => ({ topicId: t.id, title: t.title, audience: t.audience, duration: t.duration, source: t.source }));
+}
+
+// Best-effort company context for a client account — same shape used by the
+// admin-facing "Training Program Builder" (server.js's /api/training/generate),
+// just assembled server-side here since the learner flow has no admin session
+// to supply it. Falls back gracefully if the client has no assessment yet.
+function companyContextFor(db, clientUserId) {
+  const user = (db.data.users || []).find(u => u.id === clientUserId);
+  const assessments = (db.data.assessments || []).filter(a => a.userId === clientUserId);
+  const latest = assessments[assessments.length - 1];
+  const company = latest?.data?.company || {};
+  return {
+    name: company.name || user?.companyName || "the business",
+    industry: company.industry || "general",
+    employees: company.employees || "small team",
+  };
+}
+
+// Get (or generate + cache) real teaching slides and a scored quiz for a
+// topic, tailored to this client's company. Cached per (clientUserId,
+// topicId) so every learner at the same company sees consistent material and
+// we don't burn an AI call per learner. This is the same content shape/prompt
+// pattern as server.js's /api/training/module-content, adapted to generate
+// directly from the topic catalog (learners aren't tied to a saved
+// admin-built curriculum record).
+async function getOrGenerateModuleContent(db, { clientUserId, topicId, callAI, extractJson }) {
+  const cached = (db.data.moduleContent || []).find(
+    m => m.clientUserId === clientUserId && m.topicId === topicId);
+  if (cached) return cached;
+
+  const topic = TRAINING_TOPICS.find(t => t.id === topicId);
+  if (!topic) return null;
+
+  const company = companyContextFor(db, clientUserId);
+  const companyText = `Company: ${company.name} | Industry: ${company.industry} | Employees: ${company.employees}`;
+
+  const sys = `You are a cybersecurity trainer creating presentable employee-training material for a small business. For the given module, produce (1) a set of teaching SLIDES and (2) a full scored QUIZ.
+
+Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly this shape:
+{"slides":[{"title":"","bullets":["point 1","point 2","point 3"],"speakerNotes":"1-2 sentences the presenter can say"}],"quiz":[{"question":"","options":["a","b","c","d"],"correct":0,"explanation":"why this is correct"}]}
+
+Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each slide has 2-4 bullets. Produce exactly 6 quiz questions, each with 4 options and a one-sentence explanation. Tailor examples to the company's industry. Keep text concise and presentation-friendly.`;
+
+  const usr = `${companyText}\n\nModule: ${topic.title}\nAudience: ${topic.audience}\nLearning objectives:\n${(topic.objectives || []).map(o => "- " + o).join("\n")}`;
+
+  let slides, quiz, generatedBy = null;
+  try {
+    // 6 quiz questions (each with 4 options + an explanation) plus 5-7 slides
+    // with speaker notes is verbose enough to risk truncating mid-JSON at a
+    // tighter budget — observed in testing (Claude fallback response cut off
+    // mid-object, failing JSON parse and silently dropping to the plainer
+    // deterministic fallback below).
+    const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 4096 });
+    const parsed = extractJson(text);
+    if (!Array.isArray(parsed.slides) || !Array.isArray(parsed.quiz) || !parsed.slides.length || !parsed.quiz.length) {
+      throw new Error("incomplete content");
+    }
+    slides = parsed.slides;
+    quiz = parsed.quiz;
+    generatedBy = provider;
+  } catch (e) {
+    console.warn(`Module content fell back for topic "${topicId}": ${e.message}`);
+    // Fallback: build slides + a simple quiz straight from the fixed
+    // objectives, so learners always get real content even if the AI call
+    // fails — never a fabricated placeholder, just a plainer version of the
+    // same real material.
+    slides = [
+      { title: topic.title, bullets: [`Audience: ${topic.audience}`, `Duration: ${topic.duration}`, "Security awareness training"], speakerNotes: "Introduce the topic and why it matters for our business." },
+      ...(topic.objectives || []).map((o, i) => ({ title: `Key Point ${i + 1}`, bullets: [o], speakerNotes: "Explain this objective with a relatable example." })),
+      { title: "Recap", bullets: (topic.objectives || []).slice(0, 3), speakerNotes: "Summarize and open the floor for questions." },
+    ];
+    quiz = (topic.objectives || []).slice(0, 3).map(o => ({
+      question: `Which statement best reflects good practice regarding: ${o}?`,
+      options: [o, "Ignore established policy", "Share credentials freely", "Skip reporting incidents"],
+      correct: 0,
+      explanation: "Following the stated objective is the secure choice.",
+    }));
+  }
+
+  const record = {
+    id: randomUUID(), clientUserId, topicId, slides, quiz, generatedBy, generatedAt: nowIso(),
+  };
+  db.data.moduleContent.push(record);
+  await db.write();
+  return record;
 }
 
 // Recompute an assignment's rolled-up status/progress/score from moduleState.
@@ -169,6 +255,7 @@ export function trainingSummary(db, depth = "summary") {
 // ──────────────────────────────────────────────────────────────
 export function registerTrainingProgramRoutes(app, {
   db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds,
+  callAI, extractJson,
 }) {
   ensureCollections(db);
 
@@ -502,24 +589,64 @@ export function registerTrainingProgramRoutes(app, {
     });
   });
 
-  // Mark a module complete (with an optional quiz score 0–100).
+  // Fetch (or generate) the real teaching content for one module: slides +
+  // quiz questions. Answers are withheld here (no `correct`/`explanation`)
+  // so a learner can't just read them out of the network response — the
+  // quiz is graded server-side on submit, below.
+  app.get("/api/train/:token/content/:topicId", async (req, res) => {
+    const learner = learnerByToken(req.params.token);
+    if (!learner) return res.status(404).json({ error: "This training link isn't valid." });
+    if (learner.status !== "active") return res.status(403).json({ error: "This training account is inactive." });
+    const { topicId } = req.params;
+    const assigned = (db.data.trainingAssignments || [])
+      .filter(a => a.learnerId === learner.id)
+      .some(a => (a.modules || []).some(m => m.topicId === topicId));
+    if (!assigned) return res.status(404).json({ error: "This module isn't assigned to you." });
+
+    try {
+      const content = await getOrGenerateModuleContent(db, { clientUserId: learner.clientUserId, topicId, callAI, extractJson });
+      if (!content) return res.status(404).json({ error: "Unknown training topic." });
+      res.json({
+        slides: content.slides,
+        quiz: content.quiz.map(q => ({ question: q.question, options: q.options })),
+        generatedBy: content.generatedBy,
+      });
+    } catch (err) {
+      console.error("Module content error:", err.message);
+      res.status(500).json({ error: "Could not load training content. Try again in a moment." });
+    }
+  });
+
+  // Complete a module by submitting real quiz answers. The score is computed
+  // HERE from the server's own cached correct answers — never trusted from
+  // the client — so it reflects genuine comprehension, not a self-attestation.
   app.post("/api/train/:token/complete", async (req, res) => {
     const learner = learnerByToken(req.params.token);
     if (!learner) return res.status(404).json({ error: "This training link isn't valid." });
     if (learner.status !== "active") return res.status(403).json({ error: "This training account is inactive." });
-    const { assignmentId, topicId, score } = req.body || {};
+    const { assignmentId, topicId, answers } = req.body || {};
     const a = (db.data.trainingAssignments || []).find(x => x.id === assignmentId && x.learnerId === learner.id);
     if (!a) return res.status(404).json({ error: "Assignment not found." });
     const mod = (a.modules || []).find(m => m.topicId === topicId);
     if (!mod) return res.status(404).json({ error: "Module not found in this assignment." });
+    if (!Array.isArray(answers)) return res.status(400).json({ error: "Quiz answers are required to complete this module." });
+
+    const content = (db.data.moduleContent || []).find(
+      m => m.clientUserId === learner.clientUserId && m.topicId === topicId);
+    if (!content) return res.status(409).json({ error: "Load the training content before submitting the quiz." });
+
+    const quiz = content.quiz;
+    const results = quiz.map((q, i) => ({
+      correct: answers[i] === q.correct,
+      correctOption: q.correct,
+      explanation: q.explanation || "",
+    }));
+    const numCorrect = results.filter(r => r.correct).length;
+    const score = Math.round((numCorrect / quiz.length) * 100);
 
     a.moduleState ||= {};
     if (!a.startedAt) a.startedAt = nowIso();
-    a.moduleState[topicId] = {
-      completed: true,
-      score: (typeof score === "number" && score >= 0 && score <= 100) ? Math.round(score) : null,
-      completedAt: nowIso(),
-    };
+    a.moduleState[topicId] = { completed: true, score, completedAt: nowIso() };
     const wasComplete = a.status === "completed";
     rollup(a);
     if (a.status === "completed" && !wasComplete) {
@@ -528,6 +655,6 @@ export function registerTrainingProgramRoutes(app, {
         action: "training_completed", detail: `${learner.name} completed "${a.title}".` });
     }
     await db.write();
-    res.json({ ok: true, assignment: learnerFacing(a, learner) });
+    res.json({ ok: true, score, results, assignment: learnerFacing(a, learner) });
   });
 }
