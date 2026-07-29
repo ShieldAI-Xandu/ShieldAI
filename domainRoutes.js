@@ -16,7 +16,6 @@ import {
   getClientDomain,
   listClientDomains,
   getDomainById,
-  verificationInstructions,
   clientView,
   adminQueue,
   setHibpStatus,
@@ -68,10 +67,12 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
     if (!targetId) return;
 
     const records = listClientDomains(db, targetId);
+    // clientView() already attaches `instructions` itself, and only for the
+    // "awaiting_ownership" state — a domain that's already verified/monitored
+    // has no DNS step left to show. Don't re-attach it unconditionally here.
     const domains = records.map(record => ({
       id: record.id,
       ...clientView(record, { hibpConfigured: darkwebConfigured() }),
-      instructions: verificationInstructions(record),
       lastCheckedAt: record.lastCheckedAt,
       lastCheckError: record.lastCheckError,
     }));
@@ -99,7 +100,6 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
         userId: targetId,
         id: record.id,
         ...clientView(record, { hibpConfigured: darkwebConfigured() }),
-        instructions: verificationInstructions(record),
       });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message || "Could not save that domain." });

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
-import ComplianceWorkspace from "./ComplianceWorkspace.jsx";
+import ComplianceWorkspace, { ConflictQueue } from "./ComplianceWorkspace.jsx";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -14945,6 +14945,21 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
             </SocPanel>
           </div>
 
+          {/* Compliance Readiness above only ever showed a percentage and a
+              gap count — an analyst could see THAT a control disagreed with
+              telemetry but never WHAT the disagreement was. This is the same
+              detailed queue the client sees on their own Compliance tab
+              (question, their answer vs what the agent measured, per-host
+              evidence, and the three-way resolution an analyst can act on
+              here on the client's behalf). */}
+          {c.compliancePct && (c.conflicts||0) > 0 && (
+            <div style={{marginTop:14}}>
+              <SocPanel title="Compliance Conflicts" accent={SOC.purple}>
+                <ConflictQueue authFetch={authFetch} apiBase={API_BASE} clientId={c.id}/>
+              </SocPanel>
+            </div>
+          )}
+
           <div style={{marginTop:16,padding:"12px 16px",background:`${SOC.cyan}0A`,
             border:`1px dashed ${SOC.cyan}33`,borderRadius:10,textAlign:"center"}}>
             <span style={{color:SOC.textSec,fontSize:11}}>
@@ -15120,6 +15135,24 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
                     <span style={{fontSize:9,color:SOC.textMut}}>{r.generated}</span>
                   </div>
                   <div style={{color:SOC.text,fontSize:12,fontWeight:600,marginTop:3}}>{r.type}</div>
+                  <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{safeText(c.name)}</div>
+                </div>
+              ))}
+              {/* The portfolio KPI row above only ever showed a bare conflict
+                  count with no way to see which client or control — this is
+                  the actual entry point into that detail (the client page's
+                  Compliance Conflicts panel, added below). */}
+              {clients.filter(c => (c.conflicts||0) > 0)
+                .map((c,i)=>(
+                <div key={"cf"+i} onClick={()=>{setActive(c);setView("client");}}
+                  style={{background:SOC.panel,border:`1px solid ${SOC.border}`,borderLeft:`3px solid ${SOC.purple}`,
+                    borderRadius:8,padding:"10px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontSize:9,fontWeight:700,color:SOC.purple,textTransform:"uppercase"}}>Compliance Conflict</span>
+                  </div>
+                  <div style={{color:SOC.text,fontSize:12,fontWeight:600,marginTop:3}}>
+                    {c.conflicts} control{c.conflicts>1?"s":""} where agent telemetry disagrees with the questionnaire
+                  </div>
                   <div style={{color:SOC.textMut,fontSize:10,marginTop:2}}>{safeText(c.name)}</div>
                 </div>
               ))}
