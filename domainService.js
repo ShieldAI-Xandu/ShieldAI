@@ -187,6 +187,23 @@ export async function removeDomain(db, userId, domainId) {
   return removed;
 }
 
+// ── Admin removal ─────────────────────────────────────────────
+// Unlike removeDomain(), not scoped to a userId — for domains whose owning
+// account no longer has a reachable client relationship (e.g. staff/test
+// accounts with no program) where the normal client-scoped delete route
+// can't be reached. Frees the domain name to be re-registered elsewhere,
+// since addDomain() refuses a domain already on file for another account.
+export async function adminRemoveDomain(db, domainId) {
+  const rows = ensure(db);
+  const idx = rows.findIndex(r => r.id === domainId);
+  if (idx === -1) {
+    throw Object.assign(new Error("Domain not found."), { status: 404 });
+  }
+  const [removed] = rows.splice(idx, 1);
+  await db.write();
+  return removed;
+}
+
 // What the client has to publish in DNS.
 export function verificationInstructions(record) {
   if (!record) return null;

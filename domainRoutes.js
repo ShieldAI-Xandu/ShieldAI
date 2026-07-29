@@ -12,6 +12,7 @@ import { randomUUID } from "crypto";
 import {
   addDomain,
   removeDomain,
+  adminRemoveDomain,
   checkOwnership,
   getClientDomain,
   listClientDomains,
@@ -206,6 +207,22 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
       res.json({ userId: record.userId, domain: record.domain, hibpStatus: record.hibpStatus, record });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message || "Could not update status." });
+    }
+  });
+
+  // ── Admin: remove a domain outright ─────────────────────────
+  // Not scoped to the domain's own userId, unlike the client-facing delete
+  // above — this exists for accounts that can't reach the client route
+  // themselves (e.g. no active program) but still have a stale/incorrect
+  // domain on file that's blocking it from being registered elsewhere.
+  app.delete("/api/admin/domains/:domainId", requireAdmin, async (req, res) => {
+    try {
+      const removed = await adminRemoveDomain(db, req.params.domainId);
+      audit(db, req, "domain_removed_by_admin", removed.userId, removed.domain);
+      await db.write();
+      res.json({ ok: true, id: removed.id, domain: removed.domain });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || "Could not remove that domain." });
     }
   });
 

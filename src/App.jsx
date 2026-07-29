@@ -9841,6 +9841,7 @@ function AdminDomainQueue() {
   const [busy, setBusy] = useState(null);
   const [noteFor, setNoteFor] = useState(null);
   const [noteText, setNoteText] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -9865,6 +9866,19 @@ function AdminDomainQueue() {
       if (!res.ok) throw new Error(d.error || "Could not update status.");
       setNotice(`${d.domain} → ${status.replace("_"," ")}`);
       setNoteFor(null); setNoteText("");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function removeDomainAdmin(domainId) {
+    setBusy(domainId + "remove"); setError(null); setNotice(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${domainId}`, { method: "DELETE" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not remove that domain.");
+      setNotice(`${d.domain} removed.`);
+      setConfirmRemove(null);
       await load();
     } catch (e) { setError(e.message); }
     finally { setBusy(null); }
@@ -10006,6 +10020,11 @@ function AdminDomainQueue() {
                     Reject
                   </button>
                 )}
+                <button onClick={()=>setConfirmRemove(confirmRemove===d.id?null:d.id)} disabled={!!busy}
+                  style={{padding:"7px 12px",background:"none",border:`1px solid ${C.red}55`,
+                    borderRadius:6,color:C.red,fontSize:11.5,cursor:busy?"default":"pointer"}}>
+                  Remove
+                </button>
               </div>
             </div>
 
@@ -10022,6 +10041,27 @@ function AdminDomainQueue() {
                     borderRadius:7,color:C.red,fontSize:12,fontWeight:600,
                     cursor:busy||!noteText.trim()?"default":"pointer",opacity:!noteText.trim()?0.5:1}}>
                   Confirm reject
+                </button>
+              </div>
+            )}
+
+            {confirmRemove === d.id && (
+              <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,color:C.textSec}}>
+                  Remove <strong style={{fontFamily:"monospace"}}>{d.domain}</strong> from {d.email} entirely?
+                  This deletes the record — the account will need to re-submit and re-verify it to monitor again.
+                </span>
+                <button onClick={()=>removeDomainAdmin(d.id)} disabled={!!busy}
+                  style={{padding:"9px 14px",background:`${C.red}18`,border:`1px solid ${C.red}55`,
+                    borderRadius:7,color:C.red,fontSize:12,fontWeight:600,
+                    cursor:busy?"default":"pointer"}}>
+                  {busy===d.id+"remove" ? "Removing…" : "Confirm remove"}
+                </button>
+                <button onClick={()=>setConfirmRemove(null)}
+                  style={{padding:"9px 14px",background:"none",border:`1px solid ${C.border}`,
+                    borderRadius:7,color:C.textMut,fontSize:12,cursor:"pointer"}}>
+                  Cancel
                 </button>
               </div>
             )}
