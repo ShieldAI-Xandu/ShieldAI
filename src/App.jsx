@@ -11834,7 +11834,7 @@ function TrendChartLight({ data, color }) {
   );
 }
 
-function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, onOpenConsole }) {
+function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, onOpenConsole, canBuildPrograms, onBuildProgram }) {
   const [assessments, setAssessments] = useState([]);
   const [programsByAssessment, setProgramsByAssessment] = useState({});
   const [loading, setLoading] = useState(true);
@@ -11982,8 +11982,21 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                             {opening===a.id ? "Opening…" : "Open Program →"}
                           </button>
                         </>
-                      ) : (
+                      ) : running ? (
                         <span style={{color:C.textMut,fontSize:12,textAlign:"center"}}>—</span>
+                      ) : (
+                        <button
+                          onClick={() => canBuildPrograms ? onBuildProgram(a.id) : showUpgradePrompt({
+                            error: "Building a prioritized security program isn't included on your current plan.",
+                            code: "UPGRADE_REQUIRED", capability: "buildPrograms", currentTier: user.tier,
+                          })}
+                          style={{padding:"10px 20px",
+                            background: canBuildPrograms ? `linear-gradient(135deg,${C.accent},${C.accentDm})` : C.surface,
+                            color: canBuildPrograms ? C.bg : C.textMut,
+                            border: canBuildPrograms ? "none" : `1px solid ${C.border}`,
+                            borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                          {canBuildPrograms ? "✦ Build Program" : "🔒 Build Program"}
+                        </button>
                       )}
                       <button onClick={() => onEditAssessment(a.id)}
                         style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
@@ -14038,6 +14051,7 @@ function AnalystConsole({ user, onExit }) {
   const [recTarget, setRecTarget] = useState(null);  // endpoint we're drafting a rec for
   const [recForm, setRecForm] = useState({ title:"", detail:"", severity:"medium", origin:"analyst" });
   const [recSaving, setRecSaving] = useState(false);
+  const [fleetRemoving, setFleetRemoving] = useState(null); // endpoint id currently being removed
 
   async function loadFleet() {
     setFleetLoading(true); setFleetError(null);
@@ -14066,6 +14080,18 @@ function AnalystConsole({ user, onExit }) {
       const res = await authFetch(`${API_BASE}/api/analyst/recommendations/${id}/forward`, { method: "POST" });
       if (res.ok) setDrafts(ds => ds.filter(d => d.id !== id)); // leaves the suggested queue
     } finally { setDraftBusy(null); }
+  }
+
+  async function removeFleetEndpoint(e) {
+    if (!e.owner?.id) return;
+    if (!window.confirm(`Remove ${e.hostname} on behalf of ${e.owner.companyName || e.owner.email}? Its history will be deleted. This can't be undone.`)) return;
+    setFleetRemoving(e.id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${e.owner.id}/endpoints/${e.id}`, { method: "DELETE" });
+      if (res.ok) setFleet(f => (f || []).filter(x => x.id !== e.id));
+      else setFleetError((await res.json().catch(()=>({}))).error || "Could not remove endpoint.");
+    } catch { setFleetError("Network error removing endpoint."); }
+    finally { setFleetRemoving(null); }
   }
 
   async function submitRecommendation() {
@@ -14555,6 +14581,12 @@ function AnalystConsole({ user, onExit }) {
                         style={{padding:"6px 13px",background:`${SOC.cyan}18`,border:`1px solid ${SOC.cyan}55`,
                           borderRadius:6,color:SOC.cyan,fontSize:12,fontWeight:600,cursor:"pointer"}}>
                         Recommend
+                      </button>
+                      <button onClick={()=>removeFleetEndpoint(e)} disabled={fleetRemoving===e.id}
+                        style={{padding:"6px 13px",background:`${SOC.red}12`,border:`1px solid ${SOC.red}40`,
+                          borderRadius:6,color:SOC.red,fontSize:12,fontWeight:600,
+                          cursor:fleetRemoving===e.id?"wait":"pointer"}}>
+                        {fleetRemoving===e.id?"Removing…":"Remove"}
                       </button>
                     </div>
                   </div>
@@ -15386,6 +15418,7 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -15398,8 +15431,18 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
     })();
   }, [endpointId]);
 
+  async function removeEndpoint() {
+    if (!window.confirm("Remove this endpoint? It will stop appearing in your fleet and its history will be deleted. This can't be undone.")) return;
+    setRemoving(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/endpoints/${endpointId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove endpoint.");
+      onBack();
+    } catch (e) { setError(e.message); setRemoving(false); }
+  }
+
   if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
-  if (error) return <div style={{padding:24,color:C.red}}>{error}</div>;
+  if (error && !data) return <div style={{padding:24,color:C.red}}>{error}</div>;
 
   const a = data.agent;
   const report = data.latestReport;
@@ -15410,10 +15453,21 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
 
   return (
     <div>
-      <button onClick={onBack} style={{marginBottom:16,padding:"6px 14px",background:"none",
-        border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
-        ← Back to fleet
-      </button>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to fleet
+        </button>
+        {!isAnalystView && (
+          <button onClick={removeEndpoint} disabled={removing}
+            style={{marginLeft:"auto",padding:"6px 14px",background:`${C.red}12`,
+              border:`1px solid ${C.red}40`,borderRadius:6,color:C.red,fontSize:12,fontWeight:600,
+              cursor:removing?"wait":"pointer"}}>
+            {removing?"Removing…":"Remove endpoint"}
+          </button>
+        )}
+      </div>
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
 
       <Card style={{marginBottom:16}}>
         <div style={{display:"flex",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
@@ -16922,6 +16976,8 @@ export default function ShieldAI() {
           onOpenProgram={openProgram}
           onEditAssessment={(id) => { setEditingId(id); setPhase("edit"); }}
           onOpenConsole={openConsole}
+          canBuildPrograms={can("buildPrograms")}
+          onBuildProgram={(id) => handleRegenerate(id, true)}
         />
       </div>
     );

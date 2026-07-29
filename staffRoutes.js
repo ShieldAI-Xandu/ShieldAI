@@ -38,6 +38,8 @@
 //   DELETE/api/staff/clients/:cid/policies/:id
 //   GET   /api/staff/clients/:cid/training
 //   GET   /api/staff/clients/:cid/training/:id
+//   GET   /api/staff/clients/:cid/endpoints
+//   DELETE/api/staff/clients/:cid/endpoints/:id
 
 const nowIso = () => new Date().toISOString();
 
@@ -249,6 +251,32 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.client.id);
     if (!record) return res.status(404).json({ error: "Training program not found" });
     res.json(record);
+  });
+
+  // ── Endpoints ───────────────────────────────────────────────
+  app.get("/api/staff/clients/:cid/endpoints", ...staff, (req, res) => {
+    const list = (db.data.agents || [])
+      .filter(a => a.ownerUserId === req.client.id)
+      .map(a => ({ id: a.id, hostname: a.hostname, os: a.os, status: a.status,
+        lastSeen: a.lastSeen, createdAt: a.createdAt, revokedAt: a.revokedAt || null }));
+    res.json(list);
+  });
+
+  // Permanently remove a client's endpoint on their behalf (e.g. a
+  // decommissioned machine). Deletes the agent record plus its report/event
+  // history so it stops appearing in the fleet.
+  app.delete("/api/staff/clients/:cid/endpoints/:id", ...staff, async (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id && a.ownerUserId === req.client.id);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found" });
+    db.data.agents = (db.data.agents || []).filter(a => a.id !== agent.id);
+    db.data.agentReports = (db.data.agentReports || []).filter(r => r.agentId !== agent.id);
+    db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.agentId !== agent.id);
+    logClientAction(db, {
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "endpoint_removed", detail: `Removed endpoint ${agent.hostname} (${agent.id}) on behalf of client.`,
+    });
+    await db.write();
+    res.json({ ok: true, deleted: agent.id });
   });
 
   console.log("ShieldAI staff client-workspace routes registered.");

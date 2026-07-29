@@ -568,6 +568,24 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     res.json({ ok: true, id: agent.id, status: agent.status });
   });
 
+  // Permanently remove one of my endpoints — unlike revoke (which just blocks
+  // future uploads), this deletes the agent record and its report/event
+  // history. For decommissioned/retired machines that should stop showing
+  // up in the fleet at all.
+  app.delete("/api/admin/endpoints/:id", requireAuth, async (req, res) => {
+    const agent = (db.data.agents || []).find(a => a.id === req.params.id && a.ownerUserId === req.userId);
+    if (!agent) return res.status(404).json({ error: "Endpoint not found." });
+    db.data.agents = (db.data.agents || []).filter(a => a.id !== agent.id);
+    db.data.agentReports = (db.data.agentReports || []).filter(r => r.agentId !== agent.id);
+    db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.agentId !== agent.id);
+    if (logClientAction) logClientAction(db, {
+      clientUserId: agent.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
+      action: "endpoint_removed", detail: `Removed endpoint ${agent.hostname}.`,
+    });
+    await db.write();
+    res.json({ ok: true, id: agent.id });
+  });
+
   // Request an on-demand check-in: flags the agent to send a fresh full report
   // on its NEXT poll. Outbound-only model — this sets a flag the agent reads
   // when it next contacts the server; it does NOT push to the endpoint.
