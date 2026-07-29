@@ -207,7 +207,15 @@ function remediationHint(checkId) {
     gatekeeper:     { title: "Enable Gatekeeper", detail: "Re-enable Gatekeeper so only signed/notarized apps run." },
     sip:            { title: "Enable System Integrity Protection", detail: "Re-enable SIP to protect macOS system files." },
     auto_updates:   { title: "Enable automatic security updates", detail: "Configure automatic installation of security updates." },
+    guest_account:  { title: "Disable the Guest account", detail: "Disable the built-in Guest account — it's a common low-friction entry point." },
+    smb1:           { title: "Disable legacy SMBv1", detail: "Disable the SMBv1 protocol unless a specific legacy device requires it (e.g. via Windows Features)." },
+    rdp_exposure:   { title: "Restrict RDP exposure", detail: "Require Network Level Authentication for RDP, and restrict access to a VPN or allow-listed IPs; disable RDP entirely if not needed." },
   };
+  // Dynamic per-product AV checks (av_product_<name>) share one hint, since
+  // the specific product name is already in the check's own title/detail.
+  if (typeof checkId === "string" && checkId.startsWith("av_product_")) {
+    return { title: "Review the registered antivirus product", detail: "Confirm the product is enabled with current definitions, or remove it if it's stale/unused to avoid conflicting with the active AV." };
+  }
   return map[checkId] || {};
 }
 
@@ -672,11 +680,11 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       expiresInMinutes: 60,
       command,
       steps: [
-        "Download the latest ShieldAI agent package for this OS.",
+        "Click \"Download installer\" below — it's a single file with this token already built in.",
         os === "windows"
-          ? "Open PowerShell as Administrator in the agent\\windows folder."
-          : "Open a terminal in the agent's OS folder (linux/ or macos/).",
-        "Run the command below — it re-installs the latest agent and re-enrolls this endpoint.",
+          ? "Run it from an elevated (Administrator) PowerShell."
+          : "Run it with sudo.",
+        "It re-installs the latest agent and re-enrolls this endpoint automatically.",
         "The endpoint will report on the latest version within ~1 minute.",
       ],
     });

@@ -15124,16 +15124,19 @@ const AGENT_RUN_HINT = {
 
 function AddEndpointModal({ onClose }) {
   const [token, setToken] = useState(null);
+  const [tokenForOs, setTokenForOs] = useState(null);
   const [expires, setExpires] = useState(null);
   const [installingOs, setInstallingOs] = useState(null);
   const [zipDownloadingOs, setZipDownloadingOs] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  // Reuse the current token if we already have one (it's still one-time /
-  // single-endpoint either way), otherwise mint a fresh one.
-  async function ensureToken() {
-    if (token) return token;
+  // Each enrollment token is single-use (one endpoint). If the modal stays
+  // open across multiple "Install on X" clicks — e.g. grabbing both the
+  // Windows and Linux installer to set up two different machines — each
+  // needs its OWN token, or only whichever one enrolls first will actually
+  // work; the other silently 409s ("Enrollment token already used").
+  async function mintToken() {
     const res = await authFetch(`${API_BASE}/api/admin/endpoints/enroll-token`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to create token.");
@@ -15145,7 +15148,8 @@ function AddEndpointModal({ onClose }) {
   async function handleInstall(os) {
     setInstallingOs(os); setError(null);
     try {
-      const t = await ensureToken();
+      const t = await mintToken();
+      setTokenForOs(os);
       // API_BASE is intentionally "" in production (relative paths for our own
       // fetch calls) and an absolute localhost URL in dev. Either way the
       // installer runs on a different machine, so it needs an absolute origin
@@ -15203,8 +15207,9 @@ function AddEndpointModal({ onClose }) {
         {token && (
           <div style={{marginBottom:14,padding:"12px 14px",background:`${C.amber}12`,
             border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
-            Enrollment token generated (valid {expires} min, enrolls a single endpoint). It's already
-            embedded in the file(s) downloaded above.
+            Enrollment token generated for the {tokenForOs} installer (valid {expires} min, enrolls a
+            single endpoint) — it's already embedded in that file. Installing on another OS mints its
+            own separate token.
             <div style={{display:"flex",gap:8,marginTop:8}}>
               <code style={{flex:1,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:7,color:C.text,fontSize:11.5,wordBreak:"break-all"}}>{token}</code>
