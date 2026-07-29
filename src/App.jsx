@@ -12546,7 +12546,7 @@ function ClientDocuments({ clientId }) {
         <div style={{display:"flex",flexDirection:"column",gap:7}}>
           {rows.map(r => {
             const isOpen = open?.kind === tab && open?.id === r.id;
-            const title = tab === "assessments" ? (r.company || "Security Assessment")
+            const title = tab === "assessments" ? (r.company?.name || "Security Assessment")
               : tab === "programs" ? `Program · ${r.postureLevel || "generated"}`
               : (r.policyName || r.policyId || "Policy");
             const sub = tab === "assessments" ? (r.compliance || []).join(", ")
@@ -12598,7 +12598,7 @@ function ClientDocDetail({ kind, doc }) {
     return (
       <div style={{fontSize:12,color:SOC.textSec,lineHeight:1.6}}>
         <div style={label}>COMPANY</div>
-        <div style={{color:SOC.text,marginBottom:10}}>{data.company || "—"}</div>
+        <div style={{color:SOC.text,marginBottom:10}}>{data.company?.name || "—"}</div>
         {(data.compliance || []).length > 0 && (
           <>
             <div style={label}>FRAMEWORKS</div>
