@@ -4354,30 +4354,119 @@ function TrainingReportView() {
   );
 }
 
+const DOMAIN_STATE_TONE = {
+  monitored:          { color: C.green,  icon: "🛡️" },
+  awaiting_hibp:       { color: C.amber,  icon: "⏳" },
+  awaiting_ownership:  { color: C.accent, icon: "🔑" },
+  service_inactive:    { color: C.textSec,icon: "○"  },
+  rejected:            { color: C.red,    icon: "⚠️" },
+};
+
+// One domain's row: status, DNS instructions if still proving ownership, and
+// a remove button. Kept separate from the list card so each domain's own
+// busy/copied state doesn't interfere with its siblings.
+function DomainRow({ d, onVerify, onRemove, busyKey }) {
+  const [copied, setCopied] = useState(false);
+  const tone = DOMAIN_STATE_TONE[d.state] || { color: C.textSec, icon: "○" };
+  const ins = d.instructions;
+
+  function copyTxt() {
+    const v = ins?.value;
+    if (!v) return;
+    navigator.clipboard?.writeText(v).then(() => {
+      setCopied(true); setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {});
+  }
+
+  return (
+    <div style={{padding:"14px 16px",background:C.surface,border:`1px solid ${C.border}`,
+      borderRadius:10,marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <span style={{fontSize:13.5,color:C.text,fontWeight:700,fontFamily:"monospace"}}>{d.domain}</span>
+        <div style={{display:"flex",alignItems:"center",gap:6,padding:"3px 10px",borderRadius:20,
+          background:`${tone.color}15`,border:`1px solid ${tone.color}38`}}>
+          <span style={{fontSize:10.5}}>{tone.icon}</span>
+          <span style={{fontSize:10.5,fontWeight:700,color:tone.color,letterSpacing:0.3}}>
+            {d.monitored ? "MONITORED" : safeText(d.headline).toUpperCase()}
+          </span>
+        </div>
+        <button onClick={()=>onRemove(d.id)} disabled={!!busyKey}
+          title="Remove this domain"
+          style={{marginLeft:"auto",padding:"5px 10px",background:"none",border:`1px solid ${C.border}`,
+            borderRadius:6,color:C.textMut,fontSize:11,cursor:busyKey?"default":"pointer"}}>
+          {busyKey===`remove:${d.id}` ? "Removing…" : "✕ Remove"}
+        </button>
+      </div>
+      <p style={{fontSize:12,color:C.textSec,lineHeight:1.55,margin:"6px 0 0"}}>{safeText(d.detail)}</p>
+
+      {ins && (
+        <div style={{marginTop:12,padding:"14px",background:C.card,border:`1px solid ${C.border}`,borderRadius:9}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.text,marginBottom:4,letterSpacing:0.3}}>
+            STEP 1 · PUBLISH THIS DNS RECORD
+          </div>
+          <p style={{fontSize:11,color:C.textSec,lineHeight:1.5,margin:"0 0 10px"}}>{ins.help}</p>
+          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"6px 12px",
+            fontSize:11.5,marginBottom:10,alignItems:"center"}}>
+            <span style={{color:C.textMut,fontWeight:600}}>Type</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.type}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Host</span>
+            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.host}</span>
+            <span style={{color:C.textMut,fontWeight:600}}>Value</span>
+            <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+              <span style={{color:C.accent,fontFamily:"monospace",fontSize:11,
+                wordBreak:"break-all",lineHeight:1.4}}>{ins.value}</span>
+              <button onClick={copyTxt}
+                style={{flexShrink:0,padding:"3px 9px",background:copied?`${C.green}20`:C.surface,
+                  border:`1px solid ${copied?C.green+"55":C.border}`,borderRadius:5,
+                  color:copied?C.green:C.textSec,fontSize:10,fontWeight:600,cursor:"pointer"}}>
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+            paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+            <button onClick={()=>onVerify(d.id)} disabled={!!busyKey}
+              style={{padding:"7px 14px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                borderRadius:7,color:C.green,fontSize:11.5,fontWeight:700,
+                cursor:busyKey?"default":"pointer",opacity:busyKey?0.6:1}}>
+              {busyKey===`verify:${d.id}` ? "Checking DNS…" : "Check DNS record"}
+            </button>
+            {d.lastCheckedAt && (
+              <span style={{fontSize:10.5,color:C.textMut}}>
+                Last checked {new Date(d.lastCheckedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DomainMonitoringCard() {
-  const [state, setState] = useState(null);
+  const [domains, setDomains] = useState(null);
+  const [suggested, setSuggested] = useState(null);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(null);   // "submit" | "verify"
+  const [busyKey, setBusyKey] = useState(null); // "add" | "verify:<id>" | "remove:<id>"
   const [error, setError] = useState(null);
-  const [copied, setCopied] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/domain`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not load domain status.");
-      setState(data);
-      if (!data.domain && data.suggested) setInput(data.suggested);
+      if (!res.ok) throw new Error(data.error || "Could not load your domains.");
+      setDomains(data.domains || []);
+      setSuggested(data.suggested || null);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
-  async function submit() {
+  async function addDomain() {
     if (!input.trim()) return;
-    setBusy("submit"); setError(null);
+    setBusyKey("add"); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/domain`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -4385,148 +4474,88 @@ function DomainMonitoringCard() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not save that domain.");
-      setState(data);
+      setInput("");
+      await load();
     } catch (e) { setError(e.message); }
-    finally { setBusy(null); }
+    finally { setBusyKey(null); }
   }
 
-  async function verify() {
-    setBusy("verify"); setError(null);
+  async function verifyDomain(id) {
+    setBusyKey(`verify:${id}`); setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/client/domain/verify`, {
+      const res = await authFetch(`${API_BASE}/api/client/domain/${id}/verify`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verification check failed.");
-      setState(data);
+      await load();
     } catch (e) { setError(e.message); }
-    finally { setBusy(null); }
+    finally { setBusyKey(null); }
   }
 
-  function copyTxt() {
-    const v = state?.instructions?.value;
-    if (!v) return;
-    navigator.clipboard?.writeText(v).then(() => {
-      setCopied(true); setTimeout(() => setCopied(false), 1800);
-    }).catch(() => {});
+  async function removeDomain(id) {
+    if (!window.confirm("Remove this domain? Breach monitoring for it will stop.")) return;
+    setBusyKey(`remove:${id}`); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/domain/${id}`, { method: "DELETE" });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || "Could not remove that domain.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusyKey(null); }
   }
 
   if (loading) return <Card style={{marginBottom:14}}><Spinner/></Card>;
 
-  const tone = {
-    monitored:          { color: C.green,  icon: "🛡️" },
-    awaiting_hibp:      { color: C.amber,  icon: "⏳" },
-    awaiting_ownership: { color: C.accent, icon: "🔑" },
-    service_inactive:   { color: C.textSec,icon: "○"  },
-    rejected:           { color: C.red,    icon: "⚠️" },
-    none:               { color: C.textSec,icon: "＋" },
-  }[state?.state] || { color: C.textSec, icon: "○" };
-
-  const ins = state?.instructions;
+  const monitoredCount = (domains || []).filter(d => d.monitored).length;
 
   return (
     <Card style={{marginBottom:14}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
         <SectionLabel text="Breach & Dark-Web Monitoring"/>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,
-          padding:"4px 10px",borderRadius:20,background:`${tone.color}15`,
-          border:`1px solid ${tone.color}38`}}>
-          <span style={{fontSize:11}}>{tone.icon}</span>
-          <span style={{fontSize:11,fontWeight:700,color:tone.color,letterSpacing:0.3}}>
-            {state?.monitored ? "ACTIVE" : "NOT ACTIVE"}
+          padding:"4px 10px",borderRadius:20,
+          background: monitoredCount>0 ? `${C.green}15` : `${C.textSec}15`,
+          border:`1px solid ${monitoredCount>0 ? C.green+"38" : C.border}`}}>
+          <span style={{fontSize:11,fontWeight:700,color: monitoredCount>0?C.green:C.textSec,letterSpacing:0.3}}>
+            {(domains||[]).length===0 ? "NO DOMAINS" : `${monitoredCount}/${domains.length} MONITORED`}
           </span>
         </div>
       </div>
+
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>
+        Register every domain your company uses — each one is verified and monitored independently.
+        We verify domain control before monitoring so we never pull breach data for a domain that isn't yours.
+      </p>
 
       {error && (
         <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
           border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{error}</div>
       )}
 
-      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:5}}>{safeText(state?.headline)}</div>
-      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 14px"}}>{safeText(state?.detail)}</p>
-
-      {state?.domain && (
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,
-          padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:7}}>
-          <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>DOMAIN</span>
-          <span style={{fontSize:13,color:C.text,fontWeight:600,fontFamily:"monospace"}}>{state.domain}</span>
-          {state.ownershipVerifiedAt && (
-            <span style={{marginLeft:"auto",fontSize:10.5,color:C.green,fontWeight:600}}>✓ ownership verified</span>
-          )}
+      {(domains||[]).length === 0 ? (
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,marginBottom:14}}>
+          No company domain on file yet. Add one below to enable breach and dark-web exposure monitoring.
         </div>
-      )}
+      ) : (domains||[]).map(d => (
+        <DomainRow key={d.id} d={d} onVerify={verifyDomain} onRemove={removeDomain} busyKey={busyKey}/>
+      ))}
 
-      {/* ── Submit / change the domain ── */}
-      {(state?.state === "none" || state?.nextStep === "verify_dns") && (
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:ins?14:0}}>
-          <input value={input} onChange={e=>setInput(e.target.value)}
-            onKeyDown={e=>{ if(e.key==="Enter") submit(); }}
-            placeholder="yourcompany.com"
-            style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,
-              border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,
-              fontFamily:"Inter,system-ui,sans-serif"}}/>
-          <button onClick={submit} disabled={busy==="submit"||!input.trim()}
-            style={{padding:"10px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
-              borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
-              cursor:busy||!input.trim()?"default":"pointer",opacity:busy||!input.trim()?0.5:1}}>
-            {busy==="submit" ? "Saving…" : state?.domain ? "Change domain" : "Add domain"}
-          </button>
-        </div>
-      )}
-
-      {/* ── DNS TXT instructions ── */}
-      {ins && (
-        <div style={{padding:"14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
-          <div style={{fontSize:11.5,fontWeight:700,color:C.text,marginBottom:4,letterSpacing:0.3}}>
-            STEP 1 · PUBLISH THIS DNS RECORD
-          </div>
-          <p style={{fontSize:11.5,color:C.textSec,lineHeight:1.55,margin:"0 0 12px"}}>{ins.help}</p>
-
-          <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:"7px 14px",
-            fontSize:12,marginBottom:12,alignItems:"center"}}>
-            <span style={{color:C.textMut,fontWeight:600}}>Type</span>
-            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.type}</span>
-            <span style={{color:C.textMut,fontWeight:600}}>Host</span>
-            <span style={{color:C.text,fontFamily:"monospace"}}>{ins.host}</span>
-            <span style={{color:C.textMut,fontWeight:600}}>Value</span>
-            <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-              <span style={{color:C.accent,fontFamily:"monospace",fontSize:11.5,
-                wordBreak:"break-all",lineHeight:1.4}}>{ins.value}</span>
-              <button onClick={copyTxt}
-                style={{flexShrink:0,padding:"3px 9px",background:copied?`${C.green}20`:C.card,
-                  border:`1px solid ${copied?C.green+"55":C.border}`,borderRadius:5,
-                  color:copied?C.green:C.textSec,fontSize:10.5,fontWeight:600,cursor:"pointer"}}>
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-
-          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
-            paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-            <div style={{fontSize:11.5,fontWeight:700,color:C.text,letterSpacing:0.3}}>STEP 2</div>
-            <button onClick={verify} disabled={busy==="verify"}
-              style={{padding:"8px 16px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
-                borderRadius:7,color:C.green,fontSize:12,fontWeight:700,
-                cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
-              {busy==="verify" ? "Checking DNS…" : "Check DNS record"}
-            </button>
-            {state?.lastCheckedAt && (
-              <span style={{fontSize:11,color:C.textMut}}>
-                Last checked {new Date(state.lastCheckedAt).toLocaleTimeString()}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Why we ask ── */}
-      {state?.state !== "monitored" && (
-        <p style={{fontSize:11,color:C.textMut,lineHeight:1.55,margin:"14px 0 0"}}>
-          We verify domain control before monitoring so we never pull breach data for a
-          domain that isn't yours.
-        </p>
-      )}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <input value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter") addDomain(); }}
+          placeholder={suggested || "yourcompany.com"}
+          style={{flex:"1 1 220px",padding:"10px 12px",background:C.surface,
+            border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,
+            fontFamily:"Inter,system-ui,sans-serif"}}/>
+        <button onClick={addDomain} disabled={busyKey==="add"||!input.trim()}
+          style={{padding:"10px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:8,color:C.accent,fontSize:12.5,fontWeight:700,
+            cursor:busyKey||!input.trim()?"default":"pointer",opacity:busyKey||!input.trim()?0.5:1}}>
+          {busyKey==="add" ? "Saving…" : (domains||[]).length ? "+ Add another domain" : "+ Add domain"}
+        </button>
+      </div>
     </Card>
   );
 }
@@ -9825,10 +9854,10 @@ function AdminDomainQueue() {
   }
   useEffect(() => { load(); }, []);
 
-  async function setStatus(userId, status, note = "") {
-    setBusy(userId + status); setError(null); setNotice(null);
+  async function setStatus(domainId, status, note = "") {
+    setBusy(domainId + status); setError(null); setNotice(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/hibp-status`, {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${domainId}/hibp-status`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, note }),
       });
@@ -9841,10 +9870,10 @@ function AdminDomainQueue() {
     finally { setBusy(null); }
   }
 
-  async function recheck(userId) {
-    setBusy(userId + "recheck"); setError(null); setNotice(null);
+  async function recheck(domainId) {
+    setBusy(domainId + "recheck"); setError(null); setNotice(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/admin/domains/${userId}/recheck`, {
+      const res = await authFetch(`${API_BASE}/api/admin/domains/${domainId}/recheck`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       const d = await res.json();
@@ -9950,28 +9979,28 @@ function AdminDomainQueue() {
               </div>
 
               <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"flex-start"}}>
-                <button onClick={()=>recheck(d.userId)} disabled={!!busy}
+                <button onClick={()=>recheck(d.id)} disabled={!!busy}
                   style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
                     borderRadius:6,color:C.textSec,fontSize:11.5,cursor:busy?"default":"pointer"}}>
-                  {busy===d.userId+"recheck" ? "Checking…" : "Recheck DNS"}
+                  {busy===d.id+"recheck" ? "Checking…" : "Recheck DNS"}
                 </button>
 
                 {d.ownership === "verified" && d.hibpStatus === "not_submitted" && (
-                  <button onClick={()=>setStatus(d.userId,"submitted","added to HIBP dashboard")} disabled={!!busy}
+                  <button onClick={()=>setStatus(d.id,"submitted","added to HIBP dashboard")} disabled={!!busy}
                     style={{padding:"7px 12px",background:`${C.amber}18`,border:`1px solid ${C.amber}55`,
                       borderRadius:6,color:C.amber,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
                     Mark submitted
                   </button>
                 )}
                 {d.ownership === "verified" && d.hibpStatus === "submitted" && (
-                  <button onClick={()=>setStatus(d.userId,"verified")} disabled={!!busy}
+                  <button onClick={()=>setStatus(d.id,"verified")} disabled={!!busy}
                     style={{padding:"7px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
                       borderRadius:6,color:C.green,fontSize:11.5,fontWeight:600,cursor:busy?"default":"pointer"}}>
                     Mark verified — go live
                   </button>
                 )}
                 {d.hibpStatus !== "rejected" && d.ownership === "verified" && (
-                  <button onClick={()=>{ setNoteFor(noteFor===d.userId?null:d.userId); setNoteText(""); }}
+                  <button onClick={()=>{ setNoteFor(noteFor===d.id?null:d.id); setNoteText(""); }}
                     style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
                       borderRadius:6,color:C.textMut,fontSize:11.5,cursor:"pointer"}}>
                     Reject
@@ -9980,7 +10009,7 @@ function AdminDomainQueue() {
               </div>
             </div>
 
-            {noteFor === d.userId && (
+            {noteFor === d.id && (
               <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
                 display:"flex",gap:8,flexWrap:"wrap"}}>
                 <input value={noteText} onChange={e=>setNoteText(e.target.value)}
@@ -9988,7 +10017,7 @@ function AdminDomainQueue() {
                   style={{flex:"1 1 260px",padding:"9px 11px",background:C.surface,
                     border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5,
                     fontFamily:"Inter,system-ui,sans-serif"}}/>
-                <button onClick={()=>setStatus(d.userId,"rejected",noteText)} disabled={!!busy||!noteText.trim()}
+                <button onClick={()=>setStatus(d.id,"rejected",noteText)} disabled={!!busy||!noteText.trim()}
                   style={{padding:"9px 14px",background:`${C.red}18`,border:`1px solid ${C.red}55`,
                     borderRadius:7,color:C.red,fontSize:12,fontWeight:600,
                     cursor:busy||!noteText.trim()?"default":"pointer",opacity:!noteText.trim()?0.5:1}}>

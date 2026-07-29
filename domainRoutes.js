@@ -10,9 +10,12 @@
 
 import { randomUUID } from "crypto";
 import {
-  submitDomain,
+  addDomain,
+  removeDomain,
   checkOwnership,
   getClientDomain,
+  listClientDomains,
+  getDomainById,
   verificationInstructions,
   clientView,
   adminQueue,
@@ -55,35 +58,46 @@ function resolveTarget(req, res, db, analystOwnsClient, id) {
 export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient }) {
   db.data.clientDomains ||= [];
 
-  // ── Client: current domain + what to do next ────────────────
+  // ── Client: all domains on file + what to do next on each ───
+  // A client can register more than one domain (parent company + brands,
+  // regional TLDs, etc.); each one goes through ownership + HIBP enrollment
+  // independently. Empty list uses the same "none" shape a single missing
+  // domain used to, so the UI's empty state doesn't need special-casing.
   app.get("/api/client/domain", requireAuth, (req, res) => {
     const targetId = resolveTarget(req, res, db, analystOwnsClient, req.query.userId);
     if (!targetId) return;
 
-    const record = getClientDomain(db, targetId);
-    const view = clientView(record, { hibpConfigured: darkwebConfigured() });
+    const records = listClientDomains(db, targetId);
+    const domains = records.map(record => ({
+      id: record.id,
+      ...clientView(record, { hibpConfigured: darkwebConfigured() }),
+      instructions: verificationInstructions(record),
+      lastCheckedAt: record.lastCheckedAt,
+      lastCheckError: record.lastCheckError,
+    }));
     res.json({
       userId: targetId,
-      ...view,
-      // Only a pre-fill hint for the form — never used for live queries.
-      suggested: record ? null : suggestedDomain(db, targetId),
+      domains,
+      // Only a pre-fill hint for the "add another" form — never used for live queries.
+      suggested: records.length ? null : suggestedDomain(db, targetId),
       serviceConfigured: darkwebConfigured(),
     });
   });
 
-  // ── Client: submit / change the company domain ──────────────
+  // ── Client: add a domain ─────────────────────────────────────
   app.post("/api/client/domain", requireAuth, async (req, res) => {
     const targetId = resolveTarget(req, res, db, analystOwnsClient, req.body?.userId);
     if (!targetId) return;
 
     try {
-      const record = await submitDomain(db, targetId, req.body?.domain, req.userEmail);
+      const record = await addDomain(db, targetId, req.body?.domain, req.userEmail);
       if (targetId !== req.userId) {
         audit(db, req, "domain_submitted_for_client", targetId, record.domain);
         await db.write();
       }
       res.json({
         userId: targetId,
+        id: record.id,
         ...clientView(record, { hibpConfigured: darkwebConfigured() }),
         instructions: verificationInstructions(record),
       });
@@ -92,15 +106,33 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
     }
   });
 
-  // ── Client: run the DNS TXT check ───────────────────────────
-  app.post("/api/client/domain/verify", requireAuth, async (req, res) => {
+  // ── Client: remove a domain ──────────────────────────────────
+  app.delete("/api/client/domain/:id", requireAuth, async (req, res) => {
+    const targetId = resolveTarget(req, res, db, analystOwnsClient, req.query.userId);
+    if (!targetId) return;
+
+    try {
+      const removed = await removeDomain(db, targetId, req.params.id);
+      if (targetId !== req.userId) {
+        audit(db, req, "domain_removed_for_client", targetId, removed.domain);
+        await db.write();
+      }
+      res.json({ ok: true, id: removed.id });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || "Could not remove that domain." });
+    }
+  });
+
+  // ── Client: run the DNS TXT check for one domain ─────────────
+  app.post("/api/client/domain/:id/verify", requireAuth, async (req, res) => {
     const targetId = resolveTarget(req, res, db, analystOwnsClient, req.body?.userId);
     if (!targetId) return;
 
     try {
-      const record = await checkOwnership(db, targetId);
+      const record = await checkOwnership(db, targetId, req.params.id);
       res.json({
         userId: targetId,
+        id: record.id,
         verified: record.ownership === "verified",
         ...clientView(record, { hibpConfigured: darkwebConfigured() }),
         lastCheckedAt: record.lastCheckedAt,
@@ -162,24 +194,28 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
   });
 
   // ── Admin: record what happened in the HIBP dashboard ───────
-  app.post("/api/admin/domains/:userId/hibp-status", requireAdmin, async (req, res) => {
-    const { userId } = req.params;
+  // Keyed by the domain record's own id now (not userId) — a client can have
+  // more than one domain, so userId alone no longer identifies a row.
+  app.post("/api/admin/domains/:domainId/hibp-status", requireAdmin, async (req, res) => {
+    const { domainId } = req.params;
     const { status, note } = req.body || {};
     try {
-      const record = await setHibpStatus(db, userId, status, { note, actorEmail: req.userEmail });
-      audit(db, req, `domain_hibp_${status}`, userId, `${record.domain}${note ? ` — ${note}` : ""}`);
+      const record = await setHibpStatus(db, domainId, status, { note, actorEmail: req.userEmail });
+      audit(db, req, `domain_hibp_${status}`, record.userId, `${record.domain}${note ? ` — ${note}` : ""}`);
       await db.write();
-      res.json({ userId, domain: record.domain, hibpStatus: record.hibpStatus, record });
+      res.json({ userId: record.userId, domain: record.domain, hibpStatus: record.hibpStatus, record });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message || "Could not update status." });
     }
   });
 
   // ── Admin: re-run a client's DNS check ──────────────────────
-  app.post("/api/admin/domains/:userId/recheck", requireAdmin, async (req, res) => {
+  app.post("/api/admin/domains/:domainId/recheck", requireAdmin, async (req, res) => {
+    const target = getDomainById(db, req.params.domainId);
+    if (!target) return res.status(404).json({ error: "Domain not found." });
     try {
-      const record = await checkOwnership(db, req.params.userId);
-      res.json({ userId: req.params.userId, ownership: record.ownership, record });
+      const record = await checkOwnership(db, target.userId, req.params.domainId);
+      res.json({ userId: record.userId, ownership: record.ownership, record });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message || "Recheck failed." });
     }

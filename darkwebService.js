@@ -16,7 +16,7 @@
 // Requires: process.env.HIBP_API_KEY (32-char hex from https://haveibeenpwned.com/API/Key)
 // Optional: process.env.HIBP_USER_AGENT (defaults to "ShieldAI-vCISO")
 
-import { getClientDomain, isMonitorable, clientView, OWNERSHIP, HIBP_STATUS } from "./domainService.js";
+import { getClientDomain, listClientDomains, isMonitorable, clientView, OWNERSHIP, HIBP_STATUS } from "./domainService.js";
 
 const HIBP_BASE = "https://haveibeenpwned.com/api/v3";
 const HIBP_API_KEY = process.env.HIBP_API_KEY || "";
@@ -233,10 +233,48 @@ export async function domainExposure(domain) {
   }
 }
 
+// Combine independent per-domain HIBP results into one honest summary. A
+// client can have several verified+monitored domains; the exposure card only
+// has room for one flat result, so this merges rather than just picking one
+// and silently dropping the rest.
+function mergeExposures(results) {
+  const degraded = results.filter(r => r.degraded);
+  const ok = results.filter(r => !r.degraded);
+  const breachedAccounts = ok.reduce((s, r) => s + (r.breachedAccounts || 0), 0);
+  const breachNames = new Set();
+  ok.forEach(r => (r.breaches || []).forEach(b => breachNames.add(b)));
+  const sampleAccounts = ok.flatMap(r => r.sampleAccounts || []).slice(0, 8);
+
+  let statusLevel;
+  if (!ok.length) statusLevel = "Unknown";
+  else if (breachedAccounts === 0 && breachNames.size === 0) statusLevel = "No intel";
+  else if (breachNames.size >= 5 || breachedAccounts >= 25) statusLevel = "High alert";
+  else if (breachNames.size >= 2 || breachedAccounts >= 5) statusLevel = "Elevated";
+  else statusLevel = "Low risk";
+
+  return {
+    source: "hibp",
+    domain: results.map(r => r.domain).join(", "),
+    monitored: true,
+    statusLevel,
+    breachedAccounts,
+    distinctBreaches: breachNames.size,
+    breaches: [...breachNames].sort(),
+    sampleAccounts,
+    checkedAt: new Date().toISOString(),
+    degraded: degraded.length > 0,
+    degradedDomains: degraded.map(r => r.domain),
+  };
+}
+
 // ── Per-client exposure, gated on verification ────────────────
 // The ONLY entry point the app should use for a specific client. It refuses to
 // hit HIBP unless the client registered the domain AND proved control of it
 // AND an admin confirmed it's enrolled in our HIBP dashboard.
+//
+// A client can register more than one domain; this checks all of them and
+// merges the result (see mergeExposures) rather than only ever looking at
+// the first one on file, which would silently leave later domains unmonitored.
 //
 // Every refusal returns an honest status describing exactly what's missing —
 // never a "Low risk" that a client could mistake for an all-clear.
@@ -251,30 +289,48 @@ export async function clientExposure(db, userId, { isDemo = false } = {}) {
     return demoDarkwebExposure(user?.companyName);
   }
 
-  const record = getClientDomain(db, userId);
-  const view = clientView(record, { hibpConfigured: darkwebConfigured() });
-
-  if (!record) {
+  const records = listClientDomains(db, userId);
+  if (!records.length) {
     return { source: "hibp", domain: null, monitored: false, statusLevel: "Not monitored",
-      reason: view.detail, configured: darkwebConfigured(), state: view.state, nextStep: view.nextStep };
+      reason: "No company domain on file to monitor. Add your company domain to enable it.",
+      configured: darkwebConfigured(), state: "none", nextStep: "submit_domain" };
   }
   if (!darkwebConfigured()) {
-    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not active",
+    return { source: "hibp", domain: records.map(r => r.domain).join(", "), monitored: false, statusLevel: "Not active",
       reason: "Dark-web monitoring isn't active — no Have I Been Pwned API key is configured.",
-      configured: false, state: view.state };
-  }
-  if (record.ownership !== OWNERSHIP.VERIFIED) {
-    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not monitored",
-      reason: view.detail, configured: true, state: view.state, nextStep: view.nextStep,
-      needsVerification: true };
-  }
-  if (record.hibpStatus !== HIBP_STATUS.VERIFIED) {
-    return { source: "hibp", domain: record.domain, monitored: false, statusLevel: "Not monitored",
-      reason: view.detail, configured: true, state: view.state, nextStep: view.nextStep };
+      configured: false, state: "service_inactive" };
   }
 
-  // Both gates green — safe to query.
-  return domainExposure(record.domain);
+  const monitorable = records.filter(isMonitorable);
+  const notYet = records.filter(r => !isMonitorable(r));
+
+  if (!monitorable.length) {
+    // Nothing fully cleared yet — report on whichever domain is furthest
+    // along so the client has a concrete next step, not a generic refusal.
+    const primary = [...records].sort((a, b) =>
+      (b.ownership === OWNERSHIP.VERIFIED) - (a.ownership === OWNERSHIP.VERIFIED))[0];
+    const view = clientView(primary, { hibpConfigured: darkwebConfigured() });
+    return { source: "hibp", domain: records.map(r => r.domain).join(", "), monitored: false,
+      statusLevel: "Not monitored", reason: view.detail, configured: true,
+      state: view.state, nextStep: view.nextStep,
+      needsVerification: primary.ownership !== OWNERSHIP.VERIFIED };
+  }
+
+  // At least one domain cleared both gates — safe to query those, merge the
+  // results, and say plainly if any domain on file isn't covered yet.
+  const results = await Promise.all(monitorable.map(r => domainExposure(r.domain)));
+  const merged = mergeExposures(results);
+  const notes = [];
+  if (notYet.length) {
+    notes.push(`${notYet.length} of ${records.length} domain${records.length === 1 ? "" : "s"} on file ` +
+      `${notYet.length === 1 ? "isn't" : "aren't"} monitored yet (${notYet.map(r => r.domain).join(", ")}).`);
+  }
+  if (merged.degraded) {
+    notes.push(`Couldn't refresh ${merged.degradedDomains.length} domain${merged.degradedDomains.length === 1 ? "" : "s"} ` +
+      `right now (${merged.degradedDomains.join(", ")}); showing the rest.`);
+  }
+  if (notes.length) merged.note = notes.join(" ");
+  return merged;
 }
 
 // DB-backed snapshot, parallel to the CVE one, so Mastermind reads cached data.

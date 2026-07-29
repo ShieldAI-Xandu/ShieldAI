@@ -93,8 +93,19 @@ function ensure(db) {
   return db.data.clientDomains;
 }
 
+// Kept for callers that only ever cared about "the" domain (e.g. AI-grounding
+// facts, quick checks) — returns the first one on file. Anything that needs
+// to work across a client's whole domain list uses listClientDomains below.
 export function getClientDomain(db, userId) {
   return ensure(db).find(d => d.userId === userId) || null;
+}
+
+export function listClientDomains(db, userId) {
+  return ensure(db).filter(d => d.userId === userId);
+}
+
+export function getDomainById(db, id) {
+  return ensure(db).find(d => d.id === id) || null;
 }
 
 export function listDomains(db, { hibpStatus = null, ownership = null } = {}) {
@@ -111,8 +122,12 @@ export function isMonitorable(record) {
     && record.hibpStatus === HIBP_STATUS.VERIFIED;
 }
 
-// ── Submit / re-submit a domain ───────────────────────────────
-export async function submitDomain(db, userId, rawDomain, actorEmail = "") {
+// ── Add a domain ──────────────────────────────────────────────
+// A client can register more than one domain (parent company + brands,
+// regional TLDs, etc.) — each gets its own independent ownership/HIBP
+// lifecycle. Always creates a new record; use removeDomain to take one back
+// off the list rather than overwriting it in place.
+export async function addDomain(db, userId, rawDomain, actorEmail = "") {
   const domain = normalizeDomain(rawDomain);
   if (!isValidDomain(domain)) {
     throw Object.assign(new Error("That doesn't look like a valid company domain (e.g. acme.com)."), { status: 400 });
@@ -124,42 +139,25 @@ export async function submitDomain(db, userId, rawDomain, actorEmail = "") {
   }
 
   const rows = ensure(db);
-  const existing = rows.find(r => r.userId === userId);
 
+  if (rows.some(r => r.domain === domain && r.userId === userId)) {
+    throw Object.assign(new Error("That domain is already on your list."), { status: 409 });
+  }
   // Another client already monitoring this domain would let one company read
   // another's breach exposure. Refuse.
-  const takenByOther = rows.find(r => r.domain === domain && r.userId !== userId);
-  if (takenByOther) {
+  if (rows.some(r => r.domain === domain && r.userId !== userId)) {
     throw Object.assign(new Error(
       "That domain is already registered to another ShieldAI account. Contact support if this is your domain."
     ), { status: 409 });
   }
 
   const now = new Date().toISOString();
-  const token = randomUUID().replace(/-/g, "");
-
-  if (existing) {
-    // Changing the domain invalidates all prior proof — both gates reset.
-    if (existing.domain !== domain) {
-      existing.domain = domain;
-      existing.ownership = OWNERSHIP.PENDING;
-      existing.verificationToken = token;
-      existing.ownershipVerifiedAt = null;
-      existing.hibpStatus = HIBP_STATUS.NOT_SUBMITTED;
-      existing.hibpNote = "";
-      existing.history = [...(existing.history || []), { at: now, event: "domain_changed", detail: domain, by: actorEmail }];
-    }
-    existing.updatedAt = now;
-    await db.write();
-    return existing;
-  }
-
   const record = {
     id: randomUUID(),
     userId,
     domain,
     ownership: OWNERSHIP.PENDING,
-    verificationToken: token,
+    verificationToken: randomUUID().replace(/-/g, ""),
     ownershipVerifiedAt: null,
     lastCheckedAt: null,
     lastCheckError: null,
@@ -173,6 +171,20 @@ export async function submitDomain(db, userId, rawDomain, actorEmail = "") {
   rows.push(record);
   await db.write();
   return record;
+}
+
+// ── Remove a domain ───────────────────────────────────────────
+// Ownership-checked: userId must be the domain's own owner (staff acting on
+// a client's behalf pass that client's id, same as every other route here).
+export async function removeDomain(db, userId, domainId) {
+  const rows = ensure(db);
+  const idx = rows.findIndex(r => r.id === domainId && r.userId === userId);
+  if (idx === -1) {
+    throw Object.assign(new Error("Domain not found."), { status: 404 });
+  }
+  const [removed] = rows.splice(idx, 1);
+  await db.write();
+  return removed;
 }
 
 // What the client has to publish in DNS.
@@ -189,10 +201,10 @@ export function verificationInstructions(record) {
 }
 
 // ── Ownership verification (real, automated) ──────────────────
-export async function checkOwnership(db, userId) {
-  const record = getClientDomain(db, userId);
-  if (!record) {
-    throw Object.assign(new Error("No domain on file. Submit your company domain first."), { status: 404 });
+export async function checkOwnership(db, userId, domainId) {
+  const record = getDomainById(db, domainId);
+  if (!record || record.userId !== userId) {
+    throw Object.assign(new Error("Domain not found."), { status: 404 });
   }
 
   const expected = `${TXT_PREFIX}${record.verificationToken}`;
@@ -233,10 +245,10 @@ export async function checkOwnership(db, userId) {
 }
 
 // ── HIBP enrollment status (admin-driven, mirrors manual dashboard work) ──
-export async function setHibpStatus(db, userId, status, { note = "", actorEmail = "" } = {}) {
-  const record = getClientDomain(db, userId);
+export async function setHibpStatus(db, domainId, status, { note = "", actorEmail = "" } = {}) {
+  const record = getDomainById(db, domainId);
   if (!record) {
-    throw Object.assign(new Error("No domain on file for that client."), { status: 404 });
+    throw Object.assign(new Error("Domain not found."), { status: 404 });
   }
   if (!Object.values(HIBP_STATUS).includes(status)) {
     throw Object.assign(new Error(`Invalid status. Expected one of: ${Object.values(HIBP_STATUS).join(", ")}`), { status: 400 });
