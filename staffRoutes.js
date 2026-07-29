@@ -40,6 +40,9 @@
 //   GET   /api/staff/clients/:cid/training/:id
 //   GET   /api/staff/clients/:cid/endpoints
 //   DELETE/api/staff/clients/:cid/endpoints/:id
+//   POST  /api/staff/clients/:cid/impersonate        "View as Client" — see below
+
+import { signImpersonationToken, publicUser } from "./auth.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -277,6 +280,25 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     });
     await db.write();
     res.json({ ok: true, deleted: agent.id });
+  });
+
+  // ── View as Client ──────────────────────────────────────────
+  // Issues a short-lived (45min) token that authenticates AS the client.
+  // Because it's a real client token, the frontend re-mounts the exact same
+  // client app the client themselves uses — full parity, no second UI to
+  // maintain — instead of the summary/list views above. Every write made
+  // under it is logged to the client's action log by requireAuth itself
+  // (see auth.js), not by each individual route, so coverage is total.
+  app.post("/api/staff/clients/:cid/impersonate", ...staff, async (req, res) => {
+    const token = signImpersonationToken(req.client, {
+      id: req.userId, email: req.userEmail, isAdmin: req.isAdmin,
+    });
+    logClientAction(db, {
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "impersonation_started", detail: `Started viewing as client (${req.client.email}).`,
+    });
+    await db.write();
+    res.json({ token, user: publicUser(req.client) });
   });
 
   console.log("ShieldAI staff client-workspace routes registered.");

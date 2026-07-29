@@ -21,6 +21,7 @@
 // Access model mirrors the existing analyst routes: admins see all non-admin
 // clients; analysts see only clients assigned to them.
 
+import { randomUUID } from "crypto";
 import { logClientAction } from "./assignmentRoutes.js";
 // The same engine the client's own dashboard uses. Scoring the analyst's view
 // from a different source than the client's would let the two disagree, which
@@ -828,15 +829,36 @@ export function registerPortfolioRoutes(
     res.json({ ok: true, kind, id, status: newStatus });
   });
 
-  // ── Analyst → client note ──────────────────────────────────
-  // There is no live two-way chat channel. This is the real, one-directional
-  // mechanism the analyst console's "Direct Client Channel" panel uses instead
-  // of simulating a conversation: it delivers an actual notification to the
-  // client, the same way a review decision does. Replaces a UI that appended
-  // the analyst's message to component state only — nothing was ever sent,
-  // and there was no indication of that to the analyst typing it.
-  // POST body: { message: string }
-  app.post("/api/analyst/clients/:id/note", requireAnalyst, async (req, res) => {
+  // ── Analyst ↔ client chat ───────────────────────────────────
+  // A real two-way thread, not the one-directional "note" this replaced (that
+  // delivered a notification with no way for the client to reply). Every
+  // message also pushes a notification to whoever's on the other end, so
+  // neither side has to sit on the thread waiting.
+  db.data.clientMessages ||= []; // { id, clientUserId, fromRole: "client"|"staff", authorId, authorLabel, body, at }
+
+  // Who to notify when a CLIENT sends a message: their assigned analyst(s),
+  // or every admin if nobody's assigned yet — a message must never go
+  // unseen just because assignment hasn't happened.
+  function staffContactsFor(clientId) {
+    const analystIds = (db.data.assignments || [])
+      .filter(a => a.clientUserId === clientId)
+      .map(a => a.analystUserId);
+    if (analystIds.length) return analystIds;
+    return users().filter(u => u.isAdmin).map(u => u.id);
+  }
+
+  app.get("/api/analyst/clients/:id/messages", requireAnalyst, (req, res) => {
+    const clientId = req.params.id;
+    if (!canSee(req, clientId)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    const thread = (db.data.clientMessages || [])
+      .filter(m => m.clientUserId === clientId)
+      .sort((a, b) => new Date(a.at) - new Date(b.at));
+    res.json(thread);
+  });
+
+  app.post("/api/analyst/clients/:id/messages", requireAnalyst, async (req, res) => {
     const clientId = req.params.id;
     if (!canSee(req, clientId)) {
       return res.status(403).json({ error: "This client is not assigned to you." });
@@ -845,18 +867,65 @@ export function registerPortfolioRoutes(
     if (!message) return res.status(400).json({ error: "message is required." });
     if (message.length > 2000) return res.status(400).json({ error: "message is too long (2000 char max)." });
 
+    const actor = findUser(req.userId);
+    db.data.clientMessages.push({
+      id: randomUUID(), clientUserId: clientId, fromRole: "staff",
+      authorId: req.userId, authorLabel: actor?.companyName || actor?.email || "Your security analyst",
+      body: message.slice(0, 2000), at: nowIso(),
+    });
     pushNotification(db, {
       userId: clientId,
       type: "analyst_note",
-      title: "Note from your security analyst",
+      title: "New message from your security analyst",
       body: message.slice(0, 1000),
       actorRole: "analyst",
     });
     logClientAction(db, {
       clientUserId: clientId,
       actorUserId: req.userId,
-      actorRole: "analyst",
-      action: "analyst_note_sent",
+      actorRole: req.isAdmin ? "admin" : "analyst",
+      action: "analyst_message_sent",
+      detail: message.length > 200 ? `${message.slice(0, 200)}…` : message,
+    });
+    await db.write();
+    res.json({ ok: true });
+  });
+
+  // ── Client side of the same thread (self-scoped) ─────────────
+  app.get("/api/client/messages", requireAuth, (req, res) => {
+    if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
+    const thread = (db.data.clientMessages || [])
+      .filter(m => m.clientUserId === req.userId)
+      .sort((a, b) => new Date(a.at) - new Date(b.at));
+    res.json(thread);
+  });
+
+  app.post("/api/client/messages", requireAuth, async (req, res) => {
+    if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
+    const message = (req.body?.message || "").trim();
+    if (!message) return res.status(400).json({ error: "message is required." });
+    if (message.length > 2000) return res.status(400).json({ error: "message is too long (2000 char max)." });
+
+    const me = findUser(req.userId);
+    db.data.clientMessages.push({
+      id: randomUUID(), clientUserId: req.userId, fromRole: "client",
+      authorId: req.userId, authorLabel: me?.companyName || me?.email || "Client",
+      body: message.slice(0, 2000), at: nowIso(),
+    });
+    for (const staffId of staffContactsFor(req.userId)) {
+      pushNotification(db, {
+        userId: staffId,
+        type: "client_message",
+        title: `New message from ${me?.companyName || me?.email || "a client"}`,
+        body: message.slice(0, 1000),
+        actorRole: "client_admin",
+      });
+    }
+    logClientAction(db, {
+      clientUserId: req.userId,
+      actorUserId: req.userId,
+      actorRole: "client_admin",
+      action: "client_message_sent",
       detail: message.length > 200 ? `${message.slice(0, 200)}…` : message,
     });
     await db.write();

@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import db from "./db.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import { verifyDemoToken } from "./demoGateway.js";
+import { logClientAction } from "./assignmentRoutes.js";
 
 // No hardcoded fallback. This used to be
 //   process.env.JWT_SECRET || "shieldai-test-secret-change-in-production"
@@ -145,7 +146,22 @@ function signToken(user) {
   );
 }
 
-function publicUser(user) {
+// Short-lived token that authenticates AS the client (userId is the client's,
+// not the staff member's) so every existing client-scoped route works with
+// zero changes — this is how "View as Client" gets full real functionality
+// instead of a second, hand-duplicated read-only UI. impersonatedBy records
+// who's really driving, for the frontend banner and the audit log below.
+// Deliberately much shorter-lived than a normal session token.
+export function signImpersonationToken(client, actor) {
+  return jwt.sign(
+    { userId: client.id, email: client.email, isAdmin: false, isAnalyst: false,
+      impersonatedBy: { id: actor.id, email: actor.email, role: actor.isAdmin ? "admin" : "analyst" } },
+    JWT_SECRET,
+    { expiresIn: "45m" }
+  );
+}
+
+export function publicUser(user) {
   const tierId = user.tier && TIERS[user.tier] ? user.tier : DEFAULT_TIER;
   const tier = TIERS[tierId];
   return {
@@ -165,7 +181,7 @@ function publicUser(user) {
 }
 
 // ── Middleware: require a valid token ─────────────────────────
-export function requireAuth(req, res, next) {
+export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Authentication required." });
@@ -195,6 +211,31 @@ export function requireAuth(req, res, next) {
     req.isAdmin = !!payload.isAdmin;
     req.isAnalyst = !!payload.isAnalyst;
     req.isDemo = false;
+
+    // Impersonation ("View as Client"): req.userId already resolves to the
+    // CLIENT, so every existing client-scoped route below works unchanged.
+    // We only need to (a) expose who's really driving — the frontend uses
+    // this for the "viewing as" banner via /api/auth/me-adjacent checks —
+    // and (b) write every mutation to the same client action log every
+    // other on-behalf-of action already goes through, so this leaves the
+    // same audit trail as any other staff action. Best-effort: a logging
+    // failure must never block the real request.
+    if (payload.impersonatedBy) {
+      req.impersonatedBy = payload.impersonatedBy;
+      if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+        try {
+          logClientAction(db, {
+            clientUserId: req.userId,
+            actorUserId: payload.impersonatedBy.id,
+            actorRole: payload.impersonatedBy.role,
+            action: "impersonated_request",
+            detail: `${req.method} ${req.path}`,
+          });
+          await db.write();
+        } catch { /* audit logging must never block the actual request */ }
+      }
+    }
+
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired session. Please log in again." });

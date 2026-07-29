@@ -7137,6 +7137,30 @@ function DemoBanner({ onExit }) {
   );
 }
 
+// Persistent, unmissable marker that staff are driving a real client's
+// account via "View as Client". Every action taken here is really that
+// client's data — this banner (plus the server-side audit log) is what keeps
+// that honest.
+function ImpersonationBanner({ clientName, onExit }) {
+  return (
+    <div style={{position:"sticky",top:0,zIndex:9999,display:"flex",alignItems:"center",
+      justifyContent:"center",gap:14,flexWrap:"wrap",padding:"9px 16px",
+      background:"linear-gradient(90deg,#B45309,#92400E)",color:"#fff",
+      fontSize:13,fontWeight:600,letterSpacing:0.2}}>
+      <span>
+        VIEWING AS {safeText(clientName || "client").toUpperCase()} — you're acting on their real
+        account. Every change is logged against their action history.
+      </span>
+      <button onClick={onExit}
+        style={{padding:"4px 12px",background:"rgba(255,255,255,0.16)",
+          border:"1px solid rgba(255,255,255,0.4)",borderRadius:6,color:"#fff",
+          fontSize:12,fontWeight:700,cursor:"pointer"}}>
+        Exit to analyst console
+      </button>
+    </div>
+  );
+}
+
 // ── Investor landing page ──
 // A tailored entry point for investors: the diligence materials (pitch deck,
 // business plan, market analysis, executive summary, demo video) plus a request
@@ -7422,7 +7446,7 @@ function LearnerPage({ token }) {
   }
 
   // Submits real quiz answers; the server grades them and returns the score +
-  // per-question results. Throws on failure so LearnerModule can show the
+  // per-question results. Throws on failure so LearnerModulePlayer can show the
   // error inline (next to the quiz) rather than a page-level banner, and
   // deliberately does NOT collapse the module afterward — the learner should
   // see their results before moving on.
@@ -7552,37 +7576,46 @@ function LearnerPage({ token }) {
                   </div>
                 </div>
                 <div style={{padding:"8px 12px"}}>
-                  {a.modules.map(m => {
-                    const isOpen = openMod?.assignmentId === a.assignmentId && openMod?.topicId === m.topicId;
-                    return (
-                      <div key={m.topicId} style={{margin:"6px 0"}}>
-                        <div onClick={()=>setOpenMod(isOpen?null:{assignmentId:a.assignmentId,topicId:m.topicId})}
-                          style={{display:"flex",alignItems:"center",gap:12,padding:"12px 12px",cursor:"pointer",
-                            background:isOpen?deep:"transparent",borderRadius:10}}>
-                          <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
-                            alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
-                            background:m.completed?C.green:`${cyan}22`,color:m.completed?"#04121F":cyan}}>
-                            {m.completed ? "✓" : ""}
-                          </span>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{safeText(m.title)}</div>
-                            <div style={{fontSize:11,color:dim}}>{m.audience} · {m.duration}</div>
-                          </div>
-                          {m.completed && m.score != null && (
-                            <span style={{fontSize:11,color:C.green,fontWeight:600}}>Score {m.score}%</span>
-                          )}
-                          <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
-                        </div>
-                        {isOpen && (
-                          <LearnerModule module={m} token={token} busy={busy}
-                            onComplete={(answers)=>complete(a.assignmentId, m.topicId, answers)}/>
-                        )}
+                  {a.modules.map(m => (
+                    <div key={m.topicId}
+                      onClick={()=>setOpenMod({assignmentId:a.assignmentId,topicId:m.topicId})}
+                      style={{display:"flex",alignItems:"center",gap:12,padding:"12px 12px",margin:"6px 0",
+                        cursor:"pointer",borderRadius:10,transition:"background 0.15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=deep}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
+                        alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
+                        background:m.completed?C.green:`${cyan}22`,color:m.completed?"#04121F":cyan}}>
+                        {m.completed ? "✓" : "▶"}
+                      </span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13.5,fontWeight:600,color:ink}}>{safeText(m.title)}</div>
+                        <div style={{fontSize:11,color:dim}}>{m.audience} · {m.duration}</div>
                       </div>
-                    );
-                  })}
+                      {m.completed && m.score != null && (
+                        <span style={{fontSize:11,color:C.green,fontWeight:600}}>Score {m.score}%</span>
+                      )}
+                      <span style={{padding:"5px 12px",borderRadius:7,fontSize:11.5,fontWeight:700,
+                        background:m.completed?"transparent":`${cyan}18`,
+                        color:m.completed?dim:cyan,border:m.completed?`1px solid ${line}`:"none"}}>
+                        {m.completed ? "Review" : "Start →"}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
+
+            {openMod && (() => {
+              const assignment = (data.assignments || []).find(x => x.assignmentId === openMod.assignmentId);
+              const mod = assignment?.modules.find(x => x.topicId === openMod.topicId);
+              if (!assignment || !mod) return null;
+              return (
+                <LearnerModulePlayer module={mod} token={token} busy={busy}
+                  onComplete={(answers)=>complete(assignment.assignmentId, mod.topicId, answers)}
+                  onClose={()=>setOpenMod(null)}/>
+              );
+            })()}
           </>
         )}
         <div style={{marginTop:30,textAlign:"center",fontSize:11,color:C.textMut}}>
@@ -7668,7 +7701,12 @@ function PhishRevealPage({ token }) {
 // A single module: real AI-generated teaching slides, then a real scored
 // quiz. The quiz is graded server-side (see /api/train/:token/complete) —
 // this component never sees the correct answers until after it submits.
-function LearnerModule({ module, token, onComplete, busy }) {
+// Full-screen branded "deck" player — the training module and its knowledge
+// check presented as a ShieldAI-styled interactive presentation (slides with
+// a progress rail, then the quiz, then results) rather than an inline
+// accordion. Same data contract and stage machine as before; only the shell
+// and visual treatment changed.
+function LearnerModulePlayer({ module, token, onComplete, busy, onClose }) {
   const [content, setContent] = useState(null);       // { slides, quiz, generatedBy }
   const [loading, setLoading] = useState(!module.completed);
   const [loadError, setLoadError] = useState(null);
@@ -7696,6 +7734,27 @@ function LearnerModule({ module, token, onComplete, busy }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [module.topicId]);
 
+  // Lock background scroll while the deck is open — it's a full-screen pop-up.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Arrow-key slide navigation + Escape to close — a presentation should
+  // feel like one. Only active while flipping through slides; the quiz
+  // stage needs its own inputs, not accidental key presses advancing it.
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") { onClose(); return; }
+      if (stage !== "slides" || !content) return;
+      if (e.key === "ArrowRight") setSlideIdx(i => Math.min(content.slides.length - 1, i + 1));
+      if (e.key === "ArrowLeft") setSlideIdx(i => Math.max(0, i - 1));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [stage, content, onClose]);
+
   async function submitQuiz() {
     setSubmitError(null);
     const answerArray = content.quiz.map((_, i) => answers[i] ?? -1);
@@ -7706,135 +7765,223 @@ function LearnerModule({ module, token, onComplete, busy }) {
     } catch (e) { setSubmitError(e.message); }
   }
 
-  if (module.completed) {
-    return (
-      <div style={{padding:"6px 12px 16px 48px"}}>
-        <div style={{fontSize:12.5,color:C.green,fontWeight:600}}>
-          ✓ Completed{module.completedAt ? ` on ${new Date(module.completedAt).toLocaleDateString()}` : ""}
-          {module.score != null ? ` — Score ${module.score}%` : ""}
-        </div>
-      </div>
-    );
-  }
-
-  if (loading) return <div style={{padding:"24px 12px 24px 48px"}}><Spinner/></div>;
-
-  if (loadError) {
-    return <div style={{padding:"14px 12px 16px 48px",color:C.red,fontSize:13}}>{loadError}</div>;
-  }
-  if (!content) return null;
-
+  // ── Deck chrome: dark title bar (logo + module name + close), a slim
+  // brand-gradient accent rule under it, then the slide canvas. Every stage
+  // renders inside this same shell so it always reads as one presentation.
   return (
-    <div style={{padding:"6px 12px 16px 48px"}}>
-      {module.source && (
-        <div style={{fontSize:11,color:C.textMut,marginBottom:10}}>Source: {module.source}</div>
-      )}
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:300,
+      background:"rgba(2,6,14,0.92)",display:"flex",alignItems:"center",justifyContent:"center",
+      padding:"32px 20px"}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:860,maxHeight:"92vh",
+        display:"flex",flexDirection:"column",background:C.card,borderRadius:18,overflow:"hidden",
+        border:`1px solid ${C.borderHi}`,boxShadow:"0 40px 120px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,200,255,0.06)"}}>
 
-      {stage === "slides" && (
-        <div>
-          <div style={{padding:"20px 22px",background:deep,borderRadius:10,border:`1px solid ${line}`,minHeight:160}}>
-            <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:10}}>
-              SLIDE {slideIdx+1} OF {content.slides.length}
+        {/* Title bar */}
+        <div style={{flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 20px",
+            background:`linear-gradient(135deg,${C.surface},${C.bg})`}}>
+            <ShieldLockup logoSize={22} textSize={15} ink={C.text}/>
+            <span style={{width:1,height:18,background:line}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9.5,color:cyan,letterSpacing:1.5,fontWeight:700}}>SECURITY TRAINING</div>
+              <div style={{fontSize:13.5,fontWeight:700,color:C.text,marginTop:1,
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{safeText(module.title)}</div>
             </div>
-            <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:14}}>
-              {safeText(content.slides[slideIdx].title)}
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:9}}>
-              {(content.slides[slideIdx].bullets || []).map((b,i)=>(
-                <div key={i} style={{display:"flex",gap:9,fontSize:13.5,color:C.text,lineHeight:1.5}}>
-                  <span style={{color:cyan,flexShrink:0}}>›</span>{safeText(b)}
-                </div>
-              ))}
-            </div>
+            <button onClick={onClose}
+              style={{background:"none",border:`1px solid ${line}`,borderRadius:8,color:dim,
+                fontSize:16,width:30,height:30,cursor:"pointer",flexShrink:0,lineHeight:1}}>×</button>
           </div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12}}>
-            <button onClick={()=>setSlideIdx(i=>Math.max(0,i-1))} disabled={slideIdx===0}
-              style={{padding:"8px 16px",background:"none",border:`1px solid ${line}`,borderRadius:8,
-                color:slideIdx===0?C.textMut:dim,fontSize:12.5,cursor:slideIdx===0?"default":"pointer"}}>
-              ← Back
-            </button>
-            {slideIdx < content.slides.length-1 ? (
-              <button onClick={()=>setSlideIdx(i=>i+1)}
-                style={{padding:"8px 20px",background:cyan,border:"none",borderRadius:8,
+          <div style={{height:3,background:`linear-gradient(90deg,${cyan},${C.purple})`}}/>
+        </div>
+
+        {/* Slide canvas */}
+        <div style={{flex:1,overflowY:"auto",position:"relative",
+          background:`radial-gradient(circle at 85% 15%, ${cyan}0A, transparent 55%)`}}>
+          {/* Faint corner watermark — the "designed template" touch */}
+          <div style={{position:"absolute",right:-16,bottom:-16,opacity:0.05,pointerEvents:"none"}}>
+            <ShieldLogo size={160}/>
+          </div>
+
+          {module.completed && stage !== "results" ? (
+            <div style={{padding:"56px 44px",textAlign:"center",position:"relative"}}>
+              <div style={{fontSize:40,marginBottom:14}}>✓</div>
+              <div style={{fontSize:20,fontWeight:800,color:C.green,marginBottom:8}}>Already completed</div>
+              <div style={{fontSize:13.5,color:dim}}>
+                {module.completedAt ? `Completed ${new Date(module.completedAt).toLocaleDateString()}` : "Completed"}
+                {module.score != null ? ` · Score ${module.score}%` : ""}
+              </div>
+            </div>
+          ) : loading ? (
+            <div style={{padding:"70px 0",display:"flex",justifyContent:"center"}}><Spinner/></div>
+          ) : loadError ? (
+            <div style={{padding:"44px",color:C.red,fontSize:13.5,textAlign:"center"}}>{loadError}</div>
+          ) : !content ? null : (
+            <>
+              {stage === "slides" && (
+                <div style={{padding:"44px 48px",minHeight:340,display:"flex",flexDirection:"column",
+                  justifyContent:"center",position:"relative"}}>
+                  <div style={{display:"inline-flex",alignSelf:"flex-start",padding:"4px 12px",borderRadius:20,
+                    background:`${cyan}18`,border:`1px solid ${cyan}44`,color:cyan,fontSize:10.5,
+                    fontWeight:700,letterSpacing:1,marginBottom:20}}>
+                    SLIDE {slideIdx+1} OF {content.slides.length}
+                  </div>
+                  <div style={{fontSize:26,fontWeight:800,color:C.text,marginBottom:24,lineHeight:1.25}}>
+                    {safeText(content.slides[slideIdx].title)}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                    {(content.slides[slideIdx].bullets || []).map((b,i)=>(
+                      <div key={i} style={{display:"flex",gap:12,fontSize:15,color:C.text,lineHeight:1.6}}>
+                        <span style={{color:cyan,flexShrink:0,fontWeight:700}}>›</span>{safeText(b)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {stage === "quiz" && (
+                <div style={{padding:"36px 40px",position:"relative"}}>
+                  <div style={{display:"inline-flex",padding:"4px 12px",borderRadius:20,
+                    background:`${C.amber}18`,border:`1px solid ${C.amber}44`,color:C.amber,fontSize:10.5,
+                    fontWeight:700,letterSpacing:1,marginBottom:18}}>
+                    KNOWLEDGE CHECK
+                  </div>
+                  {content.quiz.map((q,qi)=>(
+                    <div key={qi} style={{marginBottom:16,padding:"18px 20px",background:C.surface,
+                      borderRadius:12,border:`1px solid ${line}`}}>
+                      <div style={{color:C.text,fontSize:14.5,fontWeight:700,marginBottom:12}}>
+                        {qi+1}. {safeText(q.question)}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {q.options.map((opt,oi)=>{
+                          const chosen = answers[qi]===oi;
+                          return (
+                            <div key={oi} onClick={()=>setAnswers(a=>({...a,[qi]:oi}))}
+                              style={{padding:"11px 14px",borderRadius:9,fontSize:13,cursor:"pointer",
+                                background:chosen?`${cyan}1F`:deep,border:`1px solid ${chosen?cyan:line}`,
+                                color:chosen?cyan:dim,fontWeight:chosen?600:400,transition:"all 0.12s"}}>
+                              <span style={{fontWeight:700,marginRight:8}}>{String.fromCharCode(65+oi)}.</span>
+                              {safeText(opt)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  {submitError && (
+                    <div style={{marginBottom:10,padding:"9px 12px",background:`${C.red}15`,
+                      border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{submitError}</div>
+                  )}
+                </div>
+              )}
+
+              {stage === "results" && results && (
+                <div style={{padding:"36px 40px",position:"relative"}}>
+                  <div style={{padding:"22px 24px",borderRadius:14,marginBottom:18,textAlign:"center",
+                    background:results.score>=80?`${C.green}15`:`${C.amber}15`,
+                    border:`1px solid ${results.score>=80?C.green:C.amber}44`}}>
+                    <div style={{fontSize:34,fontWeight:800,color:results.score>=80?C.green:C.amber}}>
+                      {results.score}%
+                    </div>
+                    <div style={{fontSize:13.5,color:C.text,fontWeight:600,marginTop:2}}>
+                      {results.score>=80?"Nice work":"Review recommended"}
+                    </div>
+                    <div style={{fontSize:12.5,color:C.textSec,marginTop:4}}>
+                      {results.details.filter(r=>r.correct).length} of {results.details.length} correct.
+                    </div>
+                  </div>
+                  {content.quiz.map((q,qi)=>{
+                    const r = results.details[qi];
+                    return (
+                      <div key={qi} style={{marginBottom:10,padding:"14px 16px",background:C.surface,
+                        borderRadius:10,border:`1px solid ${line}`}}>
+                        <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:6}}>
+                          {qi+1}. {safeText(q.question)}
+                        </div>
+                        <div style={{fontSize:12,color:r.correct?C.green:C.red,marginBottom:4}}>
+                          {r.correct ? "✓ Correct" : `✗ Correct answer: ${safeText(q.options[r.correctOption])}`}
+                        </div>
+                        {r.explanation && <div style={{fontSize:11.5,color:C.textMut,fontStyle:"italic"}}>{safeText(r.explanation)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer controls — the "presenter bar" */}
+        {(!module.completed || stage === "results") && !loading && !loadError && content && (
+          <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:14,padding:"14px 24px",
+            borderTop:`1px solid ${line}`,background:C.surface}}>
+            {stage === "slides" && (
+              <>
+                <button onClick={()=>setSlideIdx(i=>Math.max(0,i-1))} disabled={slideIdx===0}
+                  style={{padding:"9px 18px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+                    color:slideIdx===0?C.textMut:dim,fontSize:12.5,cursor:slideIdx===0?"default":"pointer"}}>
+                  ← Back
+                </button>
+                <div style={{flex:1,display:"flex",justifyContent:"center",gap:6}}>
+                  {content.slides.map((_,i)=>(
+                    <span key={i} onClick={()=>setSlideIdx(i)} style={{width:i===slideIdx?18:7,height:7,
+                      borderRadius:4,cursor:"pointer",transition:"all 0.15s",
+                      background:i<=slideIdx?cyan:line}}/>
+                  ))}
+                </div>
+                {slideIdx < content.slides.length-1 ? (
+                  <button onClick={()=>setSlideIdx(i=>i+1)}
+                    style={{padding:"9px 20px",background:cyan,border:"none",borderRadius:8,
+                      color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                    Next →
+                  </button>
+                ) : (
+                  <button onClick={()=>setStage("quiz")}
+                    style={{padding:"9px 20px",background:cyan,border:"none",borderRadius:8,
+                      color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                    Knowledge Check →
+                  </button>
+                )}
+              </>
+            )}
+            {stage === "quiz" && (
+              <>
+                <button onClick={()=>setStage("slides")}
+                  style={{padding:"9px 18px",background:"none",border:`1px solid ${line}`,borderRadius:8,
+                    color:dim,fontSize:12.5,cursor:"pointer"}}>
+                  ← Back to slides
+                </button>
+                <div style={{flex:1,textAlign:"center",fontSize:12,color:dim}}>
+                  {Object.keys(answers).length}/{content.quiz.length} answered
+                </div>
+                <button onClick={submitQuiz} disabled={busy || Object.keys(answers).length < content.quiz.length}
+                  style={{padding:"9px 20px",borderRadius:8,border:"none",
+                    background:(busy || Object.keys(answers).length<content.quiz.length)?C.card:cyan,
+                    color:(busy || Object.keys(answers).length<content.quiz.length)?C.textMut:deep,
+                    fontSize:12.5,fontWeight:700,cursor:busy?"wait":"pointer",whiteSpace:"nowrap"}}>
+                  {busy ? "Submitting…" : "Submit Answers"}
+                </button>
+              </>
+            )}
+            {stage === "results" && (
+              <button onClick={onClose}
+                style={{margin:"0 auto",padding:"9px 24px",background:cyan,border:"none",borderRadius:8,
                   color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
-                Next →
-              </button>
-            ) : (
-              <button onClick={()=>setStage("quiz")}
-                style={{padding:"8px 20px",background:cyan,border:"none",borderRadius:8,
-                  color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
-                Continue to Knowledge Check →
+                Done
               </button>
             )}
           </div>
-        </div>
-      )}
-
-      {stage === "quiz" && (
-        <div>
-          <div style={{fontSize:11,color:C.textMut,letterSpacing:1,fontWeight:600,marginBottom:10}}>
-            KNOWLEDGE CHECK
+        )}
+        {module.completed && stage !== "results" && (
+          <div style={{flexShrink:0,padding:"14px 24px",borderTop:`1px solid ${line}`,
+            background:C.surface,display:"flex",justifyContent:"center"}}>
+            <button onClick={onClose}
+              style={{padding:"9px 24px",background:cyan,border:"none",borderRadius:8,
+                color:deep,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+              Close
+            </button>
           </div>
-          {content.quiz.map((q,qi)=>(
-            <div key={qi} style={{marginBottom:14,padding:"14px 16px",background:C.surface,borderRadius:8}}>
-              <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:10}}>
-                {qi+1}. {safeText(q.question)}
-              </div>
-              {q.options.map((opt,oi)=>{
-                const chosen = answers[qi]===oi;
-                return (
-                  <div key={oi} onClick={()=>setAnswers(a=>({...a,[qi]:oi}))}
-                    style={{padding:"8px 12px",marginBottom:5,borderRadius:6,fontSize:12,cursor:"pointer",
-                      background:chosen?`${cyan}22`:deep,border:`1px solid ${chosen?cyan:line}`,
-                      color:chosen?cyan:dim}}>
-                    {String.fromCharCode(65+oi)}. {safeText(opt)}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-          {submitError && (
-            <div style={{marginBottom:10,padding:"9px 12px",background:`${C.red}15`,
-              border:`1px solid ${C.red}33`,borderRadius:7,color:C.red,fontSize:12.5}}>{submitError}</div>
-          )}
-          <button onClick={submitQuiz} disabled={busy || Object.keys(answers).length < content.quiz.length}
-            style={{padding:"10px 20px",borderRadius:8,border:"none",
-              background:(busy || Object.keys(answers).length<content.quiz.length)?C.surface:cyan,
-              color:(busy || Object.keys(answers).length<content.quiz.length)?C.textMut:deep,
-              fontSize:13,fontWeight:700,cursor:busy?"wait":"pointer"}}>
-            {busy ? "Submitting…" : `Submit Answers (${Object.keys(answers).length}/${content.quiz.length})`}
-          </button>
-        </div>
-      )}
-
-      {stage === "results" && results && (
-        <div>
-          <div style={{padding:"16px 18px",borderRadius:10,marginBottom:14,
-            background:results.score>=80?`${C.green}15`:`${C.amber}15`,
-            border:`1px solid ${results.score>=80?C.green:C.amber}44`}}>
-            <div style={{fontSize:22,fontWeight:800,color:results.score>=80?C.green:C.amber}}>
-              {results.score}% {results.score>=80?"— Nice work":"— Review recommended"}
-            </div>
-            <div style={{fontSize:13,color:C.textSec,marginTop:4}}>
-              {results.details.filter(r=>r.correct).length} of {results.details.length} correct.
-            </div>
-          </div>
-          {content.quiz.map((q,qi)=>{
-            const r = results.details[qi];
-            return (
-              <div key={qi} style={{marginBottom:10,padding:"12px 14px",background:C.surface,borderRadius:8}}>
-                <div style={{color:C.text,fontSize:12.5,fontWeight:600,marginBottom:6}}>
-                  {qi+1}. {safeText(q.question)}
-                </div>
-                <div style={{fontSize:12,color:r.correct?C.green:C.red,marginBottom:4}}>
-                  {r.correct ? "✓ Correct" : `✗ Correct answer: ${safeText(q.options[r.correctOption])}`}
-                </div>
-                {r.explanation && <div style={{fontSize:11.5,color:C.textMut,fontStyle:"italic"}}>{safeText(r.explanation)}</div>}
-              </div>
-            );
-          })}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -13402,13 +13549,28 @@ const PROGRAM_SECTION_LABELS = {
   execReport: "Executive summary report",
 };
 
-function WorkspaceViewer({ client, onBack }) {
+function WorkspaceViewer({ client, onBack, onImpersonate }) {
   const cid = client.id;
   const [tab, setTab] = useState("overview");
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [banner, setBanner] = useState(null);
+  const [enteringView, setEnteringView] = useState(false);
+
+  // Hand off to the real client console, authenticated as this client, so
+  // the analyst sees and can act on literally everything the client can —
+  // instead of the summary/list views below, which are a triage tool, not
+  // a substitute for the product itself.
+  async function enterClientView() {
+    setEnteringView(true); setBanner(null);
+    try {
+      await onImpersonate(client);
+    } catch (e) {
+      setBanner({ kind: "error", text: e.message || "Could not open the client view." });
+      setEnteringView(false);
+    }
+  }
 
   const [openProgram, setOpenProgram] = useState(null);
   const [openPolicy, setOpenPolicy] = useState(null);
@@ -13540,6 +13702,12 @@ function WorkspaceViewer({ client, onBack }) {
             {(overview?.client?.tier || client.tier || "free").toUpperCase()}
           </span>
           <span style={{fontSize:11,color:SOC.textMut}}>Acting on behalf of the client — changes are logged.</span>
+          <button onClick={enterClientView} disabled={enteringView}
+            style={{marginLeft:"auto",padding:"9px 18px",background:enteringView?SOC.panelHi:SOC.cyan,
+              border:"none",borderRadius:8,color:enteringView?SOC.textMut:SOC.bg,fontSize:12.5,fontWeight:700,
+              cursor:enteringView?"wait":"pointer",whiteSpace:"nowrap"}}>
+            {enteringView ? "Opening…" : "🖥️ View as Client →"}
+          </button>
         </div>
 
         {banner && (
@@ -13737,75 +13905,77 @@ function WorkspaceViewer({ client, onBack }) {
   );
 }
 
-// Real, one-directional analyst → client messaging. There is no live two-way
-// chat backend, so this does not simulate one. Sending calls a real endpoint
-// that delivers an actual notification to the client's notification bell, and
-// the panel shows real recent activity (via the client's action log) rather
-// than a conversation thread that would imply replies are possible here.
+// Real two-way analyst ↔ client thread (was one-directional — the client
+// had no way to reply). Polls lightly while open so a reply shows up without
+// the analyst needing to manually refresh.
 function ClientNotePanel({ clientId }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(null);
-  const [recent, setRecent] = useState(null);
+  const [error, setError] = useState(null);
+  const [thread, setThread] = useState(null);
+  const bottomRef = useRef(null);
 
-  const loadRecent = useCallback(() => {
-    authFetch(`${API_BASE}/api/analyst/clients/${clientId}/actions`)
+  const loadThread = useCallback(() => {
+    authFetch(`${API_BASE}/api/analyst/clients/${clientId}/messages`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => setRecent(d ? d.actions.slice(0, 6) : []))
-      .catch(() => setRecent([]));
+      .then(d => { if (d) setThread(d); })
+      .catch(() => {});
   }, [clientId]);
 
-  useEffect(() => { setRecent(null); setSent(null); loadRecent(); }, [clientId, loadRecent]);
+  useEffect(() => {
+    setThread(null); setError(null);
+    loadThread();
+    const iv = setInterval(loadThread, 20000);
+    return () => clearInterval(iv);
+  }, [clientId, loadThread]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [thread]);
 
   async function send() {
     if (!draft.trim()) return;
-    setSending(true); setSent(null);
+    setSending(true); setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/note`, {
+      const res = await authFetch(`${API_BASE}/api/analyst/clients/${clientId}/messages`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: draft.trim() }),
       });
-      if (res.ok) {
-        setDraft("");
-        setSent("Sent — the client will see this in their notifications.");
-        loadRecent();
-      } else {
-        const d = await res.json().catch(() => ({}));
-        setSent(d.error || "Could not send.");
-      }
+      if (res.ok) { setDraft(""); loadThread(); }
+      else { const d = await res.json().catch(() => ({})); setError(d.error || "Could not send."); }
     } finally { setSending(false); }
   }
 
   return (
-    <SocPanel title="Note to Client" accent={SOC.green}>
-      <div style={{color:SOC.textMut,fontSize:10.5,lineHeight:1.5,marginBottom:10}}>
-        Delivered to their notification bell. There's no live reply channel yet, so this is
-        one-directional — for a conversation, use their contact email on file.
-      </div>
-
-      {recent === null ? (
-        <div style={{color:SOC.textMut,fontSize:11,padding:"10px 0"}}>Loading recent activity…</div>
-      ) : recent.length === 0 ? (
-        <div style={{color:SOC.textSec,fontSize:11,padding:"6px 0 12px",textAlign:"center"}}>
-          No data to report — nothing sent to this client yet.
-        </div>
+    <SocPanel title="Chat with Client" accent={SOC.green}>
+      {thread === null ? (
+        <div style={{color:SOC.textMut,fontSize:11,padding:"10px 0"}}>Loading…</div>
       ) : (
-        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:150,overflowY:"auto",marginBottom:10}}>
-          {recent.map(a=>(
-            <div key={a.id} style={{padding:"7px 10px",background:SOC.bg,borderRadius:7,fontSize:11}}>
-              <div style={{color:SOC.text}}>{safeText(a.detail)}</div>
-              <div style={{color:SOC.textMut,fontSize:9.5,marginTop:2}}>
-                {a.actorRole} · {new Date(a.at).toLocaleString()}
+        <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:220,overflowY:"auto",marginBottom:10,padding:"2px"}}>
+          {thread.length === 0 ? (
+            <div style={{color:SOC.textSec,fontSize:11,padding:"6px 0 12px",textAlign:"center"}}>
+              No messages yet — say hello.
+            </div>
+          ) : thread.map(m=>(
+            <div key={m.id} style={{display:"flex",justifyContent:m.fromRole==="staff"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"82%",padding:"8px 11px",borderRadius:10,fontSize:12,lineHeight:1.5,
+                background:m.fromRole==="staff"?`${SOC.green}1A`:SOC.bg,
+                border:`1px solid ${m.fromRole==="staff"?SOC.green+"44":SOC.border}`,color:SOC.text}}>
+                {safeText(m.body)}
+                <div style={{color:SOC.textMut,fontSize:9,marginTop:3}}>
+                  {m.fromRole==="staff" ? "You" : safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                </div>
               </div>
             </div>
           ))}
+          <div ref={bottomRef}/>
         </div>
       )}
+
+      {error && <div style={{marginBottom:8,fontSize:11,color:SOC.red}}>{error}</div>}
 
       <div style={{display:"flex",gap:8}}>
         <input value={draft} onChange={e=>setDraft(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&send()}
-          placeholder="Write a note for this client…"
+          placeholder="Message this client…"
           disabled={sending}
           style={{flex:1,padding:"9px 12px",background:SOC.bg,border:`1px solid ${SOC.border}`,
             borderRadius:8,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
@@ -13816,14 +13986,11 @@ function ClientNotePanel({ clientId }) {
           {sending ? "…" : "Send"}
         </button>
       </div>
-      {sent && (
-        <div style={{marginTop:8,fontSize:11,color:sent.startsWith("Sent")?SOC.green:SOC.red}}>{sent}</div>
-      )}
     </SocPanel>
   );
 }
 
-function AnalystConsole({ user, onExit }) {
+function AnalystConsole({ user, onExit, onImpersonate }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
   const [mmOpen, setMmOpen] = useState(false);
@@ -14199,7 +14366,7 @@ function AnalystConsole({ user, onExit }) {
 
   // ═══ CLIENT COMMAND CENTER ═══
   if (workspaceClient) {
-    return <WorkspaceViewer client={workspaceClient} onBack={()=>setWorkspaceClient(null)}/>;
+    return <WorkspaceViewer client={workspaceClient} onBack={()=>setWorkspaceClient(null)} onImpersonate={onImpersonate}/>;
   }
 
   if (view === "myclients") {
@@ -16303,6 +16470,98 @@ function UpgradeModal({ info, onClose }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  CLIENT ↔ ANALYST CHAT — the client's side of the same thread
+//  ClientNotePanel (analyst console) reads/writes
+// ─────────────────────────────────────────────────────────────
+function ClientAnalystChat({ onClose }) {
+  const [thread, setThread] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const bottomRef = useRef(null);
+
+  const load = useCallback(() => {
+    authFetch(`${API_BASE}/api/client/messages`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setThread(d); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    load();
+    const iv = setInterval(load, 20000);
+    return () => clearInterval(iv);
+  }, [load]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [thread]);
+
+  async function send() {
+    if (!draft.trim()) return;
+    setSending(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/messages`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: draft.trim() }),
+      });
+      if (res.ok) { setDraft(""); load(); }
+      else { const d = await res.json().catch(() => ({})); setError(d.error || "Could not send."); }
+    } finally { setSending(false); }
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
+      <div style={{padding:"12px 20px",background:`linear-gradient(135deg,${C.green}22,${C.accent}11)`,
+        borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:18}}>💬</span>
+        <span style={{fontWeight:800,fontSize:16}}>Chat with your <span style={{color:C.green}}>Security Analyst</span></span>
+        <button onClick={onClose} style={{marginLeft:"auto",padding:"6px 14px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>← Back</button>
+      </div>
+      <div style={{maxWidth:820,margin:"0 auto",padding:"20px"}}>
+        {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+        {thread === null ? (
+          <div style={{display:"flex",justifyContent:"center",padding:40}}><Spinner/></div>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16,minHeight:200}}>
+            {thread.length === 0 ? (
+              <div style={{color:C.textSec,fontSize:13.5,textAlign:"center",padding:"30px 0"}}>
+                No messages yet. Send a note to your assigned security analyst — they'll be notified.
+              </div>
+            ) : thread.map(m=>(
+              <div key={m.id} style={{display:"flex",justifyContent:m.fromRole==="client"?"flex-end":"flex-start"}}>
+                <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
+                  background:m.fromRole==="client"?`${C.accent}1F`:C.card,
+                  border:`1px solid ${m.fromRole==="client"?C.accent+"44":C.border}`,color:C.text}}>
+                  {safeText(m.body)}
+                  <div style={{color:C.textMut,fontSize:10.5,marginTop:4}}>
+                    {m.fromRole==="client" ? "You" : safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div ref={bottomRef}/>
+          </div>
+        )}
+        <div style={{display:"flex",gap:8,position:"sticky",bottom:16}}>
+          <input value={draft} onChange={e=>setDraft(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")send();}}
+            placeholder="Message your security analyst…"
+            disabled={sending}
+            style={{flex:1,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:10,color:C.text,fontSize:13.5,fontFamily:"Inter,system-ui,sans-serif"}}/>
+          <button onClick={send} disabled={sending||!draft.trim()}
+            style={{padding:"12px 22px",background:draft.trim()?`linear-gradient(135deg,${C.green},${C.accent})`:C.border,
+              color:draft.trim()?"#04121F":C.textMut,border:"none",borderRadius:10,fontSize:13,fontWeight:700,
+              cursor:draft.trim()?"pointer":"default"}}>
+            {sending ? "…" : "Send"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  CLIENT MASTERMIND (Enterprise) — scoped to the client's own data
 // ─────────────────────────────────────────────────────────────
 function ClientMastermind({ onClose }) {
@@ -16395,8 +16654,14 @@ export default function ShieldAI() {
   const [showEndpoints, setShowEndpoints] = useState(false);
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
+  const [showClientChat, setShowClientChat] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
+  // "View as Client": staff acting as a client with a short-lived impersonation
+  // token (see /api/staff/clients/:id/impersonate). Holds the staff member's
+  // own session so exitClientView() can restore it. Every write made while
+  // impersonating is logged server-side against the client's action log.
+  const [impersonating, setImpersonating] = useState(null); // { staffToken, staffUser, clientName }
 
   // Frontend analyst detection for the mockup (matches the actual backend flag).
   // Later this becomes a real role flag from the backend.
@@ -16557,6 +16822,37 @@ export default function ShieldAI() {
     setCurrentProgramId(null);
   }
 
+  // "View as Client" — a staff member (admin or assigned analyst) temporarily
+  // becomes the client, reusing this exact same app instead of a second,
+  // hand-built read-only mirror. Real actions taken here really are the
+  // client's data; every write is logged server-side against the client's
+  // own action log (see requireAuth's impersonatedBy handling in auth.js).
+  // Throws on failure so the caller can show the error inline.
+  async function enterClientView(client) {
+    const res = await authFetch(`${API_BASE}/api/staff/clients/${client.id}/impersonate`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Could not open the client view.");
+    setImpersonating({ staffToken: getAuthToken(), staffUser: user,
+      clientName: client.name || client.companyName || client.email });
+    setAuthToken(data.token);
+    setUser(data.user);
+    setShowAnalyst(false);
+    setAssessment(null); setResults(null); setCurrentAssessmentId(null); setCurrentProgramId(null);
+    clearResumeState();
+    setPhase("home");
+  }
+
+  function exitClientView() {
+    if (!impersonating) return;
+    setAuthToken(impersonating.staffToken);
+    setUser(impersonating.staffUser);
+    setAssessment(null); setResults(null); setCurrentAssessmentId(null); setCurrentProgramId(null);
+    clearResumeState();
+    setPhase("home");
+    setShowAnalyst(true);
+    setImpersonating(null);
+  }
+
   // Open a saved program from the home screen
   async function openProgram(assessmentId, programId) {
     // Fetch the assessment data and the program sections in parallel
@@ -16674,15 +16970,26 @@ export default function ShieldAI() {
     return <>{demoBanner}<ClientMastermind onClose={() => setShowClientMastermind(false)}/></>;
   }
 
-  // Analyst console (analyst accounts only)
+  // Client's side of the chat thread with their security analyst
+  if (showClientChat && !user.isAdmin && !user.isAnalyst) {
+    return <>{demoBanner}<ClientAnalystChat onClose={() => setShowClientChat(false)}/></>;
+  }
+
+  // Analyst console (analyst accounts only). A real analyst has no company
+  // of their own, so "Exit Console" signs them out rather than dropping them
+  // into an empty client dashboard. An investor demo session is different —
+  // it's meant to show both sides of the product, so exiting there goes back
+  // to the seeded client-facing demo view, same as before.
   if (showAnalyst && isAnalyst) {
-    return <>{demoBanner}<AnalystConsole user={user} onExit={() => setShowAnalyst(false)}/></>;
+    return <>{demoBanner}<AnalystConsole user={user} onExit={user.isDemo ? () => setShowAnalyst(false) : signOut}
+      onImpersonate={enterClientView}/></>;
   }
 
   // Top bar showing the logged-in company + sign out
   const TopBar = () => (
     <>
     {demoBanner}
+    {impersonating && <ImpersonationBanner clientName={impersonating.clientName} onExit={exitClientView}/>}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
@@ -16699,6 +17006,14 @@ export default function ShieldAI() {
             color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
         </button>
+        {!user.isAdmin && !user.isAnalyst && (
+          <button onClick={() => setShowClientChat(true)}
+            style={{padding:"5px 12px",background:`${C.green}1E`,
+              border:`1px solid ${C.green}55`,borderRadius:6,
+              color:C.green,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            💬 Chat
+          </button>
+        )}
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermindChat")
               ? setShowClientMastermind(true)
