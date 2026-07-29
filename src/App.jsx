@@ -15088,7 +15088,7 @@ function AnalystConsole({ user, onExit }) {
                       </div>
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{color:SOC.green,fontWeight:700,fontSize:14}}>${c.mrr.toLocaleString()}</div>
+                      <div style={{color:SOC.green,fontWeight:700,fontSize:14}}>{typeof c.mrr==="number" ? `$${c.mrr.toLocaleString()}` : "—"}</div>
                       <div style={{color:SOC.textMut,fontSize:9,marginTop:2}}>per month</div>
                     </div>
                   </div>
