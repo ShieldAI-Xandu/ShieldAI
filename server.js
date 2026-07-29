@@ -712,6 +712,21 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   res.json({ ok: true, id: record.id, data: record.data });
 });
 
+// Delete an assessment. Cascades to any program generated from it — a
+// program keyed to an assessment that no longer exists is orphaned data,
+// not a useful artifact, and the account-repair "clear orphans" tool exists
+// specifically to clean up exactly this kind of leftover elsewhere.
+app.delete("/api/assessments/:id", requireAuth, async (req, res) => {
+  const record = db.data.assessments.find(a => a.id === req.params.id && a.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Assessment not found" });
+
+  db.data.assessments = db.data.assessments.filter(a => a.id !== record.id);
+  const removedPrograms = (db.data.programs || []).filter(p => p.assessmentId === record.id).length;
+  db.data.programs = (db.data.programs || []).filter(p => p.assessmentId !== record.id);
+  await db.write();
+  res.json({ ok: true, deleted: record.id, removedPrograms });
+});
+
 // ─────────────────────────────────────────────────────────────
 //  PROGRAM GENERATION (protected, user-scoped)
 // ─────────────────────────────────────────────────────────────
@@ -1553,6 +1568,8 @@ app.delete("/api/admin/assessments/:id", requireAdmin, async (req, res) => {
   if (db.data.assessments.length === before) {
     return res.status(404).json({ error: "Assessment not found" });
   }
+  // Cascade — a program keyed to a deleted assessment is orphaned data.
+  db.data.programs = (db.data.programs || []).filter(p => p.assessmentId !== req.params.id);
   await db.write();
   res.json({ ok: true, deleted: req.params.id });
 });

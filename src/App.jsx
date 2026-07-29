@@ -12016,6 +12016,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [opening, setOpening] = useState(null);
+  const [deleting, setDeleting] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -12049,6 +12050,20 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   }
 
   useEffect(() => { load(); }, []);
+
+  async function deleteAssessment(assessmentId) {
+    if (!window.confirm("Delete this assessment? Any program generated from it will be deleted too. This can't be undone.")) return;
+    setDeleting(assessmentId); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/assessments/${assessmentId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not delete that assessment.");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   async function openLatestProgram(assessmentId) {
     const programs = programsByAssessment[assessmentId] || [];
@@ -12179,6 +12194,12 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                           borderRadius:8,color:C.textSec,fontSize:12,fontWeight:600,
                           cursor:"pointer",whiteSpace:"nowrap"}}>
                         ✎ Edit
+                      </button>
+                      <button onClick={() => deleteAssessment(a.id)} disabled={deleting===a.id}
+                        style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
+                          borderRadius:8,color:deleting===a.id?C.textMut:C.red,fontSize:12,fontWeight:600,
+                          cursor:deleting===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
+                        {deleting===a.id ? "Deleting…" : "🗑 Delete"}
                       </button>
                     </div>
                   </div>
@@ -13669,6 +13690,15 @@ function WorkspaceViewer({ client, onBack, onImpersonate }) {
     } catch { setBanner({ kind: "error", text: "Network error deleting program." }); }
   }
 
+  async function deleteAssessment(id) {
+    if (!window.confirm("Delete this assessment on behalf of the client? Any program generated from it will be deleted too. This can't be undone.")) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/staff/clients/${cid}/assessments/${id}`, { method: "DELETE" });
+      if (res.ok) { setBanner({ kind: "info", text: "Assessment deleted." }); loadOverview(); }
+      else setBanner({ kind: "error", text: `Delete failed (${res.status}).` });
+    } catch { setBanner({ kind: "error", text: "Network error deleting assessment." }); }
+  }
+
   async function generateFor(assessmentId) {
     setGenFor(assessmentId); setGenProgress({ label: "Starting…", status: "running", step: 0, total: 10 }); setBanner(null);
     try {
@@ -13798,6 +13828,12 @@ function WorkspaceViewer({ client, onBack, onImpersonate }) {
                           Generate Program →
                         </button>
                       )}
+                      <button onClick={()=>deleteAssessment(a.id)} disabled={genFor===a.id}
+                        style={{padding:"7px 14px",background:"none",border:`1px solid ${SOC.border}`,
+                          borderRadius:7,color:SOC.textMut,fontSize:12,fontWeight:600,
+                          cursor:genFor===a.id?"default":"pointer"}}>
+                        🗑 Delete
+                      </button>
                     </div>
                   </div>
                 ))}

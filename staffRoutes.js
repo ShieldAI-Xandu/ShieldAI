@@ -29,6 +29,7 @@
 //   GET   /api/staff/clients/:cid/assessments
 //   GET   /api/staff/clients/:cid/assessments/:id
 //   PATCH /api/staff/clients/:cid/assessments/:id    edit company info + checklist
+//   DELETE/api/staff/clients/:cid/assessments/:id
 //   GET   /api/staff/clients/:cid/programs
 //   GET   /api/staff/clients/:cid/programs/:id
 //   DELETE/api/staff/clients/:cid/programs/:id
@@ -163,6 +164,24 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     });
     await db.write();
     res.json({ ok: true, id: record.id, data: record.data });
+  });
+
+  // Delete a client's assessment on their behalf. Cascades to any program
+  // generated from it, same as the client's own self-service delete —
+  // otherwise the client would be left with a program keyed to an
+  // assessment that no longer exists.
+  app.delete("/api/staff/clients/:cid/assessments/:id", ...staff, async (req, res) => {
+    const record = (db.data.assessments || []).find(a => a.id === req.params.id && a.userId === req.client.id);
+    if (!record) return res.status(404).json({ error: "Assessment not found" });
+    db.data.assessments = (db.data.assessments || []).filter(a => a.id !== record.id);
+    const removedPrograms = (db.data.programs || []).filter(p => p.assessmentId === record.id).length;
+    db.data.programs = (db.data.programs || []).filter(p => p.assessmentId !== record.id);
+    logClientAction(db, {
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "deleted_assessment", detail: `Deleted assessment ${record.id} on behalf of client.`,
+    });
+    await db.write();
+    res.json({ ok: true, deleted: record.id, removedPrograms });
   });
 
   // ── Programs ────────────────────────────────────────────────
