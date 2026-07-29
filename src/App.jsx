@@ -16774,6 +16774,12 @@ export default function ShieldAI() {
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
   const [showClientChat, setShowClientChat] = useState(false);
+  // Threat Intel (CVE exposure, domain/breach monitoring) previously lived
+  // ONLY inside a completed program's console nav — unreachable for an
+  // account that has a domain on file but no program (or had its program
+  // deleted). Nothing about that section actually depends on a program, so
+  // it gets its own direct entry point instead.
+  const [showThreatIntel, setShowThreatIntel] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
   // "View as Client": staff acting as a client with a short-lived impersonation
@@ -17125,6 +17131,12 @@ export default function ShieldAI() {
             color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
         </button>
+        <button onClick={() => setShowThreatIntel(true)}
+          style={{padding:"5px 12px",background:`${C.purple}18`,
+            border:`1px solid ${C.purple}55`,borderRadius:6,
+            color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          🔍 Threat Intel
+        </button>
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => setShowClientChat(true)}
             style={{padding:"5px 12px",background:`${C.green}1E`,
@@ -17192,6 +17204,26 @@ export default function ShieldAI() {
             </button>
           </div>
           <EndpointsScreen onBack={() => setShowEndpoints(false)}/>
+        </div>
+      </div>
+    );
+  }
+
+  // CVE exposure, domain verification, and breach monitoring — none of this
+  // depends on a generated program, so unlike the tabs inside a program's
+  // console, it's reachable directly. Available to every account (including
+  // staff acting as their own client), not just standard clients.
+  if (showThreatIntel) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
+        <TopBar/>
+        <div style={{maxWidth:900,margin:"0 auto",padding:"32px 24px",width:"100%"}}>
+          <button onClick={() => setShowThreatIntel(false)}
+            style={{marginBottom:20,padding:"7px 14px",background:"none",border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            ← Back
+          </button>
+          <ThreatIntelSection results={null}/>
         </div>
       </div>
     );
