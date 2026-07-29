@@ -12017,6 +12017,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   const [error, setError] = useState(null);
   const [opening, setOpening] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  const [deletingProgram, setDeletingProgram] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -12062,6 +12063,20 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
       setError(err.message);
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function deleteProgram(programId) {
+    if (!window.confirm("Delete this program? Your assessment answers are kept, so you can regenerate a fresh one anytime.")) return;
+    setDeletingProgram(programId); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/programs/${programId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not delete that program.");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingProgram(null);
     }
   }
 
@@ -12171,6 +12186,12 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                               borderRadius:8,color:C.accent,fontSize:12,fontWeight:600,
                               cursor:opening===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
                             {opening===a.id ? "Opening…" : "Open Program →"}
+                          </button>
+                          <button onClick={() => deleteProgram(complete.id)} disabled={deletingProgram===complete.id}
+                            style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
+                              borderRadius:8,color:deletingProgram===complete.id?C.textMut:C.red,fontSize:12,fontWeight:600,
+                              cursor:deletingProgram===complete.id?"wait":"pointer",whiteSpace:"nowrap"}}>
+                            {deletingProgram===complete.id ? "Deleting…" : "🗑 Delete Program"}
                           </button>
                         </>
                       ) : running ? (
