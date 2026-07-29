@@ -320,6 +320,11 @@ export function registerPortfolioRoutes(
   }
 
   // Agent-health rollup for a user across all their non-revoked agents.
+  // The agent record's own `status` field only ever holds "active"/"revoked"
+  // (see agentRoutes.js) — real health has to be derived from liveness
+  // (lastSeen recency, same 3h window the client fleet UI uses) and the
+  // latest posture report's checks, not read off a field that never varies.
+  const AGENT_ONLINE_WINDOW_MS = 3 * 60 * 60 * 1000;
   function agentHealth(userId) {
     const agents = (db.data.agents || []).filter(
       a => a.ownerUserId === userId && a.status !== "revoked"
@@ -328,17 +333,28 @@ export function registerPortfolioRoutes(
       return { status: "pending", endpoints: 0, healthy: 0, lastSeen: null };
     }
     let healthy = 0;
+    let anyOffline = false;
+    let anyDegraded = false;
     let lastSeen = null;
     for (const a of agents) {
-      if (a.status === "healthy") healthy++;
       if (a.lastSeen && (!lastSeen || new Date(a.lastSeen) > new Date(lastSeen))) {
         lastSeen = a.lastSeen;
       }
+      if (!a.lastSeen) continue; // just enrolled, hasn't checked in yet — not "offline", just pending
+      const online = (Date.now() - new Date(a.lastSeen)) < AGENT_ONLINE_WINDOW_MS;
+      if (!online) { anyOffline = true; continue; }
+      const latestReport = (db.data.agentReports || [])
+        .filter(r => r.agentId === a.id)
+        .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
+      if (!latestReport) continue; // online but hasn't sent its first report yet
+      const checks = Array.isArray(latestReport.report?.checks) ? latestReport.report.checks : [];
+      if (checks.some(c => c.status === "fail" || c.status === "warn")) anyDegraded = true;
+      else healthy++;
     }
     // Worst-case agent drives the badge (offline > degraded > healthy).
     let status = "healthy";
-    if (agents.some(a => a.status === "offline")) status = "offline";
-    else if (agents.some(a => a.status === "degraded")) status = "degraded";
+    if (anyOffline) status = "offline";
+    else if (anyDegraded) status = "degraded";
     else if (healthy === 0) status = "pending";
     return { status, endpoints: agents.length, healthy, lastSeen };
   }
