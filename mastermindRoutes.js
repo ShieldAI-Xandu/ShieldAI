@@ -148,7 +148,7 @@ function portfolioSnapshot(db, depth = "summary") {
   };
 }
 
-export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds }) {
+export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter }) {
   db.data.recommendations ||= [];
 
   function aiAvailable(res) {
@@ -686,7 +686,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
 
   // ── 1. CHAT ─────────────────────────────────────────────────
   // body: { messages: [{role:"user"|"assistant", content}], includeContext?: bool }
-  app.post("/api/admin/mastermind/chat", requireAdmin, async (req, res) => {
+  app.post("/api/admin/mastermind/chat", requireAdmin, aiLimiter, async (req, res) => {
     if (!aiAvailable(res)) return;
     const { messages, includeContext = true, depth = "summary" } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -734,7 +734,7 @@ ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.string
   // Same Mastermind, same tools, but scoped to only the calling analyst's
   // assigned clients — enforced inside runMastermindTool (see resolveClientBase)
   // rather than trusted to the tool list alone. body matches the admin chat.
-  app.post("/api/analyst/mastermind/chat", requireAnalyst, async (req, res) => {
+  app.post("/api/analyst/mastermind/chat", requireAnalyst, aiLimiter, async (req, res) => {
     if (!aiAvailable(res)) return;
     const { messages, includeContext = true } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -817,7 +817,7 @@ ${snapshot ? `Read-only snapshot of this analyst's assigned clients (current):\n
 
   // ── 3. ANALYZE — on demand for a client or a single endpoint ─
   // body: { userId } OR { agentId }
-  app.post("/api/admin/mastermind/analyze", requireAdmin, async (req, res) => {
+  app.post("/api/admin/mastermind/analyze", requireAdmin, aiLimiter, async (req, res) => {
     if (!aiAvailable(res)) return;
     const { userId, agentId } = req.body || {};
     const agents = db.data.agents || [];
@@ -1088,7 +1088,7 @@ Limit findings to 6 and recommendations to 5.`;
     });
   }
 
-  app.post("/api/client/mastermind/chat", requireClientMastermind, async (req, res) => {
+  app.post("/api/client/mastermind/chat", requireClientMastermind, aiLimiter, async (req, res) => {
     if (!aiAvailable(res)) return;
     const { messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {

@@ -173,6 +173,39 @@ const aiLimiter = rateLimit({
   message: { error: "You're sending requests too quickly. Please slow down." },
 });
 
+// Below: endpoints with the same "public, no auth required, worth its own
+// budget" shape as login/register, but a different abuse motive — each gets
+// its own bucket instead of sharing authLimiter's, so a burst on one (e.g.
+// someone hammering the lead form) can't lock out a coworker on the same
+// office IP trying to log in or redeem a demo code.
+const leadsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many submissions. Please wait a few minutes and try again." },
+});
+const demoCodeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Please wait a few minutes and try again." },
+});
+// change-password is authenticated, so it can (and should) key on the user
+// under attack rather than IP — a shared office IP shouldn't throttle
+// everyone in it just because one account is being password-guessed, and
+// vice versa an attacker with a stolen token can't outrun the limit by
+// switching networks.
+const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  message: { error: "Too many attempts. Please wait a few minutes and try again." },
+});
+
 // ── DEMO / PRODUCTION BOUNDARY ───────────────────────────────
 // Bind every request to exactly one data store before any route runs.
 // Demo requests → demo-db.json. Everything else → db.json. Nothing downstream
@@ -458,7 +491,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
 });
 
 // Public lead-capture form (prospective customers requesting info)
-app.post("/api/leads", async (req, res) => {
+app.post("/api/leads", leadsLimiter, async (req, res) => {
   try {
     const { name, email, company, employees, message } = req.body || {};
     if (!name || !email) {
@@ -586,7 +619,7 @@ app.get("/api/auth/me", requireAuth, (req, res) => {
 });
 
 // Change own password (normal self-service, or forced first-login change).
-app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+app.post("/api/auth/change-password", requireAuth, changePasswordLimiter, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body || {};
     const user = await changeOwnPassword(req.userId, { currentPassword, newPassword });
@@ -1674,27 +1707,27 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
-registerDemoRoutes(app, db);
-registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient });
+registerDemoRoutes(app, db, { redeemLimiter: demoCodeLimiter });
+registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate });
+registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter });
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient });
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
-registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient });
+registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate });
 registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
-registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson });
+registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 
 // ─────────────────────────────────────────────────────────────

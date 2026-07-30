@@ -75,7 +75,7 @@ function countActiveVendors(db, userId) {
   return (db.data.vendors || []).filter(v => v.userId === userId && v.status !== "offboarded").length;
 }
 
-export function registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson }) {
+export function registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter }) {
   db.data.vendors ||= [];
   db.data.vendorQuestionnaires ||= [];
 
@@ -154,7 +154,7 @@ export function registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate,
   // buildGroundingFacts). Anything not covered by those facts comes back
   // flagged needsHumanInput rather than invented — the same no-fabrication
   // rule the rest of the product follows.
-  app.post("/api/client/vendors/questionnaire/generate", requireAuth, gate.capability("vendorQuestionnaireAssistant"), async (req, res) => {
+  app.post("/api/client/vendors/questionnaire/generate", requireAuth, gate.capability("vendorQuestionnaireAssistant"), aiLimiter, async (req, res) => {
     const targetId = resolveTarget(req, res, db, analystOwnsClient, req.body?.userId);
     if (!targetId) return;
 

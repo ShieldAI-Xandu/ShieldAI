@@ -193,12 +193,12 @@ function findCode(prod, raw) {
 }
 
 // ── Public routes ─────────────────────────────────────────────
-export function registerDemoRoutes(app, db) {
+export function registerDemoRoutes(app, db, { redeemLimiter } = {}) {
 
   // Redeem an access code → a scoped demo session. This is the ONLY demo entry
   // point exposed publicly once codes are enforced. Reads codes from prod,
   // issues a demo token whose persona matches the code type.
-  app.post(`${DEMO_PATH_PREFIX}/redeem-code`, async (req, res) => {
+  app.post(`${DEMO_PATH_PREFIX}/redeem-code`, redeemLimiter, async (req, res) => {
     try {
       const prod = prodDb();
       const record = findCode(prod, req.body?.code);

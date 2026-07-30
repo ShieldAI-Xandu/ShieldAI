@@ -145,7 +145,7 @@ Generate specific remediation guidance to bring this control into compliance.`,
   };
 }
 
-export function registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient }) {
+export function registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter }) {
   // Resolve which user we're acting for (self, or staff viewing a client).
   function resolveTarget(req, res) {
     let targetId = req.userId;
@@ -182,7 +182,7 @@ export function registerComplianceTrackingRoutes(app, { db, requireAuth, callCla
   });
 
   // On-demand remediation guidance for one control (live AI, grounded).
-  app.post("/api/compliance/:frameworkId/control/:controlId/remediation", requireAuth, async (req, res) => {
+  app.post("/api/compliance/:frameworkId/control/:controlId/remediation", requireAuth, aiLimiter, async (req, res) => {
     if (!callClaudeText) return res.status(503).json({ error: "AI backend not configured." });
     const targetId = resolveTarget(req, res); if (!targetId) return;
 

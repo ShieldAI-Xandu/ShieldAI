@@ -80,7 +80,7 @@ export function complianceSummary(db, depth = "summary") {
 }
 
 export function registerComplianceRoutes(app, {
-  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate,
+  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter,
 }) {
   const userById = (id) => (db.data.users || []).find(u => u.id === id) || null;
 
@@ -274,7 +274,7 @@ export function registerComplianceRoutes(app, {
   // ── Mastermind remediation for one requirement ──
   // The FACTS are computed deterministically; Mastermind only writes the
   // steps. If the AI is unavailable, we still return the facts.
-  app.post("/api/compliance/remediate", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
+  app.post("/api/compliance/remediate", requireAuth, gate.capability("complianceAccess"), aiLimiter, async (req, res) => {
     const { frameworkId, requirementId, clientId } = req.body || {};
     const targetId = clientId || req.userId;
     const actor = userById(req.userId);

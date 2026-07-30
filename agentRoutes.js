@@ -219,7 +219,7 @@ function remediationHint(checkId) {
   return map[checkId] || {};
 }
 
-export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient }) {
+export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter }) {
   ensureCollections(db);
 
   // ── middleware: authenticate an AGENT by its bearer token ───
@@ -841,7 +841,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   // Analyst-triggered AI enrichment: rewrite a draft's detail into clear,
   // client-friendly language. This only edits TEXT on a draft — it performs no
   // action and changes no system. Requires callClaudeText to be wired in.
-  app.post("/api/analyst/recommendations/:id/enrich", requireAnalyst, async (req, res) => {
+  app.post("/api/analyst/recommendations/:id/enrich", requireAnalyst, aiLimiter, async (req, res) => {
     const rec = (db.data.recommendations || []).find(r => r.id === req.params.id);
     if (!rec) return res.status(404).json({ error: "Recommendation not found." });
     // Same isolation gap as /forward, same fix: without this, any analyst could
