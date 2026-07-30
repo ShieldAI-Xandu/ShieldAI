@@ -18,6 +18,8 @@ import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
@@ -106,6 +108,13 @@ const PORT = process.env.PORT || 3001;
 // unreachable from outside, which looks exactly like a silent healthcheck fail.
 const HOST = process.env.HOST || "0.0.0.0";
 
+// Railway sits one reverse proxy in front of this app. Without this,
+// req.ip (and every rate limiter keyed on it) resolves to the proxy's
+// address instead of the real client — every visitor collapses into one
+// bucket, and express-rate-limit throws on the unconfigured X-Forwarded-For
+// header rather than silently doing the wrong thing.
+app.set("trust proxy", 1);
+
 // ── Healthcheck ──────────────────────────────────────────────
 // Registered first: no auth, no DB, no store binding. Railway's healthcheckPath
 // points here, so it must answer 200 even if nothing else is ready, and it must
@@ -114,12 +123,54 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
+// Helmet's defaults (CSP scoped to 'self', no external origins; frameguard;
+// HSTS; etc.) work as-is here — the built SPA loads no external scripts,
+// fonts, or images, and helmet's default style-src already allows
+// 'unsafe-inline' for React's inline style props.
+app.use(helmet());
+
 app.use(cors());
 // The Stripe webhook needs the RAW body for signature verification, so exclude
 // just that path from the global JSON parser. Everything else parses JSON.
 app.use((req, res, next) => {
   if (req.originalUrl === "/api/billing/webhook") return next();
   return express.json({ limit: "5mb" })(req, res, next);
+});
+
+// ── Rate limiting ────────────────────────────────────────────
+// Baseline floor for every /api/* route — catches anything not covered by
+// the stricter limiters below. Registered before storeBinder/demoGuard so a
+// flood gets rejected before it touches the DB or the demo sandbox clone.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api", apiLimiter);
+
+// Login/register are unauthenticated by definition, so IP is the only key
+// available — tight enough to blunt credential-stuffing and signup-spam
+// scripts without punishing a normal user mistyping a password a few times.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Please wait a few minutes and try again." },
+});
+
+// The Claude/Gemini/GPT proxies are the only routes that spend real API
+// budget per request, so they get their own per-user cap (falling back to
+// IP for the sliver of a request that fails auth before this ever keys off
+// req.userId) on top of the global floor above.
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  message: { error: "You're sending requests too quickly. Please slow down." },
 });
 
 // ── DEMO / PRODUCTION BOUNDARY ───────────────────────────────
@@ -387,7 +438,7 @@ function applyShapeGuard(program, stepKey) {
 // ─────────────────────────────────────────────────────────────
 //  AUTH ROUTES (public)
 // ─────────────────────────────────────────────────────────────
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", authLimiter, async (req, res) => {
   try {
     const result = await registerUser(req.body);
     res.json(result);
@@ -397,7 +448,7 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   try {
     const result = await loginUser(req.body);
     res.json(result);
@@ -551,7 +602,7 @@ app.post("/api/auth/change-password", requireAuth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  CLAUDE PROXY (protected — intake chat)
 // ─────────────────────────────────────────────────────────────
-app.post("/api/claude", requireAuth, async (req, res) => {
+app.post("/api/claude", requireAuth, aiLimiter, async (req, res) => {
   try {
     const { system, messages, max_tokens, stream } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -618,7 +669,7 @@ app.post("/api/claude", requireAuth, async (req, res) => {
 // Claude-routed tasks keep their existing live-streaming experience via
 // /api/claude; Gemini/GPT-routed tasks return a single complete response here.
 // body: { provider: "claude"|"gemini"|"gpt4", system, messages, max_tokens? }
-app.post("/api/ai/generate", requireAuth, async (req, res) => {
+app.post("/api/ai/generate", requireAuth, aiLimiter, async (req, res) => {
   try {
     const { provider, system, messages, max_tokens } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
