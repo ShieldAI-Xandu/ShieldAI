@@ -553,8 +553,22 @@ app.post("/api/auth/change-password", requireAuth, async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 app.post("/api/claude", requireAuth, async (req, res) => {
   try {
-    const anthropicRes = await callClaude(req.body);
-    if (req.body.stream) {
+    const { system, messages, max_tokens, stream } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "messages[] required." });
+    }
+    const clean = messages.slice(-40).map(m => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content || "").slice(0, 16000),
+    }));
+    const boundedBody = {
+      system: system ? String(system).slice(0, 16000) : undefined,
+      messages: clean,
+      max_tokens: Math.min(Math.max(Number(max_tokens) || 1500, 1), 16384),
+      stream: !!stream,
+    };
+    const anthropicRes = await callClaude(boundedBody);
+    if (boundedBody.stream) {
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
