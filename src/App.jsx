@@ -825,6 +825,15 @@ function setUpgradeHandler(fn) { _onUpgradeRequired = fn; }
 // no) rather than discovered via a failed API call.
 function showUpgradePrompt(info) { if (_onUpgradeRequired) _onUpgradeRequired(info); }
 
+// Same pattern for an expired/invalid session (HTTP 401). Without this, a
+// token that dies mid-session (expiry, server restart with a new secret,
+// admin-forced logout) surfaces as whatever each individual screen does with
+// a failed fetch — usually nothing, so the user stares at a panel that just
+// silently stopped working. One global handler instead sends them back to a
+// clean "please sign in again" screen every time.
+let _onSessionExpired = null;
+function setSessionExpiredHandler(fn) { _onSessionExpired = fn; }
+
 async function authFetch(url, options = {}) {
   const token = getAuthToken();
   const headers = { ...(options.headers || {}) };
@@ -837,6 +846,12 @@ async function authFetch(url, options = {}) {
       _onUpgradeRequired(data);
     } catch { _onUpgradeRequired({ error: "Upgrade required.", code: "UPGRADE_REQUIRED" }); }
   }
+  // Only a token we THOUGHT was valid going bad counts as "session expired" —
+  // a 401 with no token attached is just an unauthenticated probe, not a
+  // logged-in user getting kicked out, and firing the handler for the initial
+  // session-restore check (which already has its own quiet failure path) is
+  // handled there separately, not here.
+  if (res.status === 401 && token && _onSessionExpired) _onSessionExpired();
   return res;
 }
 
@@ -856,7 +871,7 @@ const inputStyle = {
 // ─────────────────────────────────────────────────────────────
 //  AUTH SCREEN
 // ─────────────────────────────────────────────────────────────
-function AuthScreen({ onAuthenticated, onBack }) {
+function AuthScreen({ onAuthenticated, onBack, sessionExpiredNotice }) {
   const [mode, setMode] = useState("login"); // "login" | "register"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -899,7 +914,7 @@ function AuthScreen({ onAuthenticated, onBack }) {
     }
   }
 
-  const slotsFull = capacity && capacity.available === 0;
+  const slotsFull = !!capacity?.isFull;
   const registerBlocked = mode === "register" && slotsFull;
 
   return (
@@ -921,6 +936,12 @@ function AuthScreen({ onAuthenticated, onBack }) {
         </div>
 
         <Card style={{padding:"28px 26px"}}>
+          {sessionExpiredNotice && (
+            <div style={{marginBottom:18,padding:"10px 14px",background:`${C.accent}15`,
+              border:`1px solid ${C.accent}33`,borderRadius:8,color:C.accent,fontSize:13}}>
+              Your session has expired. Please sign in again.
+            </div>
+          )}
           <div style={{display:"flex",gap:4,marginBottom:22,background:C.surface,
             borderRadius:10,padding:4}}>
             {["login","register"].map(m => (
@@ -972,8 +993,7 @@ function AuthScreen({ onAuthenticated, onBack }) {
           {registerBlocked && (
             <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}15`,
               border:`1px solid ${C.amber}33`,borderRadius:8,color:C.amber,fontSize:13}}>
-              All {capacity.max} testing accounts are currently in use. Please sign in to an
-              existing account.
+              Testing accounts are currently full. Please sign in to an existing account.
             </div>
           )}
 
@@ -986,12 +1006,6 @@ function AuthScreen({ onAuthenticated, onBack }) {
               cursor: loading || registerBlocked ? "not-allowed" : "pointer"}}>
             {loading ? "Please wait…" : mode === "login" ? "Sign In →" : "Create Account →"}
           </button>
-
-          {capacity && mode === "register" && !registerBlocked && (
-            <div style={{textAlign:"center",marginTop:14,color:C.textMut,fontSize:11}}>
-              {capacity.available} of {capacity.max} testing {capacity.available === 1 ? "slot" : "slots"} remaining
-            </div>
-          )}
         </Card>
       </div>
     </div>
@@ -16920,6 +16934,23 @@ export default function ShieldAI() {
     return () => setUpgradeHandler(null);
   }, []);
 
+  // Expired/invalid session (fired by authFetch on any HTTP 401 that carried a
+  // token). Gated on restoringSession so it never fires for the silent
+  // mount-time restore check above — that one has its own quiet failure path,
+  // since a stale token from a prior visit isn't a session the user felt
+  // "kicked out" of.
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
+  useEffect(() => {
+    if (restoringSession) { setSessionExpiredHandler(null); return; }
+    setSessionExpiredHandler(() => {
+      signOut();
+      setPublicView("auth");
+      setSessionExpiredNotice(true);
+    });
+    return () => setSessionExpiredHandler(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoringSession]);
+
   // Resolve the white-label brand for the logged-in user (their MSP's brand,
   // platform default, or ShieldAI). Re-runs on login/logout and role change.
   useEffect(() => { refreshBrandForUser(user); }, [user?.id]);
@@ -16932,6 +16963,7 @@ export default function ShieldAI() {
   };
 
   function handleAuthenticated(userObj) {
+    setSessionExpiredNotice(false);
     setUser(userObj);
     setPhase("home");
     if (userObj && userObj.mustChangePassword) {
@@ -17078,7 +17110,9 @@ export default function ShieldAI() {
   // Not logged in → marketing front page, investor page, or auth
   if (!user) {
     if (publicView === "auth") {
-      return <AuthScreen onAuthenticated={handleAuthenticated} onBack={() => setPublicView("marketing")}/>;
+      return <AuthScreen onAuthenticated={handleAuthenticated}
+        onBack={() => { setSessionExpiredNotice(false); setPublicView("marketing"); }}
+        sessionExpiredNotice={sessionExpiredNotice}/>;
     }
     if (publicView === "investor") {
       return <InvestorPage

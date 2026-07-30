@@ -129,7 +129,27 @@ app.get("/health", (req, res) => {
 // 'unsafe-inline' for React's inline style props.
 app.use(helmet());
 
-app.use(cors());
+// Every real caller is either same-origin (the built SPA, served below) or
+// the Vite dev server talking to localhost:3001 — cors() with no allowlist
+// let any origin read responses from authenticated endpoints. CORS_ORIGIN
+// lets a future custom domain be added without a code change.
+const ALLOWED_ORIGINS = new Set([
+  "https://shieldai-production-627e.up.railway.app",
+  "http://localhost:5173",
+  "http://localhost:3001",
+  ...(process.env.CORS_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean),
+]);
+app.use(cors({
+  origin(origin, callback) {
+    // No Origin header = same-origin request, curl, server-to-server, or the
+    // Railway healthcheck — never sent by a browser making a cross-origin call.
+    // callback(null, false) — not an Error — so the request still processes
+    // normally (CORS can only stop a browser from reading the response, not
+    // the server from handling it) and we don't leak a stack trace to a
+    // disallowed origin via Express's default error handler.
+    callback(null, !origin || ALLOWED_ORIGINS.has(origin));
+  },
+}));
 // The Stripe webhook needs the RAW body for signature verification, so exclude
 // just that path from the global JSON parser. Everything else parses JSON.
 app.use((req, res, next) => {
@@ -605,10 +625,13 @@ app.patch("/api/admin/access-codes/:id", requireAdmin, async (req, res) => {
   res.json(record);
 });
 
-// How many registration slots remain (used by the UI)
+// Whether registration is currently blocked (used by the signup UI). Exposes
+// only a boolean, not the underlying count — the raw user total is a business
+// metric, and MAX_USERS is high enough that "used"/"available" would reveal
+// it precisely to anyone, unauthenticated, at any time.
 app.get("/api/auth/capacity", (req, res) => {
   const used = (db.data.users || []).length;
-  res.json({ used, max: MAX_USERS, available: Math.max(0, MAX_USERS - used) });
+  res.json({ isFull: used >= MAX_USERS });
 });
 
 // Current logged-in user
