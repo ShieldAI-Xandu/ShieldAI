@@ -69,7 +69,10 @@ function ensureCollections(db) {
 }
 
 // Map a posture report's worst finding to an overall host status.
-function summarizeReport(report) {
+// Exported for reuse by seedDemo.js, which builds real agent reports for the
+// demo sandbox and wants to sanity-check them with the same logic the route
+// uses, rather than a re-implementation that could drift.
+export function summarizeReport(report) {
   const checks = Array.isArray(report?.checks) ? report.checks : [];
   const order = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
   let worst = "info", fails = 0, warns = 0;
@@ -105,7 +108,10 @@ function recDedupeKey(agentId, checkId, status) {
 }
 
 // Build draft recommendations from a report's actionable checks.
-function buildDraftsFromReport({ report, agent }) {
+// Exported so seedDemo.js can build realistic recommendation drafts from the
+// same seeded reports, instead of hand-writing recommendation text that could
+// drift from what this function actually produces for a real client.
+export function buildDraftsFromReport({ report, agent }) {
   const checks = Array.isArray(report?.checks) ? report.checks : [];
   const drafts = [];
   for (const c of checks) {
@@ -190,7 +196,8 @@ Keep one entry per finding key provided. Do not invent findings.`;
   }
 }
 // These are SUGGESTIONS for a human to perform — never executed by software.
-function remediationHint(checkId) {
+// Exported for reuse by seedDemo.js (see buildDraftsFromReport above).
+export function remediationHint(checkId) {
   const map = {
     av_realtime:    { title: "Re-enable antivirus real-time protection", detail: "Turn real-time protection back on in the endpoint's security software." },
     av_signatures:  { title: "Update antivirus definitions", detail: "Run a definition update so the AV has current signatures." },

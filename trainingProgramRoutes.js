@@ -63,7 +63,9 @@ function resolveClientScope(db, req, { analystOwnsClient }) {
 }
 
 // ── catalog → module list ─────────────────────────────────────
-function modulesFromTopics(topicIds) {
+// Exported for reuse by seedDemo.js, which assigns real catalog topics to
+// demo learners and needs the exact same module shape assignments store.
+export function modulesFromTopics(topicIds) {
   return TRAINING_TOPICS
     .filter(t => topicIds.includes(t.id))
     .map(t => ({ topicId: t.id, title: t.title, audience: t.audience, duration: t.duration, source: t.source }));
@@ -92,7 +94,11 @@ function companyContextFor(db, clientUserId) {
 // pattern as server.js's /api/training/module-content, adapted to generate
 // directly from the topic catalog (learners aren't tied to a saved
 // admin-built curriculum record).
-async function getOrGenerateModuleContent(db, { clientUserId, topicId, callAI, extractJson }) {
+// Exported so seedDemo.js can pre-generate real slide/quiz content for a
+// handful of demo modules through the exact same prompt/fallback path a real
+// learner's first content request would hit — not a separate, hand-written
+// approximation of it.
+export async function getOrGenerateModuleContent(db, { clientUserId, topicId, callAI, extractJson }) {
   const cached = (db.data.moduleContent || []).find(
     m => m.clientUserId === clientUserId && m.topicId === topicId);
   if (cached) return cached;
@@ -155,7 +161,11 @@ Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each 
 }
 
 // Recompute an assignment's rolled-up status/progress/score from moduleState.
-function rollup(assignment) {
+// Exported so seedDemo.js can hand-set a demo assignment's moduleState (which
+// modules are done, with what score) and let this compute the derived
+// progress/score/status fields the same way a real completion does, rather
+// than guessing values that could disagree with what a live GET recomputes.
+export function rollup(assignment) {
   const mods = assignment.modules || [];
   const state = assignment.moduleState || {};
   const total = mods.length || 1;

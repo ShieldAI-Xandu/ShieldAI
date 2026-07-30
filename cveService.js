@@ -42,24 +42,24 @@ export const SECURITY_REFERENCES = [
 ];
 
 // ── Demo software stacks ──────────────────────────────────────────
-// Fixed, plausible inventories for the fictional demo companies. These live
-// here rather than in demoIntel.js so there's no import cycle, and so the demo
-// path is visibly the SAME code path as production — it differs only in where
-// the software list comes from, never in how CVEs are fetched or presented.
+// Fixed, plausible inventory for the demo sandbox. This lives here rather than
+// in demoIntel.js so there's no import cycle, and so the demo path is visibly
+// the SAME code path as production — it differs only in where the software
+// list comes from, never in how CVEs are fetched or presented.
 //
-// Versions are chosen to be realistic for an SMB and to return real, meaningful
-// CVEs from NVD. An empty result set makes a poor demo; old versions of
-// widely-deployed software are also simply what SMBs actually run.
+// Keyed by the demo user's companyName ("ShieldAI Demo Workspace" — see
+// seedDemo.js's DEMO_COMPANY). There is one demo client account holding three
+// fictional company assessments, not three separate accounts, so this can only
+// ever reflect one company's profile at a time; seedDemo.js seeds this as
+// Lakeside Financial Advisors' stack — a boutique wealth-management firm's
+// typical footprint. Versions are chosen to be realistic for an SMB and to
+// return real, meaningful CVEs from NVD. An empty result set makes a poor
+// demo; old versions of widely-deployed software are also simply what SMBs
+// actually run.
 export const DEMO_STACKS = {
-  "Meridian Dental Group": [
-    "Windows Server 2019", "Apache 2.4.49", "OpenSSL 1.1.1", "WordPress 6.1", "MySQL 5.7",
-  ],
-  "Cascade Logistics": [
-    "Ubuntu 20.04", "nginx 1.18.0", "Log4j 2.14.1", "PostgreSQL 12.9", "OpenSSH 8.2",
-  ],
-  "Northgate Financial": [
-    "Windows Server 2016", "Microsoft Exchange Server 2016", "OpenSSL 3.0.1",
-    "Apache Tomcat 9.0.30", "Jenkins 2.303",
+  "ShieldAI Demo Workspace": [
+    "Windows Server 2022", "Microsoft Exchange Online", "Citrix ADC 13.0",
+    "SQL Server 2019", "OpenSSL 3.0.1",
   ],
 };
 

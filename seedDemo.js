@@ -15,7 +15,7 @@
 // Safe to re-run: it removes any previous demo data first.
 
 import "dotenv/config";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash, randomBytes } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
@@ -26,6 +26,20 @@ import { PIPELINE } from "./generators.js";
 import { computePostureScore } from "./riskEngine.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
+// Feature areas added since this script was last substantially written.
+// Each of these is reused directly (not reimplemented) so seeded records are
+// exactly as valid as what the real route would produce for a real client.
+import { summarizeReport, buildDraftsFromReport, remediationHint } from "./agentRoutes.js";
+import { getControl, simulateControlChange } from "./taskRoutes.js";
+import { createVendor } from "./vendorRiskService.js";
+import { modulesFromTopics, rollup, getOrGenerateModuleContent } from "./trainingProgramRoutes.js";
+import { DEFAULT_SCHEDULE } from "./trainingCatalog.js";
+import { getScenario } from "./phishingScenarios.js";
+import { validateBrandingPatch } from "./brandingRoutes.js";
+import { refreshClientExposure } from "./cveService.js";
+import { refreshClientDarkweb } from "./darkwebService.js";
+import { pushNotification } from "./portfolioRoutes.js";
+import { callAI } from "./aiProviders.js";
 
 // Demo identities live ONLY in demo-db.json. The @shieldai.demo domain is
 // reserved for the sandbox so a demo account can never be mistaken for — or
@@ -419,13 +433,92 @@ async function generatePolicy(userId, policyId, companyData) {
   } catch {
     content = `# ${def.name}\n\n**Policy Owner:** IT Manager\n**Effective Date:** ${today}\n**Version:** 1.0\n**Applies To:** All employees of ${companyData.company.name}\n\n---\n\n## 1. Purpose\nThis policy establishes requirements to protect ${companyData.company.name}'s systems and data.\n\n## 2. Scope\nApplies to all employees, contractors, and systems.\n\n## 3. Policy Statements\nThe organization will implement and maintain appropriate controls consistent with industry best practice and applicable regulations.\n\n## 4. Revision History\n| Version | Date | Description |\n|---|---|---|\n| 1.0 | ${today} | Initial release |`;
   }
-  db.data.policyDocs.push({
+  const record = {
     id: randomUUID(), userId, policyId, policyName: def.name,
     createdAt: new Date().toISOString(),
     companyContext: companyData.company, answers: {}, content,
-  });
+  };
+  db.data.policyDocs.push(record);
   console.log(`    · policy: ${def.name}`);
+  return record;
 }
+
+// ── Small helpers for the feature-area fixtures below ──────────
+const DAY_MS = 24 * 60 * 60 * 1000;
+const daysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
+const daysFromNow = (n) => new Date(Date.now() + n * DAY_MS).toISOString();
+const sha256hex = (s) => createHash("sha256").update(s).digest("hex");
+const newLearnerToken = () => randomBytes(24).toString("base64url");
+
+// ── Endpoint monitoring fleet, per company ──────────────────────
+// Check statuses are deliberately tied to each company's own checklist
+// answers so the "agent vs. questionnaire" corroboration feature has real
+// material: Meridian's findings CONFIRM what they reported (decent MSP,
+// weak governance); Apex's disk_encryption findings deliberately DISPUTE
+// their own "some systems" answer — the agent found none — which is the
+// single most useful demo moment this feature has.
+const AGENT_FLEET = {
+  "Meridian Dental Group": {
+    hosts: [{ hostname: "MERIDIAN-WKS-04", os: "windows" }, { hostname: "MERIDIAN-SRV-01", os: "windows" }],
+    checks: [
+      { id: "av_present", title: "Endpoint protection installed", status: "pass", severity: "info", observed: "Windows Defender active." },
+      { id: "av_realtime", title: "Antivirus real-time protection", status: "pass", severity: "info" },
+      { id: "av_signatures", title: "Antivirus signature freshness", status: "warn", severity: "medium", observed: "Definitions last updated 11 days ago." },
+      { id: "firewall", title: "Host firewall enabled", status: "pass", severity: "info" },
+      { id: "disk_encryption", title: "Full-disk encryption", status: "pass", severity: "info", observed: "BitLocker enabled on all volumes." },
+      { id: "patches", title: "OS/software patch currency", status: "warn", severity: "medium", observed: "4 pending updates, none critical." },
+      { id: "local_admins", title: "Local administrator accounts", status: "fail", severity: "medium", observed: "3 standard users have local admin rights.", cisControl: "5.4" },
+      { id: "screen_lock", title: "Automatic screen lock", status: "pass", severity: "info" },
+      { id: "guest_account", title: "Guest account disabled", status: "pass", severity: "info" },
+      { id: "auto_updates", title: "Automatic security updates", status: "warn", severity: "low", observed: "Manual approval required for updates." },
+    ],
+    events: [
+      { severity: "medium", type: "av_signature_stale", message: "Antivirus definitions on MERIDIAN-WKS-04 are 11 days out of date." },
+      { severity: "low", type: "patch_pending", message: "4 pending security updates on MERIDIAN-SRV-01." },
+    ],
+  },
+  "Lakeside Financial Advisors": {
+    hosts: [{ hostname: "LAKESIDE-WKS-02", os: "windows" }, { hostname: "LAKESIDE-DC-01", os: "windows" }],
+    checks: [
+      { id: "av_present", title: "Endpoint protection installed", status: "pass", severity: "info", observed: "CrowdStrike Falcon active." },
+      { id: "av_realtime", title: "Antivirus real-time protection", status: "pass", severity: "info" },
+      { id: "av_signatures", title: "Antivirus signature freshness", status: "pass", severity: "info" },
+      { id: "av_tamper", title: "Antivirus tamper protection", status: "pass", severity: "info" },
+      { id: "firewall", title: "Host firewall enabled", status: "pass", severity: "info" },
+      { id: "disk_encryption", title: "Full-disk encryption", status: "pass", severity: "info" },
+      { id: "patches", title: "OS/software patch currency", status: "warn", severity: "low", observed: "1 optional update pending." },
+      { id: "local_admins", title: "Local administrator accounts", status: "pass", severity: "info", observed: "No standard users hold local admin rights." },
+      { id: "screen_lock", title: "Automatic screen lock", status: "pass", severity: "info" },
+      { id: "guest_account", title: "Guest account disabled", status: "pass", severity: "info" },
+      { id: "smb1", title: "Legacy SMBv1 disabled", status: "pass", severity: "info" },
+      { id: "rdp_exposure", title: "RDP exposure", status: "pass", severity: "info", observed: "RDP restricted to VPN clients only." },
+    ],
+    events: [
+      { severity: "info", type: "patch_pending", message: "1 optional update pending on LAKESIDE-WKS-02." },
+    ],
+  },
+  "Apex Manufacturing": {
+    hosts: [{ hostname: "APEX-SHOPFLOOR-03", os: "windows" }, { hostname: "APEX-OFFICE-01", os: "windows" }],
+    checks: [
+      { id: "av_present", title: "Endpoint protection installed", status: "fail", severity: "high", observed: "No antivirus product detected." },
+      { id: "av_realtime", title: "Antivirus real-time protection", status: "fail", severity: "high" },
+      { id: "firewall", title: "Host firewall enabled", status: "fail", severity: "high", observed: "Windows Firewall is disabled on all profiles." },
+      { id: "disk_encryption", title: "Full-disk encryption", status: "fail", severity: "critical", observed: "No disk encryption detected on this host." },
+      { id: "patches", title: "OS/software patch currency", status: "fail", severity: "high", observed: "14 pending updates; none installed in 60+ days." },
+      { id: "local_admins", title: "Local administrator accounts", status: "fail", severity: "high", observed: "All users are local administrators.", cisControl: "5.4" },
+      { id: "screen_lock", title: "Automatic screen lock", status: "fail", severity: "medium" },
+      { id: "guest_account", title: "Guest account disabled", status: "fail", severity: "medium", observed: "The built-in Guest account is enabled." },
+      { id: "smb1", title: "Legacy SMBv1 disabled", status: "fail", severity: "high", observed: "SMBv1 is enabled." },
+      { id: "auto_updates", title: "Automatic security updates", status: "fail", severity: "high" },
+      { id: "rdp_exposure", title: "RDP exposure", status: "fail", severity: "critical", observed: "RDP is reachable from the internet without Network Level Authentication." },
+    ],
+    events: [
+      { severity: "critical", type: "rdp_exposure", message: "RDP on APEX-SHOPFLOOR-03 is reachable from the internet without NLA." },
+      { severity: "high", type: "av_missing", message: "No antivirus product detected on APEX-OFFICE-01." },
+      { severity: "high", type: "patch_pending", message: "14 pending security updates on APEX-SHOPFLOOR-03, none installed in 60+ days." },
+    ],
+  },
+};
 
 // ── Main ──
 async function main() {
@@ -443,6 +536,16 @@ async function main() {
   await db.read();
   db.data.users ||= []; db.data.assessments ||= []; db.data.programs ||= []; db.data.policyDocs ||= [];
   db.data.assignments ||= [];
+  // Collections every feature-area route file normally initializes itself at
+  // server-registration time (ensureCollections()-style calls in each route
+  // module). This script runs standalone — never through server.js — so none
+  // of those registrations happen; on a first-ever seed these would otherwise
+  // be undefined the moment anything below tries to .push() onto them.
+  db.data.tasks ||= []; db.data.evidence ||= []; db.data.postureHistory ||= [];
+  db.data.learners ||= []; db.data.trainingAssignments ||= []; db.data.trainingQuarters ||= [];
+  db.data.moduleContent ||= []; db.data.phishingCampaigns ||= []; db.data.phishingResults ||= [];
+  db.data.policyAcknowledgments ||= []; db.data.complianceCalendarEntries ||= [];
+  db.data.clientMessages ||= []; db.data.postureSnapshots ||= []; db.data.branding ||= [];
 
   // ── Demo analyst (sees only the demo clients, in the demo store) ──
   let analyst = db.data.users.find(u => u.email === DEMO_ANALYST_EMAIL);
@@ -464,6 +567,36 @@ async function main() {
     db.data.assessments = db.data.assessments.filter(a => a.userId !== user.id);
     db.data.programs = db.data.programs.filter(p => p.userId !== user.id);
     db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== user.id);
+    // Everything added since this script last grew: purge for the demo client
+    // (and, where the collection is analyst-owned, the demo analyst) so
+    // re-running stays safe/idempotent rather than accumulating duplicates.
+    db.data.agents = (db.data.agents || []).filter(a => a.ownerUserId !== user.id);
+    db.data.enrollTokens = (db.data.enrollTokens || []).filter(t => t.ownerUserId !== user.id);
+    db.data.agentReports = (db.data.agentReports || []).filter(r => r.ownerUserId !== user.id);
+    db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.ownerUserId !== user.id);
+    db.data.recommendations = (db.data.recommendations || []).filter(r => r.ownerUserId !== user.id);
+    db.data.tasks = (db.data.tasks || []).filter(t => t.ownerUserId !== user.id);
+    db.data.evidence = (db.data.evidence || []).filter(e => e.ownerUserId !== user.id);
+    db.data.postureHistory = (db.data.postureHistory || []).filter(h => h.userId !== user.id);
+    db.data.vendors = (db.data.vendors || []).filter(v => v.userId !== user.id);
+    db.data.vendorQuestionnaires = (db.data.vendorQuestionnaires || []).filter(q => q.userId !== user.id);
+    db.data.learners = (db.data.learners || []).filter(l => l.clientUserId !== user.id);
+    db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(a => a.clientUserId !== user.id);
+    db.data.trainingQuarters = (db.data.trainingQuarters || []).filter(q => q.clientUserId !== user.id);
+    db.data.moduleContent = (db.data.moduleContent || []).filter(m => m.clientUserId !== user.id);
+    db.data.phishingCampaigns = (db.data.phishingCampaigns || []).filter(c => c.clientUserId !== user.id);
+    db.data.phishingResults = (db.data.phishingResults || []).filter(r => {
+      const stillReferenced = (db.data.phishingCampaigns || []).some(c => c.id === r.campaignId);
+      return stillReferenced;
+    });
+    db.data.policyAcknowledgments = (db.data.policyAcknowledgments || []).filter(a => a.clientUserId !== user.id);
+    db.data.complianceCalendarEntries = (db.data.complianceCalendarEntries || []).filter(e => e.userId !== user.id);
+    db.data.notifications = (db.data.notifications || []).filter(n => n.userId !== user.id);
+    db.data.clientMessages = (db.data.clientMessages || []).filter(m => m.clientUserId !== user.id);
+    db.data.postureSnapshots = (db.data.postureSnapshots || []).filter(s => s.userId !== user.id);
+    if (db.data.cveExposure) delete db.data.cveExposure[user.id];
+    if (db.data.darkwebExposure) delete db.data.darkwebExposure[user.id];
+    db.data.branding = (db.data.branding || []).filter(b => b.ownerUserId !== analyst.id);
   } else {
     user = {
       id: randomUUID(), email: DEMO_EMAIL, companyName: DEMO_COMPANY,
@@ -484,6 +617,11 @@ async function main() {
     assignedBy: analyst.id, assignedAt: new Date().toISOString(),
   });
 
+  // Per-company references captured for the feature-area seeding below —
+  // evidence/vendors/policy-acknowledgment/etc. all need to point at a real
+  // assessment id or a real generated policyDoc, not an invented one.
+  const byCompany = {}; // companyName -> { assessment, program, policies: [...] }
+
   for (const co of COMPANIES) {
     console.log(`\n▶ ${co.company.name} (${co.company.industry})`);
     const assessment = {
@@ -492,23 +630,454 @@ async function main() {
     };
     db.data.assessments.push(assessment);
 
-    await generateProgram(user.id, assessment.id, assessment.data);
+    const program = await generateProgram(user.id, assessment.id, assessment.data);
+    const policies = [];
     for (const pid of (co.policies || [])) {
-      await generatePolicy(user.id, pid, assessment.data);
+      const rec = await generatePolicy(user.id, pid, assessment.data);
+      if (rec) policies.push(rec);
     }
+    byCompany[co.company.name] = { assessment, program, policies };
     await db.write(); // save progress after each company
   }
 
   // Give the demo client a fully-verified domain record so the breach-monitoring
   // card shows the finished state rather than an empty form. The workflow itself
   // stays fully clickable inside each visitor's sandbox.
+  // Keyed by DEMO_COMPANY (the account's own companyName), matching the single
+  // DEMO_BREACHES entry in demoIntel.js — there's one demo account, not three,
+  // so the domain/breach story reflects one company (Lakeside Financial
+  // Advisors) rather than falling back to the generic example.example default.
   db.data.clientDomains ||= [];
   db.data.clientDomains = db.data.clientDomains.filter(d => d.userId !== user.id);
-  db.data.clientDomains.push(demoDomainRecord(user.id, COMPANIES[0].company.name));
+  db.data.clientDomains.push(demoDomainRecord(user.id, DEMO_COMPANY));
+
+  // ── Endpoint monitoring fleet ──────────────────────────────────
+  console.log("\n▶ Endpoint monitoring fleet");
+  const agentsByCompany = {};
+  const reportsByAgent = {};
+  for (const [companyName, fleet] of Object.entries(AGENT_FLEET)) {
+    const agentList = [];
+    for (const host of fleet.hosts) {
+      const agent = {
+        id: randomUUID(), ownerUserId: user.id, hostname: host.hostname, os: host.os,
+        tokenHash: sha256hex(randomUUID()), status: "active",
+        createdAt: daysAgo(120), lastSeen: daysAgo(0), revokedAt: null, agentVersion: "1.1.0",
+      };
+      db.data.agents.push(agent);
+      agentList.push(agent);
+
+      const reportBody = {
+        checks: fleet.checks,
+        host: { hostname: host.hostname, os: host.os, osVersion: "10.0.19045" },
+        inventory: { software: [] },
+        agentVersion: "1.1.0",
+      };
+      const summary = summarizeReport(reportBody);
+      const report = { id: randomUUID(), agentId: agent.id, ownerUserId: user.id, receivedAt: daysAgo(0), report: reportBody };
+      db.data.agentReports.push(report);
+      reportsByAgent[agent.id] = report;
+      console.log(`    · ${host.hostname}: ${summary.posture} (${summary.failCount} fail / ${summary.warnCount} warn)`);
+    }
+    agentsByCompany[companyName] = agentList;
+
+    fleet.events.forEach((e, i) => {
+      db.data.agentEvents.push({
+        id: randomUUID(), agentId: agentList[0].id, ownerUserId: user.id, ts: daysAgo(i + 1),
+        source: "agent", severity: e.severity, type: e.type, message: e.message, raw: null, ack: false,
+      });
+    });
+  }
+  const totalEndpoints = Object.values(agentsByCompany).flat().length;
+  console.log(`   ${totalEndpoints} endpoints across ${Object.keys(agentsByCompany).length} companies`);
+
+  // ── Recommendations lifecycle ───────────────────────────────────
+  console.log("\n▶ Recommendations lifecycle");
+  const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+  const allDrafts = [];
+  for (const [companyName, agentList] of Object.entries(agentsByCompany)) {
+    for (const agent of agentList) {
+      const report = reportsByAgent[agent.id];
+      for (const d of buildDraftsFromReport({ report: report.report, agent })) {
+        allDrafts.push({ ...d, companyName });
+      }
+    }
+  }
+  allDrafts.sort((a, b) => (SEV_RANK[b.severity] ?? 0) - (SEV_RANK[a.severity] ?? 0));
+  // Cap to a readable queue — up to 4 per company rather than every finding.
+  const perCompanyCount = {};
+  const chosenDrafts = allDrafts.filter(d => (perCompanyCount[d.companyName] = (perCompanyCount[d.companyName] || 0) + 1) <= 4);
+
+  function pushHist(rec, actorType, actorId, status, note, at) {
+    rec.history.push({ at, actorType, actorId: actorId || null, status, note: note || "" });
+    rec.status = status;
+  }
+  // One entry per chosen draft, index-mapped to a lifecycle stage so the
+  // queue shows every real stage at once, not just "everything is done".
+  const LIFECYCLE_STAGES = ["suggested", "suggested", "proposed", "proposed", "permitted", "client_performing", "declined", "completed", "completed"];
+  chosenDrafts.forEach((d, i) => {
+    const rec = {
+      id: randomUUID(), ownerUserId: user.id, agentId: d.agentId, dedupeKey: d.dedupeKey, checkId: d.checkId,
+      origin: "ai", aiAuthored: true, title: d.title, detail: d.detail, severity: d.severity,
+      priority: Math.max(1, 5 - (SEV_RANK[d.severity] ?? 0)),
+      rationale: `Flagged from ${d.companyName}'s latest endpoint report.`,
+      status: "suggested", createdAt: daysAgo(10), history: [],
+    };
+    pushHist(rec, "ai", null, "suggested", "Auto-drafted by Mastermind AI from agent report.", daysAgo(10));
+
+    const target = LIFECYCLE_STAGES[i] || "suggested";
+    if (target !== "suggested") {
+      pushHist(rec, "analyst", analyst.id, "proposed", "Forwarded to client.", daysAgo(8));
+      if (target === "permitted" || target === "completed") {
+        pushHist(rec, "client_admin", user.id, "permitted", "Go ahead and take care of this.", daysAgo(6));
+      } else if (target === "client_performing") {
+        pushHist(rec, "client_admin", user.id, "client_performing", "We'll handle this ourselves.", daysAgo(6));
+      } else if (target === "declined") {
+        pushHist(rec, "client_admin", user.id, "declined", "Deferring for now — next budget cycle.", daysAgo(6));
+      }
+      if (target === "completed") {
+        pushHist(rec, "analyst", analyst.id, "completed", "Resolved during the last maintenance window.", daysAgo(2));
+      }
+    }
+    db.data.recommendations.push(rec);
+  });
+  console.log(`   ${chosenDrafts.length} recommendations spanning the full lifecycle`);
+
+  // ── Remediation tasks ────────────────────────────────────────────
+  // Tasks are user-level, not per-assessment — taskRoutes.js's
+  // latestAssessmentFor() always resolves to whichever assessment was
+  // created/updated most recently, which is Apex Manufacturing's (seeded
+  // last, and also the weakest posture — the most genuine gaps to open
+  // tasks against).
+  console.log("\n▶ Remediation tasks");
+  const apexAssessment = byCompany["Apex Manufacturing"].assessment;
+  const bestOptionFor = (control) => [...control.options].sort((a, b) => b.score - a.score)[0];
+  const TASK_PLAN = [
+    { controlId: "mfa", priority: "critical", status: "open", dueDays: 14 },
+    { controlId: "backups", priority: "high", status: "open", dueDays: 21 },
+    { controlId: "monitoring", priority: "high", status: "in_progress", dueDays: 30 },
+    { controlId: "incidentResponse", priority: "high", status: "open", dueDays: 30 },
+    { controlId: "documentedPolicies", priority: "medium", status: "done" },
+    { controlId: "priorAudit", priority: "medium", status: "done" },
+  ];
+  const seededTasks = [];
+  for (const spec of TASK_PLAN) {
+    const control = getControl(spec.controlId);
+    if (!control) continue;
+    const best = bestOptionFor(control);
+    const sim = simulateControlChange(db, user.id, spec.controlId, best.label);
+    const task = {
+      id: randomUUID(), ownerUserId: user.id, controlId: spec.controlId, targetLabel: best.label,
+      title: `Improve: ${control.question}`, detail: "", nistFunction: control.nistFunction,
+      status: "open", priority: spec.priority, effort: null,
+      dueDate: spec.dueDays != null ? daysFromNow(spec.dueDays) : null,
+      assigneeUserId: null, createdBy: analyst.id,
+      createdAt: daysAgo(20), updatedAt: daysAgo(20), completedAt: null,
+      projectedGain: sim ? sim.delta : null, scoreAtCreate: sim ? sim.current : null,
+      evidence: [], history: [],
+    };
+    task.history.push({ at: daysAgo(20), actorType: "analyst", actorId: analyst.id, action: "created",
+      note: sim ? `Projected +${sim.delta} posture.` : "" });
+
+    if (spec.status === "in_progress") {
+      task.status = "in_progress";
+      task.updatedAt = daysAgo(10);
+      task.history.push({ at: daysAgo(10), actorType: "client", actorId: user.id, action: "status", note: "open → in_progress" });
+    } else if (spec.status === "done") {
+      // Mirror the REAL completion path (taskRoutes.js's /complete): write the
+      // target label into the assessment checklist and record a real
+      // postureHistory point, so the task and the assessment never disagree.
+      const before = computePostureScore(apexAssessment.data);
+      apexAssessment.data.checklist = { ...apexAssessment.data.checklist, [spec.controlId]: best.label };
+      apexAssessment.updatedAt = new Date().toISOString(); // keeps Apex "latest" for latestAssessmentFor()
+      const after = computePostureScore(apexAssessment.data);
+      task.status = "done";
+      task.completedAt = daysAgo(3);
+      task.updatedAt = daysAgo(3);
+      task.actualGain = after.postureScore - before.postureScore;
+      task.scoreAtComplete = after.postureScore;
+      task.history.push({ at: daysAgo(3), actorType: "client", actorId: user.id, action: "completed",
+        note: `Posture ${before.postureScore} → ${after.postureScore} (${task.actualGain >= 0 ? "+" : ""}${task.actualGain}).` });
+      db.data.postureHistory ||= [];
+      db.data.postureHistory.push({ id: randomUUID(), userId: user.id, at: daysAgo(3), score: after.postureScore, level: after.postureLevel, reason: `task:${task.id}` });
+    }
+    db.data.tasks.push(task);
+    seededTasks.push(task);
+  }
+  console.log(`   ${seededTasks.length} tasks (${seededTasks.filter(t => t.status === "done").length} completed)`);
+
+  // ── Evidence ─────────────────────────────────────────────────────
+  console.log("\n▶ Evidence");
+  let evidenceCount = 0;
+  for (const t of seededTasks.filter(t => t.status === "done")) {
+    const ev = {
+      id: randomUUID(), ownerUserId: user.id, kind: "task", refId: t.id,
+      title: `Confirmation — ${t.title.replace(/^Improve:\s*/, "")}`,
+      note: "Verified complete during the scheduled remediation review; no supporting file attached.",
+      filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+      uploadedBy: analyst.id, uploadedAt: t.completedAt,
+    };
+    db.data.evidence.push(ev);
+    t.evidence.push({ id: ev.id, title: ev.title, filename: null, at: ev.uploadedAt });
+    evidenceCount++;
+  }
+  db.data.evidence.push(
+    { id: randomUUID(), ownerUserId: user.id, kind: "general", refId: null,
+      title: "Cyber liability insurance policy — 2026 renewal",
+      note: "Confirmed active with underwriter; policy document held by leadership, not uploaded here.",
+      filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+      uploadedBy: user.id, uploadedAt: daysAgo(30) },
+    { id: randomUUID(), ownerUserId: user.id, kind: "assessment", refId: apexAssessment.id,
+      title: "Signed management attestation — security questionnaire",
+      note: "Leadership reviewed and signed off on the submitted assessment answers.",
+      filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+      uploadedBy: user.id, uploadedAt: daysAgo(15) },
+  );
+  evidenceCount += 2;
+  console.log(`   ${evidenceCount} evidence records`);
+
+  // ── Vendor risk registry ─────────────────────────────────────────
+  console.log("\n▶ Vendor risk registry");
+  const VENDOR_PLAN = [
+    { name: "Stripe", category: "Payment Processor", criticality: "critical", dataAccessLevel: "limited",
+      contactEmail: "support@stripe.example", hasDataAgreement: true, securityCertification: "PCI DSS Level 1",
+      lastAssessedAt: daysAgo(60) }, // current
+    { name: "Onyx Cloud Hosting", category: "Cloud Hosting/Infrastructure", criticality: "critical", dataAccessLevel: "extensive",
+      contactEmail: "security@onyxcloud.example", hasDataAgreement: true, securityCertification: "SOC 2 Type II",
+      lastAssessedAt: daysAgo(395) }, // overdue (6mo cadence)
+    { name: "Gusto", category: "Payroll/HR", criticality: "high", dataAccessLevel: "extensive",
+      contactEmail: "privacy@gusto.example", hasDataAgreement: true, securityCertification: "SOC 2 Type II",
+      lastAssessedAt: daysAgo(350) }, // due_soon (12mo cadence)
+    { name: "Meridian IT Partners", category: "IT Support/MSP", criticality: "high", dataAccessLevel: "extensive",
+      contactEmail: "contracts@meridianitpartners.example", hasDataAgreement: true, securityCertification: "",
+      lastAssessedAt: daysAgo(90) }, // current
+    { name: "BrightBooks Accounting", category: "SaaS/Software", criticality: "medium", dataAccessLevel: "limited",
+      contactEmail: "support@brightbooks.example", hasDataAgreement: false, securityCertification: "",
+      contractStartDate: daysAgo(455) }, // overdue, never formally reassessed
+  ];
+  for (const v of VENDOR_PLAN) createVendor(db, user.id, { ...v, createdByStaff: null });
+  console.log(`   ${VENDOR_PLAN.length} vendors`);
+
+  // ── Training delivery (learners, quarters, assignments) ──────────
+  console.log("\n▶ Training delivery");
+  const LEARNER_PLAN = [
+    { name: "Sarah Reyes", email: "sarah.reyes@meridiandental.example", department: "Front Office" },
+    { name: "James Okafor", email: "james.okafor@meridiandental.example", department: "Clinical Support" },
+    { name: "Priya Nandan", email: "priya.nandan@lakesidefinancial.example", department: "Wealth Management" },
+    { name: "Marcus Chen", email: "marcus.chen@lakesidefinancial.example", department: "Compliance" },
+    { name: "Derek Holt", email: "derek.holt@apexmfg.example", department: "Production" },
+    { name: "Angela Brooks", email: "angela.brooks@apexmfg.example", department: "Operations" },
+  ];
+  const learners = LEARNER_PLAN.map(l => ({
+    id: randomUUID(), clientUserId: user.id, name: l.name, email: l.email, department: l.department,
+    token: newLearnerToken(), status: "active", createdAt: daysAgo(150),
+  }));
+  db.data.learners.push(...learners);
+
+  const q1Topics = DEFAULT_SCHEDULE[0].topicIds; // Month 1: phishing, passwords-mfa, device-security, incident-reporting
+  const q1Modules = modulesFromTopics(q1Topics);
+  const q1 = {
+    id: randomUUID(), clientUserId: user.id, label: "Q1 2026 Training", year: 2026, quarter: 1,
+    topicIds: q1Topics, dueDate: daysAgo(30), createdBy: analyst.id, createdAt: daysAgo(90), learnerCount: learners.length,
+  };
+  db.data.trainingQuarters.push(q1);
+
+  const q2Topics = DEFAULT_SCHEDULE[1].topicIds; // Month 2: bec, payments, data-privacy, acceptable-use
+  const q2Modules = modulesFromTopics(q2Topics);
+  const q2 = {
+    id: randomUUID(), clientUserId: user.id, label: "Q2 2026 Training", year: 2026, quarter: 2,
+    topicIds: q2Topics, dueDate: daysFromNow(45), createdBy: analyst.id, createdAt: daysAgo(5), learnerCount: learners.length,
+  };
+  db.data.trainingQuarters.push(q2);
+
+  // Q1 is past its due date: 4 learners completed everything, 1 is partway
+  // (shows as overdue, matching real rollup() behavior for a past-due
+  // incomplete assignment), 1 never started (also overdue).
+  learners.forEach((learner, i) => {
+    const a = {
+      id: randomUUID(), clientUserId: user.id, learnerId: learner.id,
+      source: "quarterly", quarterId: q1.id, title: q1.label,
+      modules: q1Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
+      dueDate: q1.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
+      assignedAt: daysAgo(90), startedAt: i < 5 ? daysAgo(85) : null, completedAt: null,
+    };
+    if (i < 4) {
+      q1Modules.forEach((m, mi) => {
+        a.moduleState[m.topicId] = { completed: true, score: 80 + ((i * 7 + mi * 3) % 20), completedAt: daysAgo(75 - i) };
+      });
+    } else if (i === 4) {
+      q1Modules.slice(0, 2).forEach(m => { a.moduleState[m.topicId] = { completed: true, score: 88, completedAt: daysAgo(60) }; });
+    }
+    rollup(a);
+    if (a.status === "completed") a.completedAt = daysAgo(70 - i);
+    db.data.trainingAssignments.push(a);
+  });
+
+  // Q2 isn't due yet — a realistic "just getting started" state.
+  learners.forEach((learner, i) => {
+    const a = {
+      id: randomUUID(), clientUserId: user.id, learnerId: learner.id,
+      source: "quarterly", quarterId: q2.id, title: q2.label,
+      modules: q2Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
+      dueDate: q2.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
+      assignedAt: daysAgo(5), startedAt: null, completedAt: null,
+    };
+    if (i < 2) {
+      a.startedAt = daysAgo(2);
+      a.moduleState[q2Modules[0].topicId] = { completed: true, score: 92, completedAt: daysAgo(1) };
+    }
+    rollup(a);
+    db.data.trainingAssignments.push(a);
+  });
+
+  // Pre-generate real slide+quiz content for a few modules (the training-depth
+  // decision) via the exact same AI path a learner's first click would hit —
+  // so at least one module per company opens to real material immediately.
+  console.log("   Pre-generating real lesson content for 3 modules…");
+  for (const topicId of ["phishing", "passwords-mfa", "bec"]) {
+    try {
+      await getOrGenerateModuleContent(db, { clientUserId: user.id, topicId, callAI, extractJson });
+      console.log(`    · module content: ${topicId}`);
+    } catch (err) {
+      console.log(`    · module content: ${topicId} — skipped (${err.message.slice(0, 60)})`);
+    }
+  }
+  console.log(`   ${learners.length} learners, 2 quarters, ${learners.length * 2} assignments`);
+
+  // ── Phishing simulation ──────────────────────────────────────────
+  console.log("\n▶ Phishing simulation");
+  function buildPhishingCampaign({ name, scenarioId, sentDaysAgo, clickedIndexes }) {
+    if (!getScenario(scenarioId)) throw new Error(`Unknown phishing scenario: ${scenarioId}`);
+    const campaign = {
+      id: randomUUID(), clientUserId: user.id, name, scenarioId,
+      learnerIds: learners.map(l => l.id), adHocRecipients: [], isTrial: false,
+      status: "sent", createdBy: "analyst", createdAt: daysAgo(sentDaysAgo + 1), sentAt: daysAgo(sentDaysAgo),
+    };
+    db.data.phishingCampaigns.push(campaign);
+    learners.forEach((learner, i) => {
+      db.data.phishingResults.push({
+        id: randomUUID(), campaignId: campaign.id, learnerId: learner.id,
+        recipientName: null, recipientEmail: null,
+        token: randomUUID().replace(/-/g, ""),
+        sentAt: daysAgo(sentDaysAgo), sendError: null,
+        clickedAt: clickedIndexes.includes(i) ? daysAgo(sentDaysAgo - 0.2) : null,
+      });
+    });
+    return campaign;
+  }
+  buildPhishingCampaign({ name: "Q1 Simulation — Password Expiry Notice", scenarioId: "password-expiry", sentDaysAgo: 75, clickedIndexes: [1, 4, 5] });
+  buildPhishingCampaign({ name: "Q2 Simulation — Vendor Invoice Overdue", scenarioId: "invoice-overdue", sentDaysAgo: 20, clickedIndexes: [5] });
+  console.log("   2 campaigns sent — click rate improved between rounds");
+
+  // ── Policy acknowledgment (reuses the same learner roster) ──────
+  console.log("\n▶ Policy acknowledgment");
+  const companyLearnerPairs = [
+    { company: "Meridian Dental Group", learnerIdxs: [0, 1] },
+    { company: "Lakeside Financial Advisors", learnerIdxs: [2, 3] },
+    { company: "Apex Manufacturing", learnerIdxs: [4, 5] },
+  ];
+  let ackCount = 0;
+  for (const pair of companyLearnerPairs) {
+    for (const policy of byCompany[pair.company].policies) {
+      for (const idx of pair.learnerIdxs) {
+        const learner = learners[idx];
+        const acknowledged = (ackCount % 3) !== 0; // most signed, a few still pending
+        db.data.policyAcknowledgments.push({
+          id: randomUUID(), clientUserId: user.id,
+          policyId: policy.id, policyName: policy.policyName,
+          learnerId: learner.id, learnerName: learner.name, learnerEmail: learner.email,
+          assignedAt: daysAgo(40), assignedBy: analyst.id, assignedByRole: "analyst",
+          remindedAt: acknowledged ? null : daysAgo(5),
+          acknowledgedAt: acknowledged ? daysAgo(35) : null,
+        });
+        ackCount++;
+      }
+    }
+  }
+  console.log(`   ${ackCount} policy acknowledgment rows`);
+
+  // ── Compliance calendar ──────────────────────────────────────────
+  console.log("\n▶ Compliance calendar");
+  db.data.complianceCalendarEntries.push(
+    { id: randomUUID(), userId: user.id, title: "Cyber liability insurance renewal", category: "insurance",
+      dueDate: daysFromNow(45), recurrenceMonths: 12, notes: "Confirm coverage limits before renewing.",
+      completedAt: null, createdAt: daysAgo(10), updatedAt: daysAgo(10), createdByStaff: analyst.id },
+    { id: randomUUID(), userId: user.id, title: "State business license renewal", category: "license",
+      dueDate: daysFromNow(10), recurrenceMonths: 12, notes: "Apex Manufacturing facility license.",
+      completedAt: null, createdAt: daysAgo(10), updatedAt: daysAgo(10), createdByStaff: analyst.id },
+    { id: randomUUID(), userId: user.id, title: "SOC 2 Type II surveillance audit", category: "audit",
+      dueDate: daysAgo(15), recurrenceMonths: null, notes: "Lakeside Financial Advisors — schedule with auditor.",
+      completedAt: null, createdAt: daysAgo(60), updatedAt: daysAgo(60), createdByStaff: analyst.id },
+  );
+  console.log("   3 compliance calendar entries");
+
+  // ── White-label branding (on the demo analyst, not the client) ──
+  console.log("\n▶ White-label branding");
+  const brandPatch = validateBrandingPatch({
+    productName: "Meridian Risk Advisors",
+    companyName: "Meridian Risk Advisors, LLC",
+    tagline: "Your outsourced virtual CISO team",
+    primaryColor: "#1E3A5F",
+    accentColor: "#D4A017",
+    supportEmail: "support@meridianriskadvisors.example",
+    footerNote: "Powered by ShieldAI",
+  });
+  if (brandPatch.ok) {
+    db.data.branding.push({ ownerUserId: analyst.id, createdAt: daysAgo(60), updatedAt: daysAgo(60), ...brandPatch.patch });
+    console.log('   Demo analyst branded as "Meridian Risk Advisors"');
+  } else {
+    console.log(`   Branding skipped: ${brandPatch.error}`);
+  }
+
+  // ── CVE + dark-web exposure ──────────────────────────────────────
+  // CVE is a REAL, rate-limited NVD lookup (see the fixed DEMO_STACKS in
+  // cveService.js); dark-web is fully canned/local (demoIntel.js). Both are
+  // single-snapshot per user, so this reflects Lakeside Financial Advisors'
+  // profile (see the fixture fix above) regardless of which company's
+  // assessment a visitor happens to be viewing.
+  console.log("\n▶ CVE + dark-web exposure (real NVD lookup — may take a while without NVD_API_KEY)");
+  try {
+    await refreshClientExposure(db, user.id, { isDemo: true });
+    console.log("   CVE exposure cached.");
+  } catch (err) {
+    console.log(`   CVE exposure skipped: ${err.message}`);
+  }
+  try {
+    await refreshClientDarkweb(db, user.id, { isDemo: true });
+    console.log("   Dark-web exposure cached.");
+  } catch (err) {
+    console.log(`   Dark-web exposure skipped: ${err.message}`);
+  }
+
+  // ── Notifications + client↔staff chat ───────────────────────────
+  console.log("\n▶ Notifications + messages");
+  pushNotification(db, { userId: user.id, type: "program_ready", title: "Your security program is ready",
+    body: "Mastermind finished generating your prioritized roadmap, policies, and compliance mapping.", actorRole: "system" });
+  pushNotification(db, { userId: user.id, type: "review_approved", title: "Policy approved",
+    body: "Your security analyst reviewed and approved your Incident Response Policy.", actorRole: "analyst" });
+  pushNotification(db, { userId: user.id, type: "training_completed", title: "Training milestone reached",
+    body: "4 of 6 team members completed Q1 security awareness training.", actorRole: "system" });
+
+  db.data.clientMessages.push(
+    { id: randomUUID(), clientUserId: user.id, fromRole: "staff", authorId: analyst.id,
+      authorLabel: "ShieldAI Demo Analyst",
+      body: "Hi — I reviewed your latest endpoint report. A couple of the manufacturing floor machines need attention when you have a minute.",
+      at: daysAgo(9) },
+    { id: randomUUID(), clientUserId: user.id, fromRole: "client", authorId: user.id,
+      authorLabel: DEMO_COMPANY, body: "Thanks for flagging it — can you send over what specifically needs fixing?", at: daysAgo(9) },
+    { id: randomUUID(), clientUserId: user.id, fromRole: "staff", authorId: analyst.id,
+      authorLabel: "ShieldAI Demo Analyst",
+      body: "Just forwarded a few recommendations to your dashboard — the RDP exposure is the most urgent one.", at: daysAgo(8) },
+    { id: randomUUID(), clientUserId: user.id, fromRole: "client", authorId: user.id,
+      authorLabel: DEMO_COMPANY, body: "Got it, we'll take care of that this week.", at: daysAgo(7) },
+  );
+  console.log("   3 notifications, 4-message chat thread");
 
   await db.write();
   console.log(`\n✅ Demo seed complete — written to demo-db.json ONLY.`);
   console.log(`   ${COMPANIES.length} companies, each with a full program + policies.`);
+  console.log(`   Plus: endpoints, recommendations, tasks, evidence, vendors, training delivery,`);
+  console.log(`   phishing simulations, policy acknowledgment, compliance calendar, branding,`);
+  console.log(`   CVE/dark-web exposure, and notifications — every customer-facing feature.`);
   console.log(`   Client persona:  ${DEMO_EMAIL}`);
   console.log(`   Analyst persona: ${DEMO_ANALYST_EMAIL}`);
   console.log(`   Visitors enter via the public "Try the demo" button — no credentials.`);

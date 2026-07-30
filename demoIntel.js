@@ -58,32 +58,24 @@ export async function demoCveExposure(companyName) {
 
 // ── Canned breach exposure ────────────────────────────────────
 // Real breach names (these incidents genuinely happened and are in HIBP's
-// corpus), attached to fictional domains and fictional account counts. We never
-// claim these specific accounts were breached — the demo company doesn't exist.
+// corpus), attached to a fictional domain and fictional account counts. We
+// never claim these specific accounts were breached — the demo company
+// doesn't exist.
+//
+// Keyed by the demo user's companyName, same as DEMO_STACKS in cveService.js
+// (single demo account, so a single snapshot). Reflects Lakeside Financial
+// Advisors: a well-resourced, security-conscious firm — so a small, modest
+// exposure is the credible story, not zero (a flawless "no intel" reading
+// looks fabricated) and not the dramatic "high alert" reading a weaker
+// company would show.
 const DEMO_BREACHES = {
-  "Meridian Dental Group": {
-    domain: "meridiandental.example",
-    statusLevel: "Elevated",
-    breachedAccounts: 7,
-    distinctBreaches: 3,
-    breaches: ["Collection1", "LinkedIn", "MyFitnessPal"],
-    sampleAccounts: ["billing", "frontdesk", "j.reyes", "scheduling"],
-  },
-  "Cascade Logistics": {
-    domain: "cascadelogistics.example",
-    statusLevel: "High alert",
-    breachedAccounts: 31,
-    distinctBreaches: 6,
-    breaches: ["Collection1", "Dropbox", "LinkedIn", "MyFitnessPal", "River City Media", "Zynga"],
-    sampleAccounts: ["dispatch", "ops", "m.chen", "warehouse", "hr", "accounts"],
-  },
-  "Northgate Financial": {
-    domain: "northgatefinancial.example",
+  "ShieldAI Demo Workspace": {
+    domain: "lakesidefinancial.example",
     statusLevel: "Low risk",
-    breachedAccounts: 1,
-    distinctBreaches: 1,
-    breaches: ["LinkedIn"],
-    sampleAccounts: ["info"],
+    breachedAccounts: 2,
+    distinctBreaches: 2,
+    breaches: ["LinkedIn", "Adobe"],
+    sampleAccounts: ["m.ortiz", "reception"],
   },
 };
 

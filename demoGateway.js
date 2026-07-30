@@ -110,14 +110,35 @@ export function requireDemoAuth(req, res, next) {
 //
 // A small number of things stay off because they'd touch the real world rather
 // than the sandbox — real money, real credentials, real infrastructure.
+//
+// The blanket "/api/admin" block below is a blunt instrument: most routes
+// under that prefix really are admin-only (account management, billing
+// overview, audit log, etc.), but agentRoutes.js mounts several genuinely
+// CLIENT-facing routes there too (a legacy URL choice, not a permission
+// boundary) — "my endpoints" and "my recommendations". Blocking those hides
+// two whole feature areas (endpoint monitoring, the recommendation queue)
+// from every demo visitor, which is worse than the thing this list exists to
+// prevent. `except` carves those back out; the token-minting route stays
+// blocked via its own, more specific entry (checked first, below).
 const DEMO_BLOCKED_PREFIXES = [
-  { prefix: "/api/billing",       why: "Billing is disabled in the demo — it would create real Stripe charges." },
-  { prefix: "/api/admin",         why: "Admin controls aren't part of the demo — they manage real accounts." },
-  { prefix: "/api/agents/enroll", why: "Agent enrollment is disabled in the demo — it would mint a real enrollment token." },
+  { prefix: "/api/billing", why: "Billing is disabled in the demo — it would create real Stripe charges." },
+  { prefix: "/api/admin/endpoints/enroll-token", why: "Minting an enrollment token is disabled in the demo — it would mint a real one-time token." },
+  { prefix: "/api/admin", why: "Admin controls aren't part of the demo — they manage real accounts.",
+    except: ["/api/admin/endpoints", "/api/admin/recommendations"] },
+  // Fixed typo: this used to read "/api/agents/enroll" (plural), which never
+  // matched the real route below and so never actually blocked anything.
+  // Belt-and-suspenders only — a demo-minted token lives in an ephemeral,
+  // never-persisted sandbox clone, so it can't validate against a real
+  // agent's request anyway (that binds to production, not the sandbox).
+  { prefix: "/api/agent/enroll", why: "Agent enrollment is disabled in the demo — it would mint a real enrollment token." },
 ];
 
 export function demoGuard(req, res, next) {
-  const hit = DEMO_BLOCKED_PREFIXES.find(b => req.path.startsWith(b.prefix));
+  const hit = DEMO_BLOCKED_PREFIXES.find(b => {
+    if (!req.path.startsWith(b.prefix)) return false;
+    if (b.except && b.except.some(ex => req.path.startsWith(ex))) return false;
+    return true;
+  });
   if (hit) {
     return res.status(403).json({ error: hit.why, code: "DEMO_RESTRICTED" });
   }
