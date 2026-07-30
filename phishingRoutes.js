@@ -164,7 +164,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
   // is itself gated). Viewing is not gated here since the frontend already
   // only shows the full tab to clients who have the capability; this is the
   // backend's actual enforcement, per tierGate.js's "UI hiding is cosmetic."
-  app.post("/api/phishing/campaigns", requireAuth, (req, res) => {
+  app.post("/api/phishing/campaigns", requireAuth, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { name, scenarioId, learnerIds, adHocRecipients } = req.body || {};
@@ -189,7 +189,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
         createdBy: scope.role, createdAt: new Date().toISOString(), sentAt: null,
       };
       db.data.phishingCampaigns.push(campaign);
-      db.write();
+      await db.write();
       return res.json(campaignSummary(db, campaign));
     }
 
@@ -214,7 +214,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
       createdBy: scope.role, createdAt: new Date().toISOString(), sentAt: null,
     };
     db.data.phishingCampaigns.push(campaign);
-    db.write();
+    await db.write();
     res.json(campaignSummary(db, campaign));
   });
 
@@ -235,7 +235,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     res.json({ ...campaignSummary(db, campaign), results });
   });
 
-  app.delete("/api/phishing/campaigns/:id", requireAuth, (req, res) => {
+  app.delete("/api/phishing/campaigns/:id", requireAuth, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === req.params.id && c.clientUserId === scope.clientUserId);
@@ -243,7 +243,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     if (campaign.status !== "draft") return res.status(400).json({ error: "Only draft campaigns can be deleted — a sent campaign's results stay on record." });
     db.data.phishingCampaigns = db.data.phishingCampaigns.filter(c => c.id !== campaign.id);
     db.data.phishingResults = db.data.phishingResults.filter(r => r.campaignId !== campaign.id);
-    db.write();
+    await db.write();
     res.json({ ok: true });
   });
 
@@ -308,12 +308,12 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
   // Idempotent: visiting twice only records the first click. Returns the
   // scenario's red flags so the frontend reveal page can show what to have
   // noticed in THIS specific email, not a generic list.
-  app.get("/api/phish/:token", (req, res) => {
+  app.get("/api/phish/:token", async (req, res) => {
     const result = (db.data.phishingResults || []).find(r => r.token === req.params.token);
     if (!result) return res.status(404).json({ error: "Link not found or expired." });
     if (!result.clickedAt) {
       result.clickedAt = new Date().toISOString();
-      db.write();
+      await db.write();
     }
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === result.campaignId);
     const scenario = getScenario(campaign?.scenarioId);

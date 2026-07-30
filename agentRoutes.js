@@ -923,8 +923,14 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     if (!rec) return res.status(404).json({ error: "Recommendation not found." });
 
     const isOwner = rec.ownerUserId === req.userId;
-    const isPermittedAnalyst = (req.isAnalyst || req.isAdmin) && rec.status === "permitted";
-    if (!isOwner && !isPermittedAnalyst) {
+    // Same isolation gap as /forward and /enrich, same fix: an analyst may only
+    // complete a recommendation for a client actually assigned to them. Without
+    // this, any analyst account could mark ANY client's permitted recommendation
+    // as complete — a cross-tenant write into a client's own action log.
+    const isPermittedStaff = rec.status === "permitted" && (
+      req.isAdmin || (req.isAnalyst && analystOwnsClient && analystOwnsClient(db, req.userId, rec.ownerUserId))
+    );
+    if (!isOwner && !isPermittedStaff) {
       return res.status(403).json({ error: "Only the client, or an analyst the client permitted, may complete this." });
     }
     // Guard: an analyst may only complete what the client explicitly permitted.
