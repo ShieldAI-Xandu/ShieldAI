@@ -308,10 +308,16 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
   // maintain — instead of the summary/list views above. Every write made
   // under it is logged to the client's action log by requireAuth itself
   // (see auth.js), not by each individual route, so coverage is total.
+  //
+  // When the staff member driving this is themselves in a demo session (an
+  // investor/prospect's "View as Client" click), the token must carry that
+  // same sandbox's sid — otherwise it verifies as a plain production token
+  // and every impersonated request binds to the real db.json instead of the
+  // sandbox, where the demo client id doesn't exist.
   app.post("/api/staff/clients/:cid/impersonate", ...staff, async (req, res) => {
     const token = signImpersonationToken(req.client, {
       id: req.userId, email: req.userEmail, isAdmin: req.isAdmin,
-    });
+    }, req.isDemo ? req.demoSessionId : null);
     logClientAction(db, {
       clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
       action: "impersonation_started", detail: `Started viewing as client (${req.client.email}).`,

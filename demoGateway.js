@@ -36,18 +36,25 @@ export const DEMO_PERSONAS = {
 };
 
 // ── Token helpers ─────────────────────────────────────────────
-export function signDemoToken(user, sessionId = randomUUID()) {
+// `impersonatedBy` + `expiresIn` let "View as Client" mint a demo-store token
+// (see signImpersonationToken in auth.js) that still carries the sandbox's
+// sid — without this, impersonating a client from inside a demo session would
+// issue a token with no store claim at all, which falls back to binding every
+// subsequent request to the real production store instead of the sandbox.
+export function signDemoToken(user, sessionId = randomUUID(), { impersonatedBy, expiresIn = DEMO_TOKEN_EXPIRY } = {}) {
+  const payload = {
+    userId: user.id,
+    email: user.email,
+    isAdmin: false,           // demo sessions are never admin
+    isAnalyst: !!user.isAnalyst,
+    store: DEMO_STORE,        // the claim that routes this session
+    sid: sessionId,           // the key to this visitor's private sandbox
+  };
+  if (impersonatedBy) payload.impersonatedBy = impersonatedBy;
   return jwt.sign(
-    {
-      userId: user.id,
-      email: user.email,
-      isAdmin: false,           // demo sessions are never admin
-      isAnalyst: !!user.isAnalyst,
-      store: DEMO_STORE,        // the claim that routes this session
-      sid: sessionId,           // the key to this visitor's private sandbox
-    },
+    payload,
     DEMO_JWT_SECRET,
-    { expiresIn: DEMO_TOKEN_EXPIRY }
+    { expiresIn }
   );
 }
 

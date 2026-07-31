@@ -8,7 +8,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import db from "./db.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
-import { verifyDemoToken } from "./demoGateway.js";
+import { verifyDemoToken, signDemoToken } from "./demoGateway.js";
 import { logClientAction } from "./assignmentRoutes.js";
 
 // No hardcoded fallback. This used to be
@@ -152,10 +152,21 @@ function signToken(user) {
 // instead of a second, hand-duplicated read-only UI. impersonatedBy records
 // who's really driving, for the frontend banner and the audit log below.
 // Deliberately much shorter-lived than a normal session token.
-export function signImpersonationToken(client, actor) {
+//
+// `demoSid` is set only when the staff member driving this is themselves
+// inside a demo session (an investor/prospect's "View as Client" click). In
+// that case the token MUST carry the same store:"demo" + sid claims as the
+// analyst's own token, signed with DEMO_JWT_SECRET — otherwise it verifies as
+// a plain production token, and every request made while "viewing as" the
+// client silently binds to the real db.json instead of the visitor's sandbox
+// (where that demo client id doesn't exist), producing 404s and empty data.
+export function signImpersonationToken(client, actor, demoSid = null) {
+  const impersonatedBy = { id: actor.id, email: actor.email, role: actor.isAdmin ? "admin" : "analyst" };
+  if (demoSid) {
+    return signDemoToken(client, demoSid, { impersonatedBy, expiresIn: "45m" });
+  }
   return jwt.sign(
-    { userId: client.id, email: client.email, isAdmin: false, isAnalyst: false,
-      impersonatedBy: { id: actor.id, email: actor.email, role: actor.isAdmin ? "admin" : "analyst" } },
+    { userId: client.id, email: client.email, isAdmin: false, isAnalyst: false, impersonatedBy },
     JWT_SECRET,
     { expiresIn: "45m" }
   );
@@ -180,6 +191,27 @@ export function publicUser(user) {
   };
 }
 
+// Records who's really driving an impersonated request — for the frontend's
+// "viewing as" banner and for the same client action log every other
+// on-behalf-of action already goes through. Shared by both the demo and
+// production branches of requireAuth below. Best-effort: a logging failure
+// must never block the real request.
+async function applyImpersonation(req, impersonatedBy) {
+  if (!impersonatedBy) return;
+  req.impersonatedBy = impersonatedBy;
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return;
+  try {
+    logClientAction(db, {
+      clientUserId: req.userId,
+      actorUserId: impersonatedBy.id,
+      actorRole: impersonatedBy.role,
+      action: "impersonated_request",
+      detail: `${req.method} ${req.path}`,
+    });
+    await db.write();
+  } catch { /* audit logging must never block the actual request */ }
+}
+
 // ── Middleware: require a valid token ─────────────────────────
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -197,6 +229,7 @@ export async function requireAuth(req, res, next) {
     req.isAdmin = false;
     req.isAnalyst = !!demo.isAnalyst;
     req.isDemo = true;
+    await applyImpersonation(req, demo.impersonatedBy);
     return next();
   }
 
@@ -214,27 +247,7 @@ export async function requireAuth(req, res, next) {
 
     // Impersonation ("View as Client"): req.userId already resolves to the
     // CLIENT, so every existing client-scoped route below works unchanged.
-    // We only need to (a) expose who's really driving — the frontend uses
-    // this for the "viewing as" banner via /api/auth/me-adjacent checks —
-    // and (b) write every mutation to the same client action log every
-    // other on-behalf-of action already goes through, so this leaves the
-    // same audit trail as any other staff action. Best-effort: a logging
-    // failure must never block the real request.
-    if (payload.impersonatedBy) {
-      req.impersonatedBy = payload.impersonatedBy;
-      if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-        try {
-          logClientAction(db, {
-            clientUserId: req.userId,
-            actorUserId: payload.impersonatedBy.id,
-            actorRole: payload.impersonatedBy.role,
-            action: "impersonated_request",
-            detail: `${req.method} ${req.path}`,
-          });
-          await db.write();
-        } catch { /* audit logging must never block the actual request */ }
-      }
-    }
+    await applyImpersonation(req, payload.impersonatedBy);
 
     next();
   } catch (err) {
