@@ -8216,7 +8216,11 @@ function FaqItem({ q, a, open, onToggle }) {
 
 function FaqPage({ onNavigate }) {
   const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
+  // Each entry is either a section header ({ section }) or a question
+  // ({ q, a }). Kept as one flat array (not two) so the existing
+  // single-open-accordion index model below doesn't need to change.
   const FAQS = [
+    { section: "Getting started & pricing" },
     { q: "What is a virtual CISO (vCISO)?",
       a: "A vCISO delivers the same function a full-time Chief Information Security Officer would — risk assessment, security strategy, policy, compliance oversight, incident response planning — without the six-figure full-time salary. ShieldAI delivers this as software: an AI-driven engine handles the bulk of the analysis and drafting, with a human security engineer reviewing and standing behind the output." },
     { q: "How is ShieldAI different from hiring a full-time CISO?",
@@ -8237,8 +8241,32 @@ function FaqPage({ onNavigate }) {
       a: "Yes. Self-serve plans are month-to-month with no long-term contract, and you can upgrade, add on features, or manage your subscription directly from your account. If self-serve billing isn't available for your account yet, our Support team can help make the change." },
     { q: "What if I need help beyond what the platform automates?",
       a: "It depends on your tier. Starter and Growth include Mastermind AI chat for questions about your own program. Guided adds periodic review from a ShieldAI security engineer. Managed vCISO puts an engineer on your program full-time, running it end-to-end. And Support is available at every tier for account and product questions." },
+
+    { section: "Using the platform" },
+    { q: "How do I get my first security program?",
+      a: "Start (or open) an assessment and answer the structured questionnaire about your business and current practices — it takes about 15 minutes. As soon as you submit it, you'll see your NIST/CIS posture score immediately, at no cost, on any tier. If your plan includes program building, you can then generate the full program: a prioritized roadmap, written policies, a compliance gap analysis, a recommended tool stack, a training plan, and an executive report, all tailored to what you told us about your business." },
+    { q: "What does my posture score actually mean?",
+      a: "It's a 0–100 score computed by a deterministic scoring engine against the NIST Cybersecurity Framework (or CIS Controls, if you chose that lens at intake) — never an AI estimate. Open the score breakdown to see how each of the five NIST functions (Identify, Protect, Detect, Respond, Recover) scored, and which areas are weakest. Every point traces back to a specific answer you gave, so you can see exactly what to fix to move the number." },
+    { q: "How do employees acknowledge a policy once it's written?",
+      a: "Add your team members to your employee roster (one time), then assign any generated policy to whichever of them need to sign off on it. Each person gets a personal link — no account or password needed — where they read the policy and confirm they've reviewed it. Your Policy Library shows a running count of who's acknowledged each policy and who's still pending, so you always have a real record for an auditor or insurer." },
+    { q: "How do I monitor my actual computers and servers, not just my answers on the questionnaire?",
+      a: "Download the monitoring agent installer for Windows, macOS, or Linux from your dashboard and run it on any endpoint you want visibility into — it takes one enrollment token, generated for you, and a few minutes to install. The agent only ever reports what it observes (antivirus status, disk encryption, patch level, and similar posture signals); it can't receive commands or make changes. If what the agent finds disagrees with what your questionnaire said, we flag it as a discrepancy for you to resolve — the agent informs, it never silently overrides your answer." },
+    { q: "What's the difference between a recommendation and a task?",
+      a: "A recommendation is advice — often drafted from something your monitoring agent found, then reviewed by your assigned analyst before it ever reaches you. You decide what happens to it: handle it yourself, give your analyst permission to handle it, or decline it. A task is remediation work tied to a specific control on your assessment, and completing one automatically re-scores your posture, so you can see the exact point improvement from the fix." },
+    { q: "How does vendor risk management work?",
+      a: "Add the vendors and service providers who touch your business or data — a payment processor, your MSP, cloud hosting, payroll — along with how critical each one is and how much of your data they can access. ShieldAI computes a reassessment due date for each vendor automatically (more critical vendors get reviewed more often) and flags anything overdue or coming due soon, so vendor risk stops being a one-time checklist and becomes something you actually keep current." },
+    { q: "Can I use ShieldAI to train my employees and test them on phishing?",
+      a: "Yes, on plans that include training delivery (bundled on Growth and up; available as an add-on on Starter). Assign your team real, CISA/NIST-aligned training modules with slides and a scored quiz, schedule recurring quarterly training, and track completion and scores per employee. You can also run realistic, safe phishing simulations against your own team and see who clicked — a teaching moment, not a gotcha, with the specific red flags they should have caught shown right after." },
+    { q: "What's the compliance calendar for?",
+      a: "It pulls together everything on your account with a real due date — vendor reassessments, pending policy sign-offs, scheduled training — into one place, plus anything else you add yourself, like an insurance renewal or a license expiration. It's meant to be the one place you check to see what needs attention before it's overdue, instead of hunting across several tabs." },
+    { q: "What's the difference between the CVE exposure and dark-web/breach monitoring sections?",
+      a: "CVE exposure matches the actual software your monitoring agent (or assessment) reports against the live NIST National Vulnerability Database — every CVE ID shown is real and checkable at nvd.nist.gov. Dark-web/breach monitoring checks Have I Been Pwned for your company's verified domain, which requires proving you own the domain first (a DNS record you publish yourself) before we'll query anything against it. Both are read-only intelligence, never an automated fix." },
+    { q: "How do I ask questions about my own security program?",
+      a: "Mastermind AI chat (Starter and up) answers questions grounded entirely in your own account's real data — your posture score, endpoints, recommendations, compliance status — and is upgrade-aware: if you ask about a feature your plan doesn't include, it'll tell you plainly and explain what upgrading would unlock, rather than pretending to show you data it doesn't have. On Guided and Managed vCISO, you can also message your assigned analyst directly from your dashboard." },
+    { q: "Can I track more than one company location or domain?",
+      a: "Yes — you can register more than one domain for breach monitoring (useful if you operate under multiple brands or regional sites), and you can run more than one assessment on the same account if you need to track distinct departments, locations, or lines of business separately." },
   ];
-  const [openIdx, setOpenIdx] = useState(0);
+  const [openIdx, setOpenIdx] = useState(1);
 
   return (
     <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
@@ -8251,7 +8279,10 @@ function FaqPage({ onNavigate }) {
               padding:0,textDecoration:"underline",fontFamily:"inherit"}}>Contact Support</button>.
         </p>
         {FAQS.map((f,i)=>(
-          <FaqItem key={i} q={f.q} a={f.a} open={openIdx===i} onToggle={()=>setOpenIdx(openIdx===i?-1:i)}/>
+          f.section
+            ? <h2 key={i} style={{fontSize:13,fontWeight:700,letterSpacing:1.5,textTransform:"uppercase",
+                color:cyan,margin: i===0 ? "0 0 14px" : "36px 0 14px"}}>{f.section}</h2>
+            : <FaqItem key={i} q={f.q} a={f.a} open={openIdx===i} onToggle={()=>setOpenIdx(openIdx===i?-1:i)}/>
         ))}
       </div>
     </div>
