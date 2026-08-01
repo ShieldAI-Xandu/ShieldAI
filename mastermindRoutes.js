@@ -32,6 +32,7 @@ import { evaluateFramework, evaluateAllFrameworks, remediationContext, listFrame
 import { corroborate, corroborationSummary } from "./agentEvidence.js";
 import { intakeFor, visibleQuestions, intakeStatus, toAssessOpts } from "./frameworkIntake.js";
 import { SECURITY_CHECKLIST } from "./securityChecklist.js";
+import { manualAsText } from "./helpManual.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -1117,6 +1118,9 @@ ADVISORY ONLY:
 - You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
 
 Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
+
+HOW-TO KNOWLEDGE — the ShieldAI user manual. When a client asks how to use a feature ("how do I install the agent," "how do employees acknowledge a policy," "how do I run a phishing test"), answer from this manual rather than guessing at UI details. Don't invent steps, buttons, or menus that aren't described here.
+${manualAsText()}
 
 This client's data and feature access (the only data you have):
 ${JSON.stringify(snap)}`;

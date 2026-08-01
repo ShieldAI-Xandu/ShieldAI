@@ -1,0 +1,423 @@
+// helpManual.js
+// The ShieldAI client user manual — single source of truth for two consumers:
+//   1. The in-app Help Center (src/App.jsx, HelpCenterScreen) renders HELP_MANUAL.
+//   2. Mastermind's client chat system prompt (mastermindRoutes.js) includes
+//      manualAsText() so it can answer "how do I..." questions grounded in the
+//      real product rather than guessing.
+// Keep this file free of JSX/React so both a Vite frontend and a plain Node
+// backend can import it directly.
+//
+// Content reflects ACTUAL current behavior, not aspirational tier gates in
+// tiers.js's FEATURE_CATALOG, where the two disagree (see inline notes on the
+// Threat Intel and Analyst Chat sections) — this file describes what a client
+// can really do today.
+
+export const HELP_MANUAL = [
+  {
+    id: "getting-started",
+    title: "Your Security Assessment & Posture Score",
+    icon: "🚀",
+    tier: "Every plan, including Free",
+    articles: [
+      {
+        id: "run-assessment",
+        title: "Run your security assessment",
+        intro: "The assessment is how ShieldAI learns about your business so everything else — your score, policies, compliance tracking — is tailored to you instead of generic.",
+        steps: [
+          "From Home, click \"New Assessment.\" A conversational AI chat asks about your industry, employee count, the kinds of data you handle, your current tools/IT staff, compliance needs, and any past incidents — usually 7-9 questions.",
+          "Next, choose your posture \"lens\": NIST Cybersecurity Framework, CIS Controls v8.1, or both. This only changes how your score is grouped and labeled, not the questions you'll answer.",
+          "Answer the full checklist: 13 required questions that drive your score, plus optional questions that unlock more compliance controls for tracking. This is also where you pick which compliance frameworks to track (SOC 2, HIPAA, PCI DSS, ISO 27001, and others).",
+          "Submit to see your posture score immediately — this step is free on every plan, no card required.",
+        ],
+        notes: ["You can return to Home and click \"Edit Assessment\" any time your business changes — new tools, new headcount, a new compliance requirement."],
+      },
+      {
+        id: "understand-score",
+        title: "Understand your posture score",
+        intro: "Your score is a 0-100 number computed by a deterministic scoring engine against your chosen framework — never an AI guess.",
+        steps: [
+          "Open the score breakdown to see each NIST function (Identify, Protect, Detect, Respond, Recover) — or CIS hygiene area — scored separately.",
+          "The two lowest-scoring areas are flagged as \"priority areas\" so you know what to fix first.",
+          "If you chose \"Both\" frameworks at intake, an expandable section shows the alternate lens's view of the same answers.",
+          "Every point on the score traces back to a specific answer you gave — there's no black box.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "security-program",
+    title: "Your Security Program",
+    icon: "📋",
+    tier: "Starter and above",
+    articles: [
+      {
+        id: "program-sections",
+        title: "What generating your program produces",
+        intro: "After the checklist, paid plans automatically generate a complete program from your answers: a prioritized roadmap, draft policies, a compliance gap analysis, incident-response playbooks, a recommended tool stack, a training preview, and an executive report.",
+        steps: [
+          "Priorities: your top 5 roadmap items plus 3 quick wins you can knock out immediately.",
+          "Policies (preview): draft policy language across six core areas. These are previews — the actual saved, downloadable, and assignable versions live in the Policy Library (see that section below).",
+          "Workflows (Growth and above): three incident-response playbooks — ransomware, phishing, and data breach.",
+          "Tools: six tool-stack categories describing what capability to look for, not specific brand pitches.",
+          "Executive Report: a leadership-ready summary — headline, business risk, investment/ROI framing, key findings, and next steps. Good to hand to ownership or a board.",
+        ],
+        notes: ["Each section shows a small badge naming which AI model actually generated it — this isn't cosmetic, different sections are intentionally routed to different providers for their strengths."],
+      },
+    ],
+  },
+
+  {
+    id: "policies",
+    title: "Policy Library & Employee Sign-Off",
+    icon: "📄",
+    tier: "Starter and above (download-as-Word requires Growth+; roster capped at 10 employees on Starter, unlimited on Growth+)",
+    articles: [
+      {
+        id: "generate-policy",
+        title: "Generate and save a policy",
+        intro: "The Policy Library is where you get real, usable policy documents — separate from the read-only previews in Your Security Program.",
+        steps: [
+          "Open Policy Library, pick a policy type from the catalog, and answer a few company-specific questions.",
+          "ShieldAI drafts the policy. Review it, then it's automatically saved to \"My Policies.\"",
+          "Download it as a Word document (Growth and above) to edit further or file for an auditor.",
+        ],
+      },
+      {
+        id: "roster-acknowledgment",
+        title: "Get employees to acknowledge a policy",
+        intro: "Every saved policy can be assigned to your team for a real, tracked acknowledgment — no accounts or passwords required on their end.",
+        steps: [
+          "Add your team to the employee roster once (name, email, department). This same roster is shared with the Training feature, so you only enter people once.",
+          "On any saved policy, click \"Assign\" and check off who needs to acknowledge it.",
+          "Each person gets a personal link. They read the policy, check \"I have read this policy and agree to comply with it,\" and confirm.",
+          "The policy card shows a running \"X of Y acknowledged\" count. Use \"Remind\" to nudge anyone still pending, or \"Remove\" to unassign someone.",
+        ],
+        notes: ["This acknowledgment record is a real audit trail — it's exactly what an auditor or cyber-insurance underwriter will ask to see."],
+      },
+    ],
+  },
+
+  {
+    id: "endpoints",
+    title: "Endpoint Monitoring",
+    icon: "🖥️",
+    tier: "Starter and above (5 endpoints on Starter, 25 on Growth, 100 on Guided, unlimited on Managed)",
+    articles: [
+      {
+        id: "install-agent",
+        title: "Install the monitoring agent on a computer",
+        intro: "The agent gives you real, measured visibility into a computer or server's security posture — not just your own self-reported answers.",
+        steps: [
+          "Click the \"🖥️ Endpoints\" button in the top bar, then \"Add Endpoint.\"",
+          "Pick the operating system (Windows, macOS, or Linux). ShieldAI mints a one-time enrollment token (valid 60 minutes) and downloads one installer file with the server address and token already built in.",
+          "Windows: run `powershell -ExecutionPolicy Bypass -File .\\ShieldAI-Install.ps1` as Administrator. macOS/Linux: run `sudo bash ShieldAI-Install-<os>.sh`.",
+          "Within a few minutes the endpoint appears in your fleet list with an Online/Offline status and a posture summary.",
+        ],
+        notes: ["The agent is strictly read-only: it reports what it observes (antivirus status, disk encryption, patch level, and similar) and uploads that report. It cannot receive commands and never changes anything on the machine — there is no channel for that, by design."],
+      },
+      {
+        id: "endpoint-detail",
+        title: "Review what the agent found",
+        intro: "Click into any endpoint in your fleet list for its full detail.",
+        steps: [
+          "Security Events: a feed of anything notable the agent observed, tagged by severity.",
+          "Posture Checks: a pass/fail/warn list per control, with the specific CIS control it maps to where applicable.",
+          "Inventory: disk encryption, firewall status, pending patches, installed security tools, and local-admin account count.",
+          "\"Remove endpoint\" deletes the agent and its history if you retire a machine.",
+        ],
+        notes: ["If what the agent measures disagrees with an answer you gave on your assessment, ShieldAI flags it as a discrepancy for you to resolve in the Compliance tab's Conflict Queue — it never silently overrides your answer."],
+      },
+    ],
+  },
+
+  {
+    id: "recommendations-tasks",
+    title: "Recommendations & Remediation Tasks",
+    icon: "✅",
+    tier: "Recommendations: available whenever you have a monitored endpoint. Remediation/Tasks tab: Growth and above.",
+    articles: [
+      {
+        id: "recommendations",
+        title: "Act on a recommendation",
+        intro: "A recommendation is advice, often drafted from something your monitoring agent found, then reviewed by an analyst before it ever reaches you. It shows up at the top of the Endpoints screen.",
+        steps: [
+          "Read the recommendation and choose one of three options: \"I'll handle it\" (you'll fix it yourself), \"Permit analyst to perform\" (let your analyst make the change with your permission), or \"Decline.\"",
+          "If you chose to handle it yourself, click \"Mark done\" once it's complete.",
+        ],
+      },
+      {
+        id: "tasks",
+        title: "Work through prioritized remediation tasks",
+        intro: "The Remediation tab turns unmet controls into trackable work, ranked by how much they'd actually improve your score.",
+        steps: [
+          "Open the \"Prioritized Gaps\" tab to see every unmet or partial control ranked by projected posture-score gain.",
+          "Click \"Create Task\" on a gap to turn it into tracked work tied to that specific control.",
+          "Move a task through Start → (optionally Block) → \"Complete & Re-score.\"",
+          "Completing a task re-answers that control on your assessment, recomputes your score immediately, and records the exact point gain — which also feeds your posture trend chart over time.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "compliance",
+    title: "Compliance Tracking & Compliance Calendar",
+    icon: "🛡️",
+    tier: "Starter and above (2 additional frameworks on Starter beyond your NIST/CIS foundation, 5 on Growth, 10 on Guided, unlimited on Managed)",
+    articles: [
+      {
+        id: "compliance-overview",
+        title: "Track a compliance framework",
+        intro: "You choose which frameworks to track at intake. The Compliance tab shows real, ongoing status for each.",
+        steps: [
+          "Each framework shows as a card with a readiness percentage and met/partial/gap/not-assessed counts.",
+          "A badge on each card is honest about depth: \"Control-mapped\" means every real, cited control is assessed deterministically (e.g. all 93 ISO 27001 Annex A controls); \"AI-assisted\" means a contextual gap analysis rather than control-by-control; \"Planned\" means it's not built out yet.",
+          "Click into a framework for a control-by-control walkthrough, filterable by status. Some frameworks (like SOC 2) have their own short scoping questionnaire that narrows exactly which controls apply to you.",
+        ],
+      },
+      {
+        id: "conflict-queue",
+        title: "Resolve a conflict between your answers and agent telemetry",
+        intro: "When your monitoring agent measures something that disagrees with what you answered on your assessment, it shows up in the Conflict Queue rather than silently changing either one.",
+        steps: [
+          "Open the Conflict Queue to see the disputed control with both values side by side.",
+          "Choose: keep your original answer, update it to match what the agent measured, or mark the affected hosts \"not representative\" (a reason is required).",
+        ],
+      },
+      {
+        id: "calendar",
+        title: "Use the Compliance Calendar",
+        intro: "The Calendar tab pulls together everything with a real due date so you check one place instead of hunting across tabs.",
+        steps: [
+          "It automatically aggregates: vendor reassessment due-dates, pending policy sign-offs, scheduled training due-dates, and any custom reminders you add yourself (insurance renewal, license expiration, audit date, and similar — one-time or recurring).",
+          "Overdue and due-soon items are called out. Click \"Mark done\" on a recurring item to roll its due date forward automatically.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "threat-intel",
+    title: "Threat Intelligence: CVEs, Dark Web & Email Security",
+    icon: "🔍",
+    tier: "Domain registration/verification and email security: every plan. Real CVE exposure and dark-web/breach data: Growth and above.",
+    articles: [
+      {
+        id: "cve-exposure",
+        title: "Check your CVE exposure",
+        intro: "Click \"🔍 Threat Intel\" in the top bar. The CVE Exposure card matches your monitored software against the live NIST National Vulnerability Database.",
+        steps: [
+          "Review the severity rollup and the top CVEs, each with its real CVSS score and a link you can check directly at nvd.nist.gov.",
+          "Click \"Refresh\" to re-check after installing new software or enrolling a new endpoint.",
+        ],
+        notes: [
+          "Matches depend on your monitored software (from an agent or your assessment) — the more of your stack ShieldAI can see, the more complete this is.",
+          "This is a Growth-plan feature. On Starter and Free, the card shows an upgrade prompt instead of live data.",
+        ],
+      },
+      {
+        id: "domain-monitoring",
+        title: "Set up dark-web/breach monitoring for your domain",
+        intro: "This checks Have I Been Pwned for your company's exposed credentials — but it requires proving you own the domain first.",
+        steps: [
+          "In the Threat Intel screen's domain card, add your company domain (you can register more than one, useful for multiple brands or regional sites). Domain registration and DNS verification are available on every plan, including Free.",
+          "Publish the DNS TXT record shown for your domain, then click \"Check DNS record\" to verify.",
+          "After DNS verification, the domain shows \"Monitoring setup in progress\" while ShieldAI staff completes enrollment with the breach-monitoring source — this is not instant. Once that's done, status changes to fully monitored and shows breach status level, breached-account count, and named breaches. Viewing the actual breach results is a Growth-plan feature — Starter and Free can still register and verify a domain so results are ready the moment they upgrade.",
+        ],
+        notes: ["Any demo or simulated breach data is always clearly labeled \"SIMULATED — DEMO ONLY.\" A \"Not monitored\" or \"Not checked\" status is a coverage gap, not a clean bill of health."],
+      },
+      {
+        id: "email-security",
+        title: "Check your email security posture",
+        intro: "The Email Security card runs a plain public DNS lookup for SPF, DKIM, and DMARC on your domain — no ownership verification needed, since it's public information. Available on every plan.",
+        steps: ["Open the Threat Intel screen to see your current SPF/DKIM/DMARC status for each registered domain."],
+      },
+    ],
+  },
+
+  {
+    id: "vendor-risk",
+    title: "Vendor Risk Registry",
+    icon: "🤝",
+    tier: "Registry: Starter and above (5 vendors on Starter, unlimited on Growth+). AI questionnaire assistant: Growth and above.",
+    articles: [
+      {
+        id: "add-vendor",
+        title: "Add and track a vendor",
+        intro: "Track every vendor or service provider that touches your business or your data — payment processors, your MSP, cloud hosting, payroll, and similar.",
+        steps: [
+          "In Vendor Risk, click \"+ Add vendor\" and fill in name, category, criticality (critical/high/medium/low), data access level, contact details, contract start date, whether they have a current security certification on file, and whether a DPA/BAA is in place.",
+          "ShieldAI automatically sets a reassessment due date based on criticality: critical vendors every 6 months, high/medium every 12 months, low every 24 months. You can override the cadence per vendor.",
+          "The vendor table's Review Status column shows Overdue, Due soon, Current, or Not scheduled, color-coded. Click \"Reassess\" (with an optional note) to reset the clock once you've reviewed a vendor.",
+        ],
+      },
+      {
+        id: "questionnaire-assistant",
+        title: "Draft responses to an incoming security questionnaire",
+        intro: "When one of your own customers sends you a security questionnaire to fill out, this tool drafts grounded answers instead of you starting from a blank page.",
+        steps: [
+          "At the bottom of Vendor Risk, paste the text of the questionnaire your customer sent you.",
+          "Click \"Draft responses.\" Every answer is grounded in your own real program data — your actual generated policies, your actual computed posture score, your actual vendor count.",
+          "Anything ShieldAI can't verify from your real data is flagged \"Needs your input\" rather than guessed — fill those in yourself before sending the response back.",
+          "Past drafts are saved under \"View past responses\" and can be deleted once no longer needed.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "training",
+    title: "Security Training & Phishing Simulation",
+    icon: "🎓",
+    tier: "Training preview: Starter+. Full training delivery and phishing campaigns: Growth+ (or Starter plus the $40/mo Training Delivery add-on). A one-time free phishing test is available on Starter without the add-on.",
+    articles: [
+      {
+        id: "training-preview",
+        title: "View your training preview",
+        intro: "The Training tab shows a 2-module curriculum preview generated as part of your security program.",
+        steps: ["Open the Training tab to preview the modules. This is view-only until you generate the full program."],
+      },
+      {
+        id: "full-training-program",
+        title: "Assign and run full training for your team",
+        intro: "The Training Program tab is where you actually assign coursework and track completion.",
+        steps: [
+          "Generate the full curriculum: 12 core modules over 3 months, plus a quarterly refresher and an optional manager track.",
+          "Add employees to your roster (shared with the Policy Library — enter someone once, use them in both places).",
+          "Under \"Assign,\" pick learners and topics and set a due date. Under \"Quarterly,\" schedule a topic for every active learner at once.",
+          "Each learner gets a personal `/train/:token` link (no login required) with slides and a scored quiz for each module.",
+          "Track completion, overdue learners, and average scores under Overview, and export a CSV from Reports.",
+        ],
+      },
+      {
+        id: "phishing-sim",
+        title: "Run a phishing simulation",
+        intro: "Test whether your team recognizes a phishing attempt with a real, safe simulated email — never a fake credential-harvesting page.",
+        steps: [
+          "In the Phishing Sim sub-tab, pick a scenario and choose which learners to target.",
+          "Click \"Create Draft\" to review it, then \"Send Now\" to actually send the simulated emails (a confirmation prompt appears since these are real messages).",
+          "Watch the click-rate percentage roll in, and open \"Details\" for a per-person breakdown (Sent/Clicked/Pending/Send failed).",
+          "Anyone who clicks lands on an educational page showing exactly which red flags in that scenario should have tipped them off — a teaching moment, not a gotcha.",
+        ],
+        notes: ["If you're on Starter without the training add-on, you can still send one free trial phishing test to up to 3 named people with no roster setup — a good way to try it before upgrading."],
+      },
+    ],
+  },
+
+  {
+    id: "evidence",
+    title: "Evidence & Audit Readiness",
+    icon: "🗂️",
+    tier: "Growth and above",
+    articles: [
+      {
+        id: "attach-evidence",
+        title: "Keep proof on file for completed work",
+        intro: "The Evidence tab tracks whether your completed remediation actually has documentation behind it — exactly what an auditor or insurer will ask for.",
+        steps: [
+          "The coverage banner shows what percentage of completed tasks have proof on file, color-coded (green 80%+, amber 50%+, red below).",
+          "The \"Completed — proof missing\" list shows exactly which completed tasks still need it. Click \"Attach proof\" and add a short note.",
+          "You can also add general evidence directly: a title, a note (a note alone counts), and optionally a file upload (PDF, image, text, CSV, Word, or Excel, up to 3.5MB). Every file gets a stored integrity hash.",
+          "Download or delete any evidence item at any time.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "reports",
+    title: "Reports",
+    icon: "📊",
+    tier: "Growth and above",
+    articles: [
+      {
+        id: "generate-reports",
+        title: "Generate and download reports",
+        intro: "The Reports tab covers two kinds of reports: some you generate yourself, and some your analyst delivers to you.",
+        steps: [
+          "You can generate a Status Report or an Update Report (optionally scoped to changes since a date you pick) any time, on demand.",
+          "Compliance Report, Insurance Report, Legal Record, and Training Report are staff-delivered — you'll see them appear tagged \"From your analyst\" once one is sent, but you can't generate these yourself.",
+          "Every report opens as a Word document. Reports you generated yourself can also be deleted.",
+        ],
+      },
+    ],
+  },
+
+  {
+    id: "mastermind",
+    title: "Mastermind AI Chat",
+    icon: "🧠",
+    tier: "Starter and above",
+    articles: [
+      {
+        id: "use-mastermind",
+        title: "Ask Mastermind about your own program",
+        intro: "Mastermind is your virtual-CISO assistant, grounded entirely in your own account's real data.",
+        steps: [
+          "Click \"🧠 Mastermind\" in the top bar and ask a question in plain language — about your posture score, endpoints, recommendations, compliance status, or anything else in your program.",
+          "If you ask about a feature your plan doesn't include, Mastermind tells you plainly, explains what the feature does, and names the exact tier or add-on (with price) that would unlock it — it never fabricates or implies it can see data it doesn't have.",
+        ],
+        notes: ["Mastermind is advisory only. It never takes action on your systems or accounts — every recommendation is something you or your analyst act on."],
+      },
+    ],
+  },
+
+  {
+    id: "analyst-chat",
+    title: "Talking to Your Analyst / Support",
+    icon: "💬",
+    tier: "Guided and above (direct in-app analyst chat). Every plan can still reach the team via the public Support form.",
+    articles: [
+      {
+        id: "message-analyst",
+        title: "Message your analyst",
+        intro: "Click \"💬 Chat\" in the top bar for threaded messaging with your assigned ShieldAI analyst.",
+        steps: [
+          "Type your message and send — your analyst (or, if none is assigned yet, the ShieldAI team) is notified.",
+          "The thread stays open for follow-up; check back for replies or wait for a notification.",
+        ],
+        notes: ["This direct in-app thread is a Guided-plan feature. On Starter and Growth, the Chat button shows an upgrade prompt — use the public Support form (reachable from the sign-in page) for account or product questions instead."],
+      },
+    ],
+  },
+
+  {
+    id: "billing",
+    title: "Plan & Billing",
+    icon: "💳",
+    tier: "Every plan",
+    articles: [
+      {
+        id: "manage-plan",
+        title: "Review or change your plan",
+        intro: "The Plan & Billing tab is always available, regardless of your current tier.",
+        steps: [
+          "See your current plan, price, subscription status, renewal date, and any active add-ons.",
+          "Click \"Manage Billing\" to open the Stripe customer portal (update payment method, view invoices).",
+          "To upgrade, pick a higher tier in the plan comparison grid and click \"Upgrade\" — this goes through Stripe Checkout. Managed vCISO isn't self-serve; click \"Contact Sales\" instead.",
+          "To add the Training Delivery add-on ($40/mo, Starter only — Growth and above already include it), click \"Add\" next to it.",
+          "Downgrades aren't self-serve today — contact your ShieldAI admin to change to a lower tier.",
+        ],
+        notes: ["Anywhere in the app that a feature is locked for your tier, an upgrade prompt pops up automatically telling you exactly what plan or add-on unlocks it and for how much."],
+      },
+    ],
+  },
+];
+
+// Flatten HELP_MANUAL into plain text for Mastermind's system prompt. Kept
+// compact (short intros, numbered steps) rather than verbose prose, since
+// this gets included in every client chat request's token budget.
+export function manualAsText() {
+  const lines = [];
+  for (const section of HELP_MANUAL) {
+    lines.push(`## ${section.title} (${section.tier})`);
+    for (const a of section.articles) {
+      lines.push(`### ${a.title}`);
+      if (a.intro) lines.push(a.intro);
+      (a.steps || []).forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+      (a.notes || []).forEach(n => lines.push(`Note: ${n}`));
+    }
+  }
+  return lines.join("\n");
+}
