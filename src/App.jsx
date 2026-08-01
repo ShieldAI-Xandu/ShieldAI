@@ -4500,7 +4500,7 @@ function DomainRow({ d, onVerify, onRemove, busyKey }) {
   );
 }
 
-function DomainMonitoringCard() {
+function DomainMonitoringCard({ onChange } = {}) {
   const [domains, setDomains] = useState(null);
   const [suggested, setSuggested] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -4533,6 +4533,7 @@ function DomainMonitoringCard() {
       if (!res.ok) throw new Error(data.error || "Could not save that domain.");
       setInput("");
       await load();
+      onChange?.();
     } catch (e) { setError(e.message); }
     finally { setBusyKey(null); }
   }
@@ -4558,6 +4559,7 @@ function DomainMonitoringCard() {
       const data = await res.json().catch(()=>({}));
       if (!res.ok) throw new Error(data.error || "Could not remove that domain.");
       await load();
+      onChange?.();
     } catch (e) { setError(e.message); }
     finally { setBusyKey(null); }
   }
@@ -4728,6 +4730,16 @@ function ThreatIntelSection({ results }) {
   // response, tagged server-side with the real provider), one level above tl.
   const genBy = results?.threatIntel?.generatedBy;
 
+  // DomainMonitoringCard, EmailSecurityCard, and DarkWebExposureCard are
+  // independent, self-fetching siblings with no shared state — each only
+  // loads once on its own mount. Without this, adding/removing a domain in
+  // DomainMonitoringCard left the other two cards silently showing stale
+  // data (or "no domain on file") until a full page reload, since nothing
+  // told them a domain had changed. Bumping this on add/remove and keying
+  // the other cards with it forces a clean remount + refetch.
+  const [domainVersion, setDomainVersion] = useState(0);
+  const onDomainsChanged = () => setDomainVersion(v => v + 1);
+
   // Breach monitoring is live data and independent of the AI-generated threat
   // landscape, so it renders even when the program hasn't been generated yet.
   if (!tl) {
@@ -4737,9 +4749,9 @@ function ThreatIntelSection({ results }) {
           <SectionLabel text="Threat Intelligence"/>
         </div>
         <CveExposureCard/>
-        <DomainMonitoringCard/>
-        <EmailSecurityCard/>
-        <DarkWebExposureCard/>
+        <DomainMonitoringCard onChange={onDomainsChanged}/>
+        <EmailSecurityCard key={domainVersion}/>
+        <DarkWebExposureCard key={domainVersion}/>
         <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
           The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
         </div>
@@ -4760,9 +4772,9 @@ function ThreatIntelSection({ results }) {
       {/* Live, NVD-backed CVE exposure — real data, replaces the old
           model-generated "recentCVEs" card that used to render here. */}
       <CveExposureCard/>
-      <DomainMonitoringCard/>
-      <EmailSecurityCard/>
-      <DarkWebExposureCard/>
+      <DomainMonitoringCard onChange={onDomainsChanged}/>
+      <EmailSecurityCard key={domainVersion}/>
+      <DarkWebExposureCard key={domainVersion}/>
       <div style={{marginBottom:14}}>
         <Card>
           <SectionLabel text="Industry Threat Landscape"/>
