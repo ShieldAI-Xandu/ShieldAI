@@ -17053,6 +17053,9 @@ export default function ShieldAI() {
       showAdmin, showAnalyst, showEndpoints, showMastermind,
       showClientMastermind, showClientChat, showThreatIntel, showHelp,
       assessmentId: currentAssessmentId, programId: currentProgramId,
+      // Staff's own token/user, kept so "Exit client view" still works after
+      // a refresh taken while impersonating — see enterClientView/exitClientView.
+      impersonating,
     };
   }
 
@@ -17066,6 +17069,7 @@ export default function ShieldAI() {
     setShowClientChat(!!resume.showClientChat);
     setShowThreatIntel(!!resume.showThreatIntel);
     setShowHelp(!!resume.showHelp);
+    if (resume.impersonating) setImpersonating(resume.impersonating);
   }
 
   // Back/Forward: restore whichever in-app view a history entry represents.
@@ -17110,7 +17114,7 @@ export default function ShieldAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, publicView, showAdmin, showAnalyst, showEndpoints, showMastermind,
       showClientMastermind, showClientChat, showThreatIntel, showHelp,
-      currentAssessmentId, currentProgramId, restoringSession]);
+      currentAssessmentId, currentProgramId, restoringSession, impersonating]);
 
   // ── Session restoration on mount ──
   // Runs once. If a token survived (see setAuthToken/getAuthToken's localStorage
