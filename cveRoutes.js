@@ -21,7 +21,13 @@ import {
   probeDarkweb,
 } from "./darkwebService.js";
 
-export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient }) {
+export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate }) {
+  // Real CVE/dark-web exposure viewing is the `threatIntel` capability
+  // (Growth+) — matches the Dashboard's Threat Intel tab and FEATURE_CATALOG.
+  // Domain registration/verification and the plain SPF/DKIM/DMARC email-
+  // security lookup live in domainRoutes.js and are intentionally NOT gated
+  // here (see that file) — only the real exposure data is a paid feature.
+  const threatIntelGate = gate ? gate.capability("threatIntel") : (req, res, next) => next();
   // ── Admin: threat-intelligence service status ───────────────
   // Shows which external intel services are configured and what the gaps cost.
   // Deliberately reports capability honestly rather than a green light per key:
@@ -77,7 +83,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
 
   // A client's own consolidated CVE exposure, derived from the software their
   // agents/assessment report. Clients see only their own; staff can pass ?userId=.
-  app.get("/api/client/cve-exposure", requireAuth, async (req, res) => {
+  app.get("/api/client/cve-exposure", requireAuth, threatIntelGate, async (req, res) => {
     let targetId = req.userId;
     const isStaff = req.isAdmin || req.isAnalyst;
     if (req.query.userId && req.query.userId !== req.userId) {
@@ -102,7 +108,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
 
   // Recompute and cache a client's CVE exposure (so Mastermind sees it fresh).
   // Clients may refresh their own; staff may refresh anyone they're allowed to.
-  app.post("/api/client/cve-exposure/refresh", requireAuth, async (req, res) => {
+  app.post("/api/client/cve-exposure/refresh", requireAuth, threatIntelGate, async (req, res) => {
     let targetId = req.userId;
     const isStaff = req.isAdmin || req.isAnalyst;
     if (req.body?.userId && req.body.userId !== req.userId) {
@@ -119,7 +125,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
   // ── Dark-web / breach exposure (Have I Been Pwned) ──────────────
   // A client's breach exposure for their domain. Honest about inactive/
   // unverified states — never a fabricated all-clear.
-  app.get("/api/client/darkweb-exposure", requireAuth, async (req, res) => {
+  app.get("/api/client/darkweb-exposure", requireAuth, threatIntelGate, async (req, res) => {
     let targetId = req.userId;
     const isStaff = req.isAdmin || req.isAnalyst;
     if (req.query.userId && req.query.userId !== req.userId) {
@@ -135,7 +141,7 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
     res.json({ userId: targetId, configured: darkwebConfigured() || !!req.isDemo, exposure });
   });
 
-  app.post("/api/client/darkweb-exposure/refresh", requireAuth, async (req, res) => {
+  app.post("/api/client/darkweb-exposure/refresh", requireAuth, threatIntelGate, async (req, res) => {
     let targetId = req.userId;
     const isStaff = req.isAdmin || req.isAnalyst;
     if (req.body?.userId && req.body.userId !== req.userId) {

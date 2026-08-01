@@ -159,11 +159,18 @@ export function taskSummary(db, depth = "summary") {
 
 // ── Routes ────────────────────────────────────────────────────
 export function registerTaskRoutes(app, {
-  db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds,
+  db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate,
 }) {
   ensure(db);
 
   const userById = (id) => (db.data.users || []).find(u => u.id === id) || null;
+
+  // Prioritized gaps + remediation tasks are the `remediationTasks` capability
+  // (Growth+), matching the Dashboard's Remediation tab. Staff (admin/analyst)
+  // bypass via gate.capability's own admin/analyst check. /api/tasks/controls
+  // (the checklist question catalogue, used during intake by every tier) and
+  // /api/tasks/board (already staff-only, checked inline below) are NOT gated.
+  const tasksGate = gate ? gate.capability("remediationTasks") : (req, res, next) => next();
 
   // Can `actor` act on tasks owned by `ownerUserId`?
   function canAccess(actor, ownerUserId) {
@@ -190,7 +197,7 @@ export function registerTaskRoutes(app, {
 
   // ── Gap analysis: every control ranked by score improvement ──
   // This is the "what should I fix first?" engine.
-  app.get("/api/tasks/gaps", requireAuth, (req, res) => {
+  app.get("/api/tasks/gaps", requireAuth, tasksGate, (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -244,7 +251,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── Simulate a specific change ──
-  app.post("/api/tasks/simulate", requireAuth, (req, res) => {
+  app.post("/api/tasks/simulate", requireAuth, tasksGate, (req, res) => {
     const { controlId, targetLabel, clientId } = req.body || {};
     const targetId = clientId || req.userId;
     const actor = userById(req.userId);
@@ -256,7 +263,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── List tasks ──
-  app.get("/api/tasks", requireAuth, (req, res) => {
+  app.get("/api/tasks", requireAuth, tasksGate, (req, res) => {
     const actor = userById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -290,7 +297,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── Create a task ──
-  app.post("/api/tasks", requireAuth, async (req, res) => {
+  app.post("/api/tasks", requireAuth, tasksGate, async (req, res) => {
     const actor = userById(req.userId);
     const {
       ownerUserId, controlId, targetLabel, title, detail,
@@ -358,7 +365,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── Update a task (status, assignee, due date, etc.) ──
-  app.patch("/api/tasks/:id", requireAuth, async (req, res) => {
+  app.patch("/api/tasks/:id", requireAuth, tasksGate, async (req, res) => {
     const actor = userById(req.userId);
     const task = ensure(db).find(t => t.id === req.params.id);
     if (!task) return res.status(404).json({ error: "Task not found." });
@@ -414,7 +421,7 @@ export function registerTaskRoutes(app, {
   // ── COMPLETE A TASK — the closed loop ──
   // Writes the target answer into the assessment checklist and re-runs the
   // deterministic engine. The posture score moves here, and only here.
-  app.post("/api/tasks/:id/complete", requireAuth, async (req, res) => {
+  app.post("/api/tasks/:id/complete", requireAuth, tasksGate, async (req, res) => {
     const actor = userById(req.userId);
     const task = ensure(db).find(t => t.id === req.params.id);
     if (!task) return res.status(404).json({ error: "Task not found." });
@@ -479,7 +486,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── Delete ──
-  app.delete("/api/tasks/:id", requireAuth, async (req, res) => {
+  app.delete("/api/tasks/:id", requireAuth, tasksGate, async (req, res) => {
     const actor = userById(req.userId);
     const list = ensure(db);
     const i = list.findIndex(t => t.id === req.params.id);
@@ -491,7 +498,7 @@ export function registerTaskRoutes(app, {
   });
 
   // ── Posture history (drives the real trend chart) ──
-  app.get("/api/tasks/posture-history", requireAuth, (req, res) => {
+  app.get("/api/tasks/posture-history", requireAuth, tasksGate, (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });

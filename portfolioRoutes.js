@@ -95,9 +95,17 @@ export function recordPostureSnapshot(db, userId, score, level) {
 
 export function registerPortfolioRoutes(
   app,
-  { db, requireAuth, analystClientIds, analystOwnsClient }
+  { db, requireAuth, analystClientIds, analystOwnsClient, gate }
 ) {
   db.data.postureSnapshots ||= [];
+
+  // In-app analyst messaging is the `analystSupport` capability (Guided+),
+  // matching FEATURE_CATALOG. Below Guided, clients don't get an in-app
+  // thread with an analyst — they use the public Support form/FAQ instead.
+  // Only guards the client's own /api/client/messages endpoints below; the
+  // analyst-side thread (/api/analyst/clients/:id/messages) is staff-only
+  // already and unaffected.
+  const analystSupportGate = gate ? gate.capability("analystSupport") : (req, res, next) => next();
 
   // Analyst-or-admin gate (self-contained; matches the pattern used by the
   // other analyst routes so we don't depend on a shared middleware export).
@@ -892,7 +900,7 @@ export function registerPortfolioRoutes(
   });
 
   // ── Client side of the same thread (self-scoped) ─────────────
-  app.get("/api/client/messages", requireAuth, (req, res) => {
+  app.get("/api/client/messages", requireAuth, analystSupportGate, (req, res) => {
     if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
     const thread = (db.data.clientMessages || [])
       .filter(m => m.clientUserId === req.userId)
@@ -900,7 +908,7 @@ export function registerPortfolioRoutes(
     res.json(thread);
   });
 
-  app.post("/api/client/messages", requireAuth, async (req, res) => {
+  app.post("/api/client/messages", requireAuth, analystSupportGate, async (req, res) => {
     if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
     const message = (req.body?.message || "").trim();
     if (!message) return res.status(400).json({ error: "message is required." });

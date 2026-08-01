@@ -56,6 +56,7 @@ export const TIERS = {
       vendorQuestionnaireAssistant: false, // AI-grounded incoming-questionnaire responder — Growth+
       employeeRoster: false,             // a roster of who works here — Starter+ (separate from paid training delivery)
       complianceCalendar: false,          // unified view of everything coming due — Starter+
+      remediationTasks: false,           // prioritized gaps + remediation task tracking — Growth+
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -110,6 +111,7 @@ export const TIERS = {
       // modules, quarterly scheduling, ongoing phishing campaigns) stays on
       // trainingDelivery — this flag only covers "who works here."
       employeeRoster: true,                // capped at limits.employees (10)
+      remediationTasks: false,             // Prioritized Gaps / Tasks tab is Growth+
       // The calendar is a pure aggregation view over data that's already
       // tier-gated at the source (vendor reassessments need vendorRegistry,
       // training due-dates need trainingDelivery, etc.) plus a small set of
@@ -161,8 +163,9 @@ export const TIERS = {
       vendorQuestionnaireAssistant: true,   // BUNDLED from Growth up
       employeeRoster: true,                 // uncapped from Growth up (trainingDelivery already implies this)
       complianceCalendar: true,             // uncapped from Growth up
+      remediationTasks: true,               // Prioritized Gaps / Tasks tab — Growth+
     },
-    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
+    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence, remediation tasks & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
 
   guided: {
@@ -204,6 +207,7 @@ export const TIERS = {
       vendorQuestionnaireAssistant: true, // plus periodic analyst review of anything flagged needsHumanInput
       employeeRoster: true,
       complianceCalendar: true,
+      remediationTasks: true,
     },
     features: ["Everything in Growth", "Periodic engineer review", "Analyst review of flagged questionnaire answers", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
@@ -247,6 +251,7 @@ export const TIERS = {
       vendorQuestionnaireAssistant: true, // engineer owns the registry and drafts/delivers responses white-glove
       employeeRoster: true,
       complianceCalendar: true,
+      remediationTasks: true,
     },
     features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
@@ -289,6 +294,7 @@ export const FEATURE_CATALOG = [
   { key: "trainingDelivery", capability: "trainingDelivery", name: "Full training generation & delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
   { key: "reportsAccess",    capability: "reportsAccess",    name: "Status, compliance & insurance reports", minTier: "growth" },
   { key: "evidenceAccess",   capability: "evidenceAccess",   name: "Evidence & audit readiness", minTier: "growth" },
+  { key: "remediationTasks", capability: "remediationTasks", name: "Prioritized remediation tasks & gap tracking", minTier: "growth" },
   { key: "workflowsAccess",  capability: "workflowsAccess",   name: "Incident response workflows", minTier: "growth" },
   { key: "vendorRegistry", capability: "vendorRegistry", name: "Vendor risk registry (add/track/reassess vendors)", minTier: "starter" },
   { key: "vendorQuestionnaireAssistant", capability: "vendorQuestionnaireAssistant", name: "AI-assisted incoming security questionnaire responses", minTier: "growth" },
