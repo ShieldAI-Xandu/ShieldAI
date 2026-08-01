@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
 import ComplianceWorkspace, { ConflictQueue } from "./ComplianceWorkspace.jsx";
+import { HELP_MANUAL } from "../helpManual.js";
 
 // ─────────────────────────────────────────────────────────────
 //  DESIGN TOKENS
@@ -1701,7 +1702,34 @@ const SEV_TONE = {
 };
 function cveSevColor(s) { return SEV_TONE[String(s || "UNKNOWN").toUpperCase()] || C.textSec; }
 
+// Inline "upgrade to unlock" teaser for the two threatIntel-gated cards
+// (CVE exposure, dark-web/breach). Domain registration/verification and the
+// plain email-security lookup are intentionally NOT gated — see
+// DomainMonitoringCard/EmailSecurityCard — so only these two show this.
+function ThreatIntelLockedCard({ title, blurb }) {
+  return (
+    <Card style={{marginBottom:14,textAlign:"center",padding:"28px 20px"}}>
+      <div style={{fontSize:22,marginBottom:8}}>🔒</div>
+      <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:6}}>{title}</div>
+      <p style={{fontSize:12.5,color:C.textSec,lineHeight:1.6,margin:"0 0 16px",maxWidth:440,marginInline:"auto"}}>
+        {blurb}
+      </p>
+      <button onClick={() => showUpgradePrompt({
+          error: "Real threat intelligence isn't included on your current plan.",
+          code: "UPGRADE_REQUIRED", capability: "threatIntel", currentTier: "starter", requiresTier: "growth",
+        })}
+        style={{padding:"9px 20px",borderRadius:9,border:"none",cursor:"pointer",
+          background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+          color:C.bg,fontSize:13,fontWeight:700}}>
+        Upgrade to Growth
+      </button>
+    </Card>
+  );
+}
+
 function CveExposureCard() {
+  const { can } = useCapabilities();
+  const hasAccess = can("threatIntel");
   const [data, setData] = useState(null);     // { software, exposure, note? }
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1717,7 +1745,12 @@ function CveExposureCard() {
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (hasAccess) load(); }, [hasAccess]);
+
+  if (!hasAccess) {
+    return <ThreatIntelLockedCard title="CVE Exposure"
+      blurb="Live matching of your monitored software against the real NIST National Vulnerability Database. This is a Growth-plan feature."/>;
+  }
 
   async function refresh() {
     setRefreshing(true); setError(null);
@@ -1851,6 +1884,11 @@ function CveExposureCard() {
 // actual breach results once verified. This is that missing piece.
 // ─────────────────────────────────────────────────────────────
 function DarkWebExposureCard({ clientId } = {}) {
+  // Staff (admin/analyst) viewing a specific client via `clientId` are exempt
+  // from tier gating, same as everywhere else `can()` is used — this only
+  // locks the card for a client viewing their own unmonitored account.
+  const { can } = useCapabilities();
+  const hasAccess = can("threatIntel");
   const [data, setData] = useState(null);   // { userId, configured, exposure }
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1867,7 +1905,12 @@ function DarkWebExposureCard({ clientId } = {}) {
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, [clientId]);
+  useEffect(() => { if (hasAccess) load(); }, [clientId, hasAccess]);
+
+  if (!hasAccess) {
+    return <ThreatIntelLockedCard title="Breach & Dark-Web Exposure"
+      blurb="Real Have I Been Pwned monitoring for your verified company domain. This is a Growth-plan feature."/>;
+  }
 
   async function refresh() {
     setRefreshing(true); setError(null);
@@ -6901,6 +6944,7 @@ function Dashboard({ assessment, results, onReset }) {
   const hasWorkflows = can("workflowsAccess");
   const hasCompliance = can("complianceAccess");
   const hasEvidence = can("evidenceAccess");
+  const hasTasks = can("remediationTasks");
   const hasThreatIntel = can("threatIntel");
   const hasReports = can("reportsAccess");
   const hasVendorRegistry = can("vendorRegistry");
@@ -6975,7 +7019,7 @@ function Dashboard({ assessment, results, onReset }) {
     library: <LockedFeature icon="📚" title="Policy Library" capability="createPolicies"
       blurb="Generate and store a full library of security policy documents."
       points={["Every policy in our catalog, customized to you","Save, edit, and re-download anytime","No limit on paid tiers"]}/>,
-    remediation: <LockedFeature icon="🛠️" title="Remediation Tracking" capability="evidenceAccess"
+    remediation: <LockedFeature icon="🛠️" title="Remediation Tracking" capability="remediationTasks"
       blurb="Turn every compliance gap into a tracked, assignable task."
       points={["Tasks generated from your actual gaps","Progress tracked toward re-scoring","Owner and due-date assignment"]}/>,
     evidence: <LockedFeature icon="📎" title="Evidence & Audit Readiness" capability="evidenceAccess"
@@ -7001,7 +7045,7 @@ function Dashboard({ assessment, results, onReset }) {
     // engine actually concluded from their answers (capped to their plan's
     // framework limit server-side — see complianceRoutes.js).
     compliance: !hasCompliance ? lockedSections.compliance : <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
-    remediation: !hasEvidence ? lockedSections.remediation : <RemediationSection/>,
+    remediation: !hasTasks ? lockedSections.remediation : <RemediationSection/>,
     evidence:    !hasEvidence ? lockedSections.evidence : <EvidenceSection/>,
     vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
     calendar:    !hasCalendar ? lockedSections.calendar : <ComplianceCalendarSection onNavigate={setSection}/>,
@@ -8328,9 +8372,9 @@ function SupportPage({ onNavigate }) {
       <div style={{maxWidth:640,margin:"0 auto",padding:"56px 24px 90px"}}>
         <h1 style={{fontSize:34,fontWeight:800,letterSpacing:-1,margin:"0 0 12px"}}>We're here to help</h1>
         <p style={{fontSize:15,color:dim,lineHeight:1.6,margin:"0 0 8px"}}>
-          Already a ShieldAI customer? Sign in and use Mastermind chat (Starter and up) for questions
-          about your own program, or reach your assigned analyst directly if you're on Guided or
-          Managed vCISO.
+          Already a ShieldAI customer? Sign in and check the in-app Help Center (❓ in the top bar) for
+          a full walkthrough of every feature, use Mastermind chat (Starter and up) for questions about
+          your own program, or reach your assigned analyst directly.
         </p>
         <p style={{fontSize:15,color:dim,lineHeight:1.6,margin:"0 0 28px"}}>
           For everything else — billing, compliance questions, or anything before you sign up — check
@@ -8376,6 +8420,107 @@ function SupportPage({ onNavigate }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  HELP CENTER — the in-app user manual. Content lives in helpManual.js
+//  (shared with Mastermind's client chat system prompt, mastermindRoutes.js,
+//  so the assistant's "how do I..." answers and this reference page never
+//  drift out of sync). Reachable via the top-bar "❓ Help" button; not
+//  tier-gated, since explaining a locked feature and what unlocks it is
+//  exactly what a client on a lower tier needs to read here too.
+// ─────────────────────────────────────────────────────────────
+function HelpArticle({ article }) {
+  const ink = C.text, dim = C.textSec, line = C.border;
+  return (
+    <div style={{padding:"16px 18px",border:`1px solid ${line}`,borderRadius:10,marginBottom:12,background:C.card}}>
+      <div style={{fontSize:14.5,fontWeight:700,color:ink,marginBottom:6}}>{article.title}</div>
+      {article.intro && <div style={{fontSize:13,color:dim,lineHeight:1.6,marginBottom:10}}>{article.intro}</div>}
+      {!!(article.steps||[]).length && (
+        <ol style={{margin:"0 0 10px",paddingLeft:20}}>
+          {article.steps.map((s,i)=>(
+            <li key={i} style={{fontSize:13,color:ink,lineHeight:1.6,marginBottom:6}}>{s}</li>
+          ))}
+        </ol>
+      )}
+      {(article.notes||[]).map((n,i)=>(
+        <div key={i} style={{fontSize:12.5,color:C.accent,lineHeight:1.6,padding:"8px 11px",
+          background:`${C.accent}0F`,border:`1px solid ${C.accent}33`,borderRadius:8,marginTop:6}}>
+          {n}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HelpCenterScreen() {
+  const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent;
+  const [selectedId, setSelectedId] = useState(HELP_MANUAL[0].id);
+  const [query, setQuery] = useState("");
+
+  const q = query.trim().toLowerCase();
+  const searching = q.length > 0;
+  const matches = !searching ? [] : HELP_MANUAL.flatMap(section =>
+    section.articles
+      .filter(a => (a.title + " " + (a.intro||"") + " " + (a.steps||[]).join(" ")).toLowerCase().includes(q))
+      .map(a => ({ section, article: a }))
+  );
+
+  const selected = HELP_MANUAL.find(s => s.id === selectedId) || HELP_MANUAL[0];
+
+  return (
+    <div>
+      <h1 style={{fontSize:28,fontWeight:800,letterSpacing:-0.5,margin:"0 0 6px"}}>Help Center</h1>
+      <p style={{fontSize:13.5,color:dim,lineHeight:1.6,margin:"0 0 20px"}}>
+        A walkthrough of every ShieldAI feature. Can't find your answer here? Ask Mastermind (🧠 above) —
+        it's grounded in this same manual — or message your analyst via 💬 Chat.
+      </p>
+      <input
+        placeholder={'Search the manual (e.g. "install agent", "policy acknowledgment", "phishing")'}
+        value={query} onChange={e=>setQuery(e.target.value)}
+        style={{width:"100%",padding:"11px 14px",background:C.bg,border:`1px solid ${line}`,
+          borderRadius:9,color:ink,fontSize:14,boxSizing:"border-box",marginBottom:24,fontFamily:"inherit"}}/>
+
+      {searching ? (
+        <div>
+          <div style={{fontSize:12,color:C.textMut,marginBottom:14}}>
+            {matches.length} result{matches.length===1?"":"s"} for "{query}"
+          </div>
+          {matches.length === 0 && (
+            <div style={{fontSize:13.5,color:dim}}>No matches. Try a different term, or ask Mastermind directly.</div>
+          )}
+          {matches.map(({section, article}, i) => (
+            <div key={i}>
+              <div style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",
+                color:cyan,margin:"0 0 8px"}}>{section.icon} {section.title}</div>
+              <HelpArticle article={article}/>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{display:"flex",gap:28,alignItems:"flex-start",flexWrap:"wrap"}}>
+          <div style={{flex:"0 0 240px",minWidth:200}}>
+            {HELP_MANUAL.map(section => (
+              <button key={section.id} onClick={()=>setSelectedId(section.id)}
+                style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",
+                  background: selectedId===section.id ? `${cyan}18` : "none",
+                  border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",
+                  color: selectedId===section.id ? cyan : dim,
+                  fontWeight: selectedId===section.id ? 700 : 500,
+                  fontSize:13,marginBottom:2}}>
+                {section.icon} {section.title}
+              </button>
+            ))}
+          </div>
+          <div style={{flex:"1 1 480px",minWidth:280}}>
+            <div style={{fontSize:20,fontWeight:800,margin:"0 0 4px"}}>{selected.icon} {selected.title}</div>
+            <div style={{fontSize:12,color:C.textMut,marginBottom:16}}>{selected.tier}</div>
+            {selected.articles.map(a => <HelpArticle key={a.id} article={a}/>)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -16865,6 +17010,12 @@ export default function ShieldAI() {
   // deleted). Nothing about that section actually depends on a program, so
   // it gets its own direct entry point instead.
   const [showThreatIntel, setShowThreatIntel] = useState(false);
+  // The in-app user manual — a Help Center covering every client-facing
+  // feature. Same content Mastermind's client chat draws its "how do I..."
+  // answers from (helpManual.js), rendered here as a browsable/searchable
+  // reference. Not tier-gated: explaining a locked feature and how upgrading
+  // unlocks it is exactly what a client without that plan needs to read too.
+  const [showHelp, setShowHelp] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
   // "View as Client": staff acting as a client with a short-lived impersonation
@@ -16884,6 +17035,83 @@ export default function ShieldAI() {
       : (user.isAnalyst || user.email === ANALYST_EMAIL)
   );
 
+  // ── Navigation state: refresh persistence + Back/Forward ──
+  // Every view change (phase, which overlay panel is open, which logged-out
+  // sub-page) funnels through one snapshot. That snapshot is (a) written to
+  // sessionStorage so a hard refresh can restore it below, and (b) pushed
+  // onto the browser's history stack so Back/Forward move between in-app
+  // views instead of exiting the app entirely — previously nothing in this
+  // file ever called history.pushState, so from the browser's perspective
+  // every screen the user saw was the SAME single history entry, and one
+  // Back press (or an accidental trackpad back-swipe) dropped straight out
+  // to whatever page was open before ShieldAI loaded (e.g. a Google search).
+  const lastNavKeyRef = useRef(null);
+
+  function snapshotNavState() {
+    return {
+      phase, publicView,
+      showAdmin, showAnalyst, showEndpoints, showMastermind,
+      showClientMastermind, showClientChat, showThreatIntel, showHelp,
+      assessmentId: currentAssessmentId, programId: currentProgramId,
+    };
+  }
+
+  function applyNavOverlays(resume) {
+    if (!resume) return;
+    setShowAdmin(!!resume.showAdmin);
+    setShowAnalyst(!!resume.showAnalyst);
+    setShowEndpoints(!!resume.showEndpoints);
+    setShowMastermind(!!resume.showMastermind);
+    setShowClientMastermind(!!resume.showClientMastermind);
+    setShowClientChat(!!resume.showClientChat);
+    setShowThreatIntel(!!resume.showThreatIntel);
+    setShowHelp(!!resume.showHelp);
+  }
+
+  // Back/Forward: restore whichever in-app view a history entry represents.
+  useEffect(() => {
+    function onPopState(e) {
+      const s = e.state;
+      if (!s || !s.__shieldaiNav) return; // foreign/unmarked entry — leave as-is
+      lastNavKeyRef.current = JSON.stringify(s);
+      if (s.publicView) setPublicView(s.publicView);
+      applyNavOverlays(s);
+      if (s.phase === "dashboard" && s.assessmentId) {
+        openProgram(s.assessmentId, s.programId).catch(() => setPhase("home"));
+      } else if (s.phase === "console" && s.assessmentId && s.programId) {
+        setConsoleTarget({ assessmentId: s.assessmentId, programId: s.programId });
+        setPhase("console");
+      } else {
+        // Mid-onboarding phases (intake/checklist/framework/edit/analysis)
+        // can't be safely rebuilt without their in-progress draft data, so
+        // they resolve to Home rather than a half-populated screen.
+        setPhase("home");
+      }
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Every view change: persist it, and if it's genuinely new, record a
+  // browser history entry for it (replacing the very first entry so Back
+  // from the initial view works too, then pushing new ones after that).
+  useEffect(() => {
+    if (restoringSession) return;
+    const snap = snapshotNavState();
+    saveResumeState(snap);
+    const key = JSON.stringify(snap);
+    if (key === lastNavKeyRef.current) return;
+    const isFirst = lastNavKeyRef.current === null;
+    lastNavKeyRef.current = key;
+    const state = { ...snap, __shieldaiNav: true };
+    if (isFirst) window.history.replaceState(state, "");
+    else window.history.pushState(state, "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, publicView, showAdmin, showAnalyst, showEndpoints, showMastermind,
+      showClientMastermind, showClientChat, showThreatIntel, showHelp,
+      currentAssessmentId, currentProgramId, restoringSession]);
+
   // ── Session restoration on mount ──
   // Runs once. If a token survived (see setAuthToken/getAuthToken's localStorage
   // persistence), re-fetch the user and, if we saved a "resume" marker before
@@ -16893,7 +17121,14 @@ export default function ShieldAI() {
     let cancelled = false;
     async function restore() {
       const token = getAuthToken();
-      if (!token) { setRestoringSession(false); return; }
+      if (!token) {
+        // Logged-out marketing/about/support/faq/investor sub-page — safe to
+        // restore directly, no server round trip needed.
+        const resume = loadResumeState();
+        if (resume?.publicView) setPublicView(resume.publicView);
+        setRestoringSession(false);
+        return;
+      }
       try {
         const res = await authFetch(`${API_BASE}/api/auth/me`);
         if (!res.ok) throw new Error("Session expired");
@@ -16944,7 +17179,10 @@ export default function ShieldAI() {
         }
         // Any other saved phase (intake/checklist/framework/edit/analysis) is
         // mid-onboarding and not worth resuming — those default back to Home,
-        // which is already a safe, sensible landing spot.
+        // which is already a safe, sensible landing spot. Overlay panels
+        // (admin/analyst/threat intel/help/mastermind) don't depend on any
+        // in-flight wizard data though, so those restore unconditionally.
+        applyNavOverlays(resume);
       } catch {
         // Token invalid/expired — clear it rather than looping on a dead session.
         setAuthToken(null);
@@ -17242,12 +17480,22 @@ export default function ShieldAI() {
             color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🔍 Threat Intel
         </button>
+        <button onClick={() => setShowHelp(true)}
+          style={{padding:"5px 12px",background:`${C.textSec}18`,
+            border:`1px solid ${C.border}`,borderRadius:6,
+            color:C.textSec,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          ❓ Help
+        </button>
         {!user.isAdmin && !user.isAnalyst && (
-          <button onClick={() => setShowClientChat(true)}
-            style={{padding:"5px 12px",background:`${C.green}1E`,
-              border:`1px solid ${C.green}55`,borderRadius:6,
-              color:C.green,fontSize:11,cursor:"pointer",fontWeight:600}}>
-            💬 Chat
+          <button onClick={() => can("analystSupport")
+              ? setShowClientChat(true)
+              : setUpgradePrompt({ error:"Direct analyst messaging is available on the Guided plan and above. Upgrade to Guided ($699/mo) to message your assigned analyst directly — or reach our team any time via the Support form.", code:"UPGRADE_REQUIRED", capability:"analystSupport", currentTier:user.tier, requiresTier:"guided" })}
+            title={can("analystSupport") ? "" : "Guided plan feature"}
+            style={{padding:"5px 12px",
+              background: can("analystSupport") ? `${C.green}1E` : C.surface,
+              border:`1px solid ${can("analystSupport") ? C.green+"55" : C.border}`,borderRadius:6,
+              color: can("analystSupport") ? C.green : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            {can("analystSupport") ? "💬 Chat" : "🔒 Chat"}
           </button>
         )}
         {!user.isAdmin && !user.isAnalyst && (
@@ -17319,7 +17567,14 @@ export default function ShieldAI() {
   // console, it's reachable directly. Available to every account (including
   // staff acting as their own client), not just standard clients.
   if (showThreatIntel) {
+    // Wrapped in CapabilityContext so CveExposureCard/DarkWebExposureCard (which
+    // read useCapabilities() to gate the real CVE/breach data behind threatIntel,
+    // Growth+) resolve the caller's actual tier here too — this overlay sits
+    // outside the "console" phase's own Provider. Domain registration/verification
+    // and the plain email-security lookup stay reachable for every tier; only the
+    // exposure data itself is gated, inside those two cards.
     return (
+      <CapabilityContext.Provider value={{ can, tier: user.tier, capabilities: user.capabilities || {} }}>
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
         <TopBar/>
         <div style={{maxWidth:900,margin:"0 auto",padding:"32px 24px",width:"100%"}}>
@@ -17329,6 +17584,23 @@ export default function ShieldAI() {
             ← Back
           </button>
           <ThreatIntelSection results={null}/>
+        </div>
+      </div>
+      </CapabilityContext.Provider>
+    );
+  }
+
+  if (showHelp) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
+        <TopBar/>
+        <div style={{maxWidth:1080,margin:"0 auto",padding:"32px 24px 90px",width:"100%"}}>
+          <button onClick={() => setShowHelp(false)}
+            style={{marginBottom:20,padding:"7px 14px",background:"none",border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            ← Back
+          </button>
+          <HelpCenterScreen/>
         </div>
       </div>
     );
