@@ -57,6 +57,7 @@ export const TIERS = {
       employeeRoster: false,             // a roster of who works here — Starter+ (separate from paid training delivery)
       complianceCalendar: false,          // unified view of everything coming due — Starter+
       remediationTasks: false,           // prioritized gaps + remediation task tracking — Growth+
+      supportCenter: false,              // in-app Support Center (ticketed requests + Mastermind chat) — Starter+
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -118,6 +119,7 @@ export const TIERS = {
       // manually-entered reminders — near-zero cost, so it's included from
       // Starter up like the roster and vendor registry.
       complianceCalendar: true,             // capped at limits.calendarEntries (20) for custom entries
+      supportCenter: true,                  // in-app Support Center (ticketed requests + Mastermind chat) — Starter+
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
@@ -164,6 +166,7 @@ export const TIERS = {
       employeeRoster: true,                 // uncapped from Growth up (trainingDelivery already implies this)
       complianceCalendar: true,             // uncapped from Growth up
       remediationTasks: true,               // Prioritized Gaps / Tasks tab — Growth+
+      supportCenter: true,
     },
     features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence, remediation tasks & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
   },
@@ -208,6 +211,7 @@ export const TIERS = {
       employeeRoster: true,
       complianceCalendar: true,
       remediationTasks: true,
+      supportCenter: true,
     },
     features: ["Everything in Growth", "Periodic engineer review", "Analyst review of flagged questionnaire answers", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
@@ -252,6 +256,7 @@ export const TIERS = {
       employeeRoster: true,
       complianceCalendar: true,
       remediationTasks: true,
+      supportCenter: true,
     },
     features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
@@ -300,6 +305,7 @@ export const FEATURE_CATALOG = [
   { key: "vendorQuestionnaireAssistant", capability: "vendorQuestionnaireAssistant", name: "AI-assisted incoming security questionnaire responses", minTier: "growth" },
   { key: "employeeRoster", capability: "employeeRoster", name: "Employee roster & policy acknowledgment tracking", minTier: "starter" },
   { key: "complianceCalendar", capability: "complianceCalendar", name: "Compliance calendar (everything coming due, in one place)", minTier: "starter" },
+  { key: "supportCenter",    capability: "supportCenter",    name: "In-app Support Center (ticketed requests + Mastermind chat)", minTier: "starter" },
   { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
   { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
 ];

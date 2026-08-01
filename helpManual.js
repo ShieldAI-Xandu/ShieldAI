@@ -367,7 +367,7 @@ export const HELP_MANUAL = [
     id: "analyst-chat",
     title: "Talking to Your Analyst / Support",
     icon: "💬",
-    tier: "Guided and above (direct in-app analyst chat). Every plan can still reach the team via the public Support form.",
+    tier: "Direct in-app analyst chat: Guided and above. Support Center (Mastermind help chat + ticketed requests): Starter and above. Free tier reaches the team via the public Support form.",
     articles: [
       {
         id: "message-analyst",
@@ -377,7 +377,18 @@ export const HELP_MANUAL = [
           "Type your message and send — your analyst (or, if none is assigned yet, the ShieldAI team) is notified.",
           "The thread stays open for follow-up; check back for replies or wait for a notification.",
         ],
-        notes: ["This direct in-app thread is a Guided-plan feature. On Starter and Growth, the Chat button shows an upgrade prompt — use the public Support form (reachable from the sign-in page) for account or product questions instead."],
+        notes: ["This direct in-app thread is a Guided-plan feature. On Starter and Growth, use the Support Center instead (see below) — or the public Support form for account or product questions."],
+      },
+      {
+        id: "support-center",
+        title: "Use the Support Center",
+        intro: "Click \"🎫 Support\" in the top bar for an instant Mastermind answer or to open a ticketed support request — no assigned analyst required.",
+        steps: [
+          "\"Chat with Mastermind\" jumps straight into the same Mastermind assistant used elsewhere in the app, grounded in your own account.",
+          "\"Submit a support request\" opens a ticket: pick a topic, describe what you need, and send. Whichever analyst is assigned to you (or, if none yet, the ShieldAI team) is notified and can reply from their own console.",
+          "Your past requests are listed below the form, tagged Open or Resolved. Click one to see the full reply thread and add a follow-up — replying to a resolved request reopens it automatically.",
+        ],
+        notes: ["The Support Center is a Starter-plan feature. Free tier sees an upgrade prompt instead and should use the public Support form."],
       },
     ],
   },

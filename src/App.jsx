@@ -8333,13 +8333,18 @@ function FaqPage({ onNavigate }) {
   );
 }
 
+// Shared with the authenticated Support Center's ticket form (SupportCenter,
+// below) so the topic list never drifts between the logged-out and
+// logged-in versions of "contact support."
+const SUPPORT_TOPICS = ["Technical question", "Billing question", "Compliance question", "Sales question", "Something else"];
+
 function SupportPage({ onNavigate }) {
   const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
   const [form, setForm] = useState({ name:"", email:"", company:"", topic:"Technical question", message:"" });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [err, setErr] = useState(null);
-  const TOPICS = ["Technical question", "Billing question", "Compliance question", "Sales question", "Something else"];
+  const TOPICS = SUPPORT_TOPICS;
 
   async function submit() {
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim());
@@ -11376,6 +11381,7 @@ function AdminPanel({ onClose }) {
             { id:"training", label:"Training" },
             { id:"frameworks", label:"Frameworks" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
+            { id:"support", label:"Support" },
             { id:"audit", label:"Audit Log" },
           ].map(t => {
             const on = listTab === t.id;
@@ -11538,6 +11544,8 @@ function AdminPanel({ onClose }) {
             onDelete={deleteLead}
           />
         )}
+
+        {listTab === "support" && <SupportRequestConsole/>}
 
         {listTab === "audit" && (
           <div>
@@ -11908,6 +11916,174 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
                         Expires {new Date(l.accessExpiresAt).toLocaleString()} ({l.accessTtlHours||( l.accessType==="investor"?96:48)}h window)
                       </span>
                     )}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SUPPORT REQUEST CONSOLE — shared by AdminPanel and AnalystConsole. The
+//  backend (GET /api/analyst/support-requests) already scopes the list
+//  correctly per caller — admins see every client's tickets, analysts see
+//  only their assigned clients' — so this component needs no scope prop and
+//  no client-side filtering to preserve analyst isolation; it just renders
+//  whatever the server decided this caller is allowed to see.
+//
+//  SUPPORT_STATUSES is also used by the client-facing SupportCenter below,
+//  which the ticket status badges must visually match.
+// ─────────────────────────────────────────────────────────────
+const SUPPORT_STATUSES = [
+  { id:"open",     label:"Open",     color:C.accent },
+  { id:"resolved", label:"Resolved", color:C.textMut },
+];
+
+function SupportRequestConsole() {
+  const [tickets, setTickets] = useState(null);
+  const [filter, setFilter] = useState("open");
+  const [openId, setOpenId] = useState(null);
+  const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(null);
+
+  const load = useCallback(() => {
+    authFetch(`${API_BASE}/api/analyst/support-requests`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setTickets(Array.isArray(d) ? d : []))
+      .catch(() => setTickets([]));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function sendReply(id) {
+    if (!reply.trim()) return;
+    setBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/support-requests/${id}/reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: reply.trim() }),
+      });
+      if (res.ok) { setReply(""); load(); }
+    } finally { setBusy(null); }
+  }
+
+  async function setStatus(id, status) {
+    setBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/support-requests/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) load();
+    } finally { setBusy(null); }
+  }
+
+  if (tickets === null) return <Spinner/>;
+
+  const counts = tickets.reduce((acc,t)=>{ acc[t.status]=(acc[t.status]||0)+1; return acc; }, {});
+  const shown = filter === "all" ? tickets : tickets.filter(t => t.status === filter);
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+        <SectionLabel text="Support Requests"/>
+        <button onClick={load}
+          style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ↻ Refresh
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[{id:"all",label:`All (${tickets.length})`}, ...SUPPORT_STATUSES.map(s=>({
+            id:s.id, label:`${s.label} (${counts[s.id]||0})`, color:s.color }))].map(f=>{
+            const on = filter === f.id;
+            return (
+              <button key={f.id} onClick={()=>setFilter(f.id)}
+                style={{padding:"5px 12px",borderRadius:20,cursor:"pointer",fontSize:12,fontWeight:600,
+                  background: on ? `${f.color||C.accent}22` : "transparent",
+                  border:`1px solid ${on ? (f.color||C.accent) : C.border}`,
+                  color: on ? (f.color||C.text) : C.textSec,
+                  fontFamily:"Inter,system-ui,sans-serif"}}>
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {shown.length === 0 ? (
+        <Card style={{textAlign:"center",padding:"40px 24px"}}>
+          <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:6}}>
+            {tickets.length === 0 ? "No support requests" : "No requests in this filter"}
+          </div>
+          <p style={{color:C.textSec,fontSize:13,margin:0,lineHeight:1.6}}>
+            {tickets.length === 0
+              ? "Tickets submitted from a client's in-app Support Center will appear here."
+              : "Try a different status filter."}
+          </p>
+        </Card>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {shown.map(t => {
+            const sMeta = SUPPORT_STATUSES.find(s=>s.id===t.status) || SUPPORT_STATUSES[0];
+            const last = t.messages[t.messages.length-1];
+            const isOpen = openId === t.id;
+            return (
+              <Card key={t.id} style={{padding:"16px 18px"}}>
+                <div onClick={()=>setOpenId(isOpen ? null : t.id)} style={{cursor:"pointer"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                    <span style={{color:C.text,fontWeight:700,fontSize:15}}>{safeText(t.client?.name) || "(unknown client)"}</span>
+                    <Badge label={sMeta.label} color={sMeta.color}/>
+                    <span style={{color:C.textSec,fontSize:13}}>· {safeText(t.topic)}</span>
+                    <span style={{marginLeft:"auto",color:C.textMut,fontSize:11}}>
+                      {new Date(t.updatedAt).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
+                    </span>
+                  </div>
+                  {!isOpen && last && (
+                    <div style={{color:C.textSec,fontSize:13,lineHeight:1.5,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {last.authorRole==="client" ? "" : `${safeText(last.authorLabel)}: `}{safeText(last.body)}
+                    </div>
+                  )}
+                </div>
+
+                {isOpen && (
+                  <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12}}>
+                      {t.messages.map(m => (
+                        <div key={m.id} style={{display:"flex",justifyContent:m.authorRole==="staff"?"flex-end":"flex-start"}}>
+                          <div style={{maxWidth:"85%",padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
+                            background:m.authorRole==="staff"?`${C.green}1A`:C.surface,
+                            border:`1px solid ${m.authorRole==="staff"?C.green+"44":C.border}`,color:C.text}}>
+                            {safeText(m.body)}
+                            <div style={{color:C.textMut,fontSize:10,marginTop:3}}>
+                              {safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:8,marginBottom:10}}>
+                      <input value={reply} onChange={e=>setReply(e.target.value)}
+                        onKeyDown={e=>{if(e.key==="Enter")sendReply(t.id);}}
+                        placeholder="Reply to this client…"
+                        disabled={busy===t.id}
+                        style={{flex:1,padding:"10px 12px",background:C.bg,border:`1px solid ${C.border}`,
+                          borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
+                      <button onClick={()=>sendReply(t.id)} disabled={busy===t.id||!reply.trim()}
+                        style={{padding:"10px 16px",background:reply.trim()?C.green:C.border,
+                          color:reply.trim()?"#04121F":C.textMut,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                          cursor:reply.trim()?"pointer":"default"}}>
+                        {busy===t.id ? "…" : "Reply"}
+                      </button>
+                    </div>
+                    <button onClick={()=>setStatus(t.id, t.status==="open" ? "resolved" : "open")} disabled={busy===t.id}
+                      style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,
+                        borderRadius:6,color:C.textSec,fontSize:12,fontWeight:600,cursor:busy===t.id?"wait":"pointer"}}>
+                      {t.status === "open" ? "Mark resolved" : "Reopen"}
+                    </button>
                   </div>
                 )}
               </Card>
@@ -14576,6 +14752,12 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🎨 Branding
         </button>
+        <button onClick={()=>setView(view==="support"?"portfolio":"support")}
+          style={{padding:"6px 14px",background:view==="support"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="support"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+            fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          🎫 Support
+        </button>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
             color:mmOpen?SOC.bg:SOC.purple,border:`1px solid ${SOC.purple}66`,borderRadius:6,
@@ -14783,6 +14965,18 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
         <Mastermind/>
         <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
           <BrandingManager isAdmin={!!user.isAdmin}/>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "support") {
+    return (
+      <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
+        <Header title="Support Requests"/>
+        <Mastermind/>
+        <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
+          <SupportRequestConsole/>
         </div>
       </div>
     );
@@ -16911,6 +17105,176 @@ function ClientAnalystChat({ onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  SUPPORT CENTER (Starter+) — chat with Mastermind, or submit a ticketed
+//  support request. Distinct from ClientAnalystChat above, which is a live
+//  1:1 thread with a specifically ASSIGNED analyst (Guided+) — a support
+//  request is a discrete ticket any analyst/admin can pick up and answer,
+//  reachable whether or not the client has an assigned analyst yet.
+// ─────────────────────────────────────────────────────────────
+function SupportCenter({ onClose, onOpenMastermind }) {
+  const [tickets, setTickets] = useState(null); // null = loading
+  const [error, setError] = useState(null);
+  const [form, setForm] = useState({ topic: SUPPORT_TOPICS[0], message: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [openId, setOpenId] = useState(null);   // ticket id being viewed/replied to
+  const [reply, setReply] = useState("");
+  const [replying, setReplying] = useState(false);
+
+  const load = useCallback(() => {
+    authFetch(`${API_BASE}/api/client/support-requests`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setTickets(Array.isArray(d) ? d : []))
+      .catch(() => setTickets([]));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function submitTicket() {
+    if (!form.message.trim()) { setError("Please describe what you need help with."); return; }
+    setSubmitting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/support-requests`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: form.topic, message: form.message.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not submit your request.");
+      setForm({ topic: SUPPORT_TOPICS[0], message: "" });
+      load();
+    } catch (e) { setError(e.message); } finally { setSubmitting(false); }
+  }
+
+  async function sendReply(ticketId) {
+    if (!reply.trim()) return;
+    setReplying(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/support-requests/${ticketId}/reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: reply.trim() }),
+      });
+      if (res.ok) { setReply(""); load(); }
+    } finally { setReplying(false); }
+  }
+
+  const field = { width:"100%", padding:"11px 13px", background:C.bg, border:`1px solid ${C.border}`,
+    borderRadius:9, color:C.text, fontSize:14, boxSizing:"border-box", marginBottom:11,
+    fontFamily:"inherit" };
+
+  const openTicket = tickets?.find(t => t.id === openId) || null;
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
+      <div style={{padding:"12px 20px",background:`linear-gradient(135deg,${C.accent}22,${C.purple}11)`,
+        borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:18}}>🎫</span>
+        <span style={{fontWeight:800,fontSize:16}}>Support <span style={{color:C.accent}}>Center</span></span>
+        <button onClick={onClose} style={{marginLeft:"auto",padding:"6px 14px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>← Back</button>
+      </div>
+
+      <div style={{maxWidth:720,margin:"0 auto",padding:"24px 20px 60px"}}>
+        <Card style={{marginBottom:20,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+          <span style={{fontSize:28}}>🧠</span>
+          <div style={{flex:"1 1 260px"}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:2}}>Get an instant answer from Mastermind</div>
+            <div style={{color:C.textSec,fontSize:13}}>Grounded in your own account — posture, endpoints, and how to use every feature.</div>
+          </div>
+          <button onClick={onOpenMastermind}
+            style={{padding:"10px 18px",background:`linear-gradient(135deg,${C.purple},${C.accent})`,
+              color:"#fff",border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+            Chat with Mastermind →
+          </button>
+        </Card>
+
+        <SectionLabel text="Submit a support request"/>
+        <Card style={{marginBottom:24}}>
+          <select value={form.topic} onChange={e=>setForm({...form,topic:e.target.value})} style={field}>
+            {SUPPORT_TOPICS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <textarea placeholder="How can we help?" rows={4} value={form.message}
+            onChange={e=>setForm({...form,message:e.target.value})}
+            style={{...field, resize:"vertical", fontFamily:"inherit", marginBottom:8}}/>
+          {error && <div style={{color:C.red,fontSize:13,marginBottom:10}}>{error}</div>}
+          <button onClick={submitTicket} disabled={submitting}
+            style={{padding:"11px 22px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:14,fontWeight:700,
+              cursor:submitting?"wait":"pointer"}}>
+            {submitting ? "Sending…" : "Submit request"}
+          </button>
+        </Card>
+
+        <SectionLabel text="Your support requests"/>
+        {tickets === null ? (
+          <div style={{display:"flex",justifyContent:"center",padding:30}}><Spinner/></div>
+        ) : tickets.length === 0 ? (
+          <Card style={{textAlign:"center",padding:"30px 20px"}}>
+            <div style={{color:C.textSec,fontSize:13.5}}>No support requests yet — submit one above and an analyst will follow up here.</div>
+          </Card>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {tickets.map(t => {
+              const sMeta = SUPPORT_STATUSES.find(s=>s.id===t.status) || SUPPORT_STATUSES[0];
+              const last = t.messages[t.messages.length-1];
+              const isOpen = openId === t.id;
+              return (
+                <Card key={t.id} style={{padding:"14px 16px"}}>
+                  <div onClick={()=>setOpenId(isOpen ? null : t.id)} style={{cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                      <span style={{fontWeight:700,fontSize:14}}>{safeText(t.topic)}</span>
+                      <Badge label={sMeta.label} color={sMeta.color}/>
+                      <span style={{marginLeft:"auto",color:C.textMut,fontSize:11}}>
+                        {new Date(t.updatedAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {!isOpen && last && (
+                      <div style={{color:C.textSec,fontSize:12.5,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {last.authorRole==="client" ? "You: " : ""}{safeText(last.body)}
+                      </div>
+                    )}
+                  </div>
+                  {isOpen && (
+                    <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
+                      <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12}}>
+                        {t.messages.map(m => (
+                          <div key={m.id} style={{display:"flex",justifyContent:m.authorRole==="client"?"flex-end":"flex-start"}}>
+                            <div style={{maxWidth:"85%",padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
+                              background:m.authorRole==="client"?`${C.accent}1F`:C.surface,
+                              border:`1px solid ${m.authorRole==="client"?C.accent+"44":C.border}`,color:C.text}}>
+                              {safeText(m.body)}
+                              <div style={{color:C.textMut,fontSize:10,marginTop:3}}>
+                                {m.authorRole==="client" ? "You" : safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        <input value={reply} onChange={e=>setReply(e.target.value)}
+                          onKeyDown={e=>{if(e.key==="Enter")sendReply(t.id);}}
+                          placeholder={t.status==="resolved" ? "Reply to reopen this request…" : "Reply…"}
+                          disabled={replying}
+                          style={{flex:1,padding:"10px 12px",background:C.bg,border:`1px solid ${C.border}`,
+                            borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
+                        <button onClick={()=>sendReply(t.id)} disabled={replying||!reply.trim()}
+                          style={{padding:"10px 16px",background:reply.trim()?C.accent:C.border,
+                            color:reply.trim()?C.bg:C.textMut,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                            cursor:reply.trim()?"pointer":"default"}}>
+                          {replying ? "…" : "Send"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  CLIENT MASTERMIND (Enterprise) — scoped to the client's own data
 // ─────────────────────────────────────────────────────────────
 function ClientMastermind({ onClose }) {
@@ -17004,6 +17368,10 @@ export default function ShieldAI() {
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
   const [showClientChat, setShowClientChat] = useState(false);
+  // In-app Support Center (Starter+): submit a ticketed support request, or
+  // jump into the existing Mastermind chat. Separate from showClientChat,
+  // which is the live 1:1 thread with a specifically ASSIGNED analyst (Guided+).
+  const [showSupportCenter, setShowSupportCenter] = useState(false);
   // Threat Intel (CVE exposure, domain/breach monitoring) previously lived
   // ONLY inside a completed program's console nav — unreachable for an
   // account that has a domain on file but no program (or had its program
@@ -17052,6 +17420,7 @@ export default function ShieldAI() {
       phase, publicView,
       showAdmin, showAnalyst, showEndpoints, showMastermind,
       showClientMastermind, showClientChat, showThreatIntel, showHelp,
+      showSupportCenter,
       assessmentId: currentAssessmentId, programId: currentProgramId,
       // Staff's own token/user, kept so "Exit client view" still works after
       // a refresh taken while impersonating — see enterClientView/exitClientView.
@@ -17069,6 +17438,7 @@ export default function ShieldAI() {
     setShowClientChat(!!resume.showClientChat);
     setShowThreatIntel(!!resume.showThreatIntel);
     setShowHelp(!!resume.showHelp);
+    setShowSupportCenter(!!resume.showSupportCenter);
     if (resume.impersonating) setImpersonating(resume.impersonating);
   }
 
@@ -17113,7 +17483,7 @@ export default function ShieldAI() {
     else window.history.pushState(state, "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, publicView, showAdmin, showAnalyst, showEndpoints, showMastermind,
-      showClientMastermind, showClientChat, showThreatIntel, showHelp,
+      showClientMastermind, showClientChat, showThreatIntel, showHelp, showSupportCenter,
       currentAssessmentId, currentProgramId, restoringSession, impersonating]);
 
   // ── Session restoration on mount ──
@@ -17456,6 +17826,14 @@ export default function ShieldAI() {
     return <>{demoBanner}<ClientAnalystChat onClose={() => setShowClientChat(false)}/></>;
   }
 
+  // In-app Support Center (Starter+): ticketed requests + a jump into Mastermind.
+  if (showSupportCenter && !user.isAdmin && !user.isAnalyst) {
+    return <>{demoBanner}<SupportCenter
+      onClose={() => setShowSupportCenter(false)}
+      onOpenMastermind={() => { setShowSupportCenter(false); setShowClientMastermind(true); }}
+    /></>;
+  }
+
   // Analyst console (analyst accounts only). A real analyst has no company
   // of their own, so "Exit Console" signs them out rather than dropping them
   // into an empty client dashboard. An investor demo session is different —
@@ -17521,6 +17899,18 @@ export default function ShieldAI() {
               border:`1px solid ${can("mastermindChat") ? C.purple+"55" : C.border}`,borderRadius:6,
               color: can("mastermindChat") ? C.purple : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
             {can("mastermindChat") ? "🧠 Mastermind" : "🔒 Mastermind"}
+          </button>
+        )}
+        {!user.isAdmin && !user.isAnalyst && (
+          <button onClick={() => can("supportCenter")
+              ? setShowSupportCenter(true)
+              : setUpgradePrompt({ error:"The in-app Support Center is available on the Starter plan and above. Upgrade to Starter ($159/mo) to submit support requests and chat with Mastermind for help — or reach our team any time via the public Support form.", code:"UPGRADE_REQUIRED", capability:"supportCenter", currentTier:user.tier, requiresTier:"starter" })}
+            title={can("supportCenter") ? "" : "Starter plan feature"}
+            style={{padding:"5px 12px",
+              background: can("supportCenter") ? `${C.accent}1E` : C.surface,
+              border:`1px solid ${can("supportCenter") ? C.accent+"55" : C.border}`,borderRadius:6,
+              color: can("supportCenter") ? C.accent : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            {can("supportCenter") ? "🎫 Support" : "🔒 Support"}
           </button>
         )}
         {user.isAdmin && (

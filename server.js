@@ -56,6 +56,7 @@ import { registerTaskRoutes } from "./taskRoutes.js";
 // while the route was unreachable. Registering it makes that testable.
 import { registerEvidenceRoutes } from "./evidenceRoutes.js";
 import { registerPortfolioRoutes } from "./portfolioRoutes.js";
+import { registerSupportRoutes } from "./supportRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
@@ -1743,6 +1744,7 @@ registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClie
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
+registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
