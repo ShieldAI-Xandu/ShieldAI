@@ -17237,6 +17237,10 @@ export default function ShieldAI() {
 
   function handleAuthenticated(userObj) {
     setSessionExpiredNotice(false);
+    // A prior tab occupant's staff impersonation token must never carry into
+    // a new login — otherwise the stale ImpersonationBanner's "Exit to
+    // analyst console" would silently authenticate this new user as them.
+    setImpersonating(null);
     setUser(userObj);
     setPhase("home");
     if (userObj && userObj.mustChangePassword) {
@@ -17269,6 +17273,11 @@ export default function ShieldAI() {
   function signOut() {
     setAuthToken(null);
     clearResumeState();
+    // Without this, the nav-state auto-persist effect (triggered by the
+    // setState calls below) would immediately rewrite the staff member's own
+    // token — still sitting in `impersonating` — back into sessionStorage
+    // right after clearResumeState() just erased it.
+    setImpersonating(null);
     setUser(null);
     setPublicView("marketing");
     setAssessment(null);
