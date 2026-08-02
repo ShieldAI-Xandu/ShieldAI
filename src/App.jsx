@@ -4570,8 +4570,16 @@ function DomainMonitoringCard({ onChange } = {}) {
 
   return (
     <Card style={{marginBottom:14}}>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
         <SectionLabel text="Breach & Dark-Web Monitoring"/>
+        {/* HIBP enrollment is a manual, admin-side step (see domainService.js) —
+            this re-checks whether that's happened since the page loaded, it
+            doesn't trigger any new enrollment work itself. */}
+        <button onClick={load} disabled={loading}
+          style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:7,color:C.textSec,fontSize:11.5,cursor:loading?"default":"pointer"}}>
+          ↻ Refresh status
+        </button>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8,
           padding:"4px 10px",borderRadius:20,
           background: monitoredCount>0 ? `${C.green}15` : `${C.textSec}15`,

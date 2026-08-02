@@ -367,7 +367,7 @@ export function clientView(record, { hibpConfigured = true } = {}) {
         ...base,
         state: "awaiting_hibp",
         headline: "Monitoring setup pending",
-        detail: "Your domain is verified. ShieldAI is enrolling it with our breach-intelligence provider.",
+        detail: "Your domain is verified and queued for enrollment with our breach-intelligence provider — that step hasn't started yet. Check back soon.",
         monitored: false,
         nextStep: "wait",
         ownershipVerifiedAt: record.ownershipVerifiedAt,
