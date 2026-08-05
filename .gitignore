@@ -45,6 +45,10 @@ agent/**/*.token
 ~$*
 *.tmp
 
+# Inno Setup compiler scratch output — the built .exe is copied to
+# agent/installers/windows/ and public/downloads/windows/ instead.
+agent/installers/windows/*/Output/
+
 # Ad-hoc local test payloads (do not commit)
 test.json
 test-gemini.json
