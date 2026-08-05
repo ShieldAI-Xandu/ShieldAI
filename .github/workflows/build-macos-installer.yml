@@ -1,0 +1,65 @@
+name: Build macOS agent installer
+
+# pkgbuild only exists on macOS, so this can't be built on the Windows dev
+# machine — it needs a real macos-latest runner. Manual trigger only: this
+# commits a built binary straight to main, so a human decides when that
+# happens rather than it firing on every push.
+#
+# What it does, unchanged from build-pkg.sh: builds ShieldAI-Agent.pkg from
+# agent/installers/macos/ShieldAI-macOS-Installer-Source/ and publishes it to
+# public/downloads/macos/ (served by GET /api/agent/download/native/macos)
+# and agent/installers/macos/ (alongside the windows/linux installers).
+#
+# The resulting .pkg is unsigned — see README-BUILD-MACOS-INSTALLER.md in the
+# source folder. Gatekeeper will block it on a real client Mac until it's
+# signed and notarized with a paid Apple Developer ID.
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "Server URL to bake in (leave default for production)"
+        required: false
+        default: "https://shieldai-production-627e.up.railway.app"
+      version:
+        description: "Package version"
+        required: false
+        default: "1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build .pkg
+        working-directory: agent/installers/macos/ShieldAI-macOS-Installer-Source
+        run: |
+          chmod +x build-pkg.sh
+          ./build-pkg.sh --server-url "${{ inputs.server_url }}" --version "${{ inputs.version }}"
+
+      - name: Publish built package
+        run: |
+          set -euo pipefail
+          SRC="agent/installers/macos/ShieldAI-macOS-Installer-Source/Output/ShieldAI-Agent.pkg"
+          test -f "$SRC"
+          mkdir -p public/downloads/macos
+          cp "$SRC" public/downloads/macos/ShieldAI-Agent.pkg
+          cp "$SRC" agent/installers/macos/ShieldAI-Agent.pkg
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/downloads/macos/ShieldAI-Agent.pkg agent/installers/macos/ShieldAI-Agent.pkg
+          if git diff --cached --quiet; then
+            echo "No changes to commit (identical rebuild)."
+            exit 0
+          fi
+          git commit -m "Build and publish the macOS agent installer (v${{ inputs.version }})" \
+            -m "Built by the build-macos-installer workflow from build-pkg.sh, unsigned — see README-BUILD-MACOS-INSTALLER.md before sending to a real client."
+          git push
