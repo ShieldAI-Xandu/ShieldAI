@@ -37,9 +37,12 @@ jobs:
 
       - name: Build .pkg
         working-directory: agent/installers/macos/ShieldAI-macOS-Installer-Source
+        env:
+          SERVER_URL: ${{ inputs.server_url }}
+          PKG_VERSION: ${{ inputs.version }}
         run: |
           chmod +x build-pkg.sh
-          ./build-pkg.sh --server-url "${{ inputs.server_url }}" --version "${{ inputs.version }}"
+          ./build-pkg.sh --server-url "$SERVER_URL" --version "$PKG_VERSION"
 
       - name: Publish built package
         run: |
@@ -51,6 +54,8 @@ jobs:
           cp "$SRC" agent/installers/macos/ShieldAI-Agent.pkg
 
       - name: Commit and push
+        env:
+          PKG_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -60,6 +65,6 @@ jobs:
             echo "No changes to commit (identical rebuild)."
             exit 0
           fi
-          git commit -m "Build and publish the macOS agent installer (v${{ inputs.version }})" \
+          git commit -m "Build and publish the macOS agent installer (v$PKG_VERSION)" \
             -m "Built by the build-macos-installer workflow from build-pkg.sh, unsigned — see README-BUILD-MACOS-INSTALLER.md before sending to a real client."
           git push

@@ -39,8 +39,20 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item (Join-Path $here "collect.ps1")   (Join-Path $InstallDir "collect.ps1")   -Force
 Copy-Item (Join-Path $here "agent-run.ps1") (Join-Path $InstallDir "agent-run.ps1") -Force
 
-# 2. Write config (server URL + one-time enrollment token)
+# 2. Write config (server URL + one-time enrollment token). Also clear any
+# agent.json from a prior install — otherwise agent-run.ps1 finds an existing
+# (possibly stale/revoked) agent token and never uses the fresh enrollment
+# token we just wrote, so a reinstall silently fails to re-enroll. agent.json
+# is locked read-only (SYSTEM/Administrators only, no delete) once enrolled,
+# so a plain Remove-Item silently no-ops on the ACL — take ownership and
+# reset it first so the delete actually goes through.
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+$agentJsonPath = Join-Path $DataDir "agent.json"
+if (Test-Path $agentJsonPath) {
+  takeown /F $agentJsonPath 2>&1 | Out-Null
+  icacls $agentJsonPath /reset 2>&1 | Out-Null
+  Remove-Item $agentJsonPath -Force -ErrorAction SilentlyContinue
+}
 @{ serverUrl = $ServerUrl; enrollmentToken = $EnrollmentToken } |
   ConvertTo-Json | Out-File -FilePath (Join-Path $DataDir "config.json") -Encoding utf8
 
