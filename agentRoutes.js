@@ -49,6 +49,20 @@ const AGENT_PACKAGE_FILES = {
   ],
 };
 
+// ── native one-click installers (built artifacts, not generated per-request) ──
+// These wrap the same install.ps1/install.sh above unchanged — a GUI (Windows
+// Inno Setup wizard / macOS pkg) or self-extracting (Linux .run) shell that
+// prompts the person for their enrollment token interactively, rather than
+// having the token baked in server-side like buildInstaller() above. The file
+// on disk is the single source of truth; rebuilding an installer just means
+// dropping a new file at this same path, no route/deploy change needed.
+const DOWNLOADS_DIR = path.join(__dirname, "public", "downloads");
+const NATIVE_INSTALLER_FILES = {
+  windows: { file: "ShieldAI-Agent-Setup.exe", contentType: "application/octet-stream" },
+  macos:   { file: "ShieldAI-Agent.pkg",       contentType: "application/octet-stream" },
+  linux:   { file: "ShieldAI-Agent-Install.run", contentType: "application/octet-stream" },
+};
+
 // ── small helpers ─────────────────────────────────────────────
 const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -531,6 +545,35 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       const isBadInput = /Unsupported OS|is required\./.test(err.message);
       if (!isBadInput) console.error("Personalized installer build error:", err.message);
       res.status(isBadInput ? 400 : 500).json({ error: isBadInput ? err.message : "Could not build the installer." });
+    }
+  });
+
+  // Download the native one-click installer (Setup.exe / .pkg / .run) for an
+  // OS. Unlike the two routes above, nothing is generated per-request — this
+  // streams whatever built file currently sits in public/downloads/<os>/, so
+  // the download link stays stable across rebuilds. No token or server URL
+  // is embedded; the installer prompts for the token interactively at run
+  // time. Same auth boundary as the other agent downloads above.
+  app.get("/api/agent/download/native/:os", requireAuth, async (req, res) => {
+    const os = String(req.params.os || "").toLowerCase();
+    const meta = NATIVE_INSTALLER_FILES[os];
+    if (!meta) {
+      return res.status(400).json({ error: "Unsupported OS. Use windows, linux, or macos." });
+    }
+    try {
+      const buf = await readFile(path.join(DOWNLOADS_DIR, os, meta.file));
+      res.set({
+        "Content-Type": meta.contentType,
+        "Content-Disposition": `attachment; filename="${meta.file}"`,
+        "Content-Length": String(buf.length),
+      });
+      res.send(buf);
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        return res.status(404).json({ error: `The ${os} installer hasn't been built and published yet.` });
+      }
+      console.error("Native installer download error:", err.message);
+      res.status(500).json({ error: "Could not download the installer." });
     }
   });
 

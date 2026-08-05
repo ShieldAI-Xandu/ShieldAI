@@ -2490,6 +2490,30 @@ async function downloadPersonalizedInstaller(os, { serverUrl, enrollmentToken, i
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Download the native one-click installer (Setup.exe / .pkg / .run) for the
+// given OS. Nothing is baked in server-side here — no token, no server URL —
+// the installer prompts for those interactively when it's run. Same
+// auth-protected blob pattern as the downloads above.
+const NATIVE_INSTALLER_FILENAME = {
+  windows: "ShieldAI-Agent-Setup.exe",
+  macos: "ShieldAI-Agent.pkg",
+  linux: "ShieldAI-Agent-Install.run",
+};
+async function downloadNativeInstaller(os) {
+  const res = await authFetch(`${API_BASE}/api/agent/download/native/${os}`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = NATIVE_INSTALLER_FILENAME[os] || `shieldai-agent-installer-${os}`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 // Shared metadata for the report types (icons, labels, one-line descriptions).
 const REPORT_TYPE_META = {
   status:     { icon: "📋", label: "Status Report",      blurb: "Plain-language snapshot of where you stand today." },
@@ -15819,6 +15843,8 @@ function AddEndpointModal({ onClose }) {
   const [expires, setExpires] = useState(null);
   const [installingOs, setInstallingOs] = useState(null);
   const [zipDownloadingOs, setZipDownloadingOs] = useState(null);
+  const [nativeDownloadingOs, setNativeDownloadingOs] = useState(null);
+  const [generatingToken, setGeneratingToken] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -15857,6 +15883,23 @@ function AddEndpointModal({ onClose }) {
     try { await downloadAgentPackage(os); }
     catch (e) { setError(e.message); }
     finally { setZipDownloadingOs(null); }
+  }
+
+  // Generates a token WITHOUT downloading anything — for the native-installer
+  // path below, where the token is copied and pasted into the installer's own
+  // prompt rather than being embedded in a downloaded file.
+  async function handleGenerateToken() {
+    setGeneratingToken(true); setError(null);
+    try { await mintToken(); setTokenForOs("manual"); }
+    catch (e) { setError(e.message); }
+    finally { setGeneratingToken(false); }
+  }
+
+  async function handleNativeDownload(os) {
+    setNativeDownloadingOs(os); setError(null);
+    try { await downloadNativeInstaller(os); }
+    catch (e) { setError(e.message); }
+    finally { setNativeDownloadingOs(null); }
   }
 
   return (
@@ -15898,9 +15941,14 @@ function AddEndpointModal({ onClose }) {
         {token && (
           <div style={{marginBottom:14,padding:"12px 14px",background:`${C.amber}12`,
             border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
-            Enrollment token generated for the {tokenForOs} installer (valid {expires} min, enrolls a
-            single endpoint) — it's already embedded in that file. Installing on another OS mints its
-            own separate token.
+            {tokenForOs === "manual" ? (
+              <>Enrollment token generated (valid {expires} min, enrolls a single endpoint) — paste it
+              into the installer below when it prompts you for one.</>
+            ) : (
+              <>Enrollment token generated for the {tokenForOs} installer (valid {expires} min, enrolls a
+              single endpoint) — it's already embedded in that file. Installing on another OS mints its
+              own separate token.</>
+            )}
             <div style={{display:"flex",gap:8,marginTop:8}}>
               <code style={{flex:1,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:7,color:C.text,fontSize:11.5,wordBreak:"break-all"}}>{token}</code>
@@ -15912,6 +15960,35 @@ function AddEndpointModal({ onClose }) {
             </div>
           </div>
         )}
+
+        <div style={{marginBottom:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+          <div style={{color:C.text,fontSize:13,fontWeight:700,marginBottom:4}}>
+            Or: download the installer app
+          </div>
+          <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:"0 0 10px"}}>
+            A standalone installer for handing off to someone else to run, or if you'd rather not
+            run a PowerShell/shell command yourself. Generate a token and copy it, then run the
+            installer for your OS — it prompts for the token instead of having it baked in.
+          </p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+            <button onClick={handleGenerateToken} disabled={generatingToken}
+              style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,
+                cursor:generatingToken?"wait":"pointer"}}>
+              {generatingToken ? "Generating…" : "Generate token"}
+            </button>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {AGENT_OS_OPTIONS.map(({ os, label }) => (
+              <button key={os} onClick={()=>handleNativeDownload(os)} disabled={nativeDownloadingOs===os}
+                style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,
+                  cursor:nativeDownloadingOs===os?"wait":"pointer"}}>
+                {nativeDownloadingOs===os ? "Downloading…" : `Download for ${label}`}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
 
