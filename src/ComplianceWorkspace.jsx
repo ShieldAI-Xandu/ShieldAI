@@ -179,6 +179,76 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
   );
 }
 
+function fmtWhen(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+  } catch { return iso; }
+}
+
+// One outcome of clicking "Choose this" — the explicit answer to "did that
+// work?" rather than making the client infer it from a card disappearing.
+function ResolutionFeedback({ f, onDismiss }) {
+  const tone = !f.ok ? C.red : f.stillDisputed ? C.amber : C.green;
+  const heading = !f.ok
+    ? "Couldn't save that decision"
+    : f.stillDisputed
+    ? "Recorded — but still open"
+    : "Resolved";
+
+  return (
+    <div style={{
+      background: `${tone}0D`, border: `1px solid ${tone}44`, borderRadius: 10,
+      padding: "12px 14px", marginBottom: 10, position: "relative",
+    }}>
+      <button onClick={onDismiss} title="Dismiss" style={{
+        position: "absolute", top: 8, right: 10, background: "none", border: "none",
+        color: C.textMut, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 4,
+      }}>×</button>
+      <div style={{ color: tone, fontSize: 12.5, fontWeight: 700, marginBottom: 3, paddingRight: 20 }}>
+        {heading} · {safeText(f.decisionLabel)}
+      </div>
+      <div style={{ color: C.textSec, fontSize: 11.5, marginBottom: 4 }}>{safeText(f.question)}</div>
+
+      {!f.ok && (
+        <div style={{ color: C.text, fontSize: 12 }}>{safeText(f.error) || "Something went wrong — try again."}</div>
+      )}
+
+      {f.ok && (
+        <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }}>
+          {safeText(f.note) || safeText(f.effect)}
+        </div>
+      )}
+
+      {f.ok && f.posture && f.posture.delta !== 0 && (
+        <div style={{ color: C.textSec, fontSize: 11.5, marginTop: 4 }}>
+          Posture score {f.posture.before} → {f.posture.after} ({f.posture.delta > 0 ? "+" : ""}{f.posture.delta})
+        </div>
+      )}
+
+      {f.ok && f.stillDisputed && f.remediation && (
+        <div style={{ marginTop: 8, background: C.surface, borderRadius: 8, padding: "9px 11px" }}>
+          <div style={{ color: C.text, fontSize: 11.5, lineHeight: 1.6, marginBottom: f.remediation.failingHosts?.length ? 6 : 0 }}>
+            {safeText(f.remediation.recommendation)}
+          </div>
+          {f.remediation.failingHosts?.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {f.remediation.failingHosts.map((h, i) => (
+                <span key={i} style={{
+                  fontSize: 10, padding: "1px 6px", borderRadius: 4,
+                  background: `${C.red}1A`, color: C.red,
+                }}>{safeText(h)}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── The conflict queue ────────────────────────────────────────
 // Where the agent and the questionnaire disagree. This is the decision point:
 // both values shown, three options, nothing auto-resolved.
@@ -187,6 +257,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
   const [busy, setBusy] = useState(null);
   const [reason, setReason] = useState({});
   const [newAnswer, setNewAnswer] = useState({});
+  const [feedback, setFeedback] = useState([]);
   const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
 
   const load = useCallback(() => {
@@ -199,6 +270,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
     if (decision === "out-of-scope" && !String(reason[c.controlId] || "").trim()) return;
     if (decision === "update-answer" && !newAnswer[c.controlId]) return;
     setBusy(c.controlId + decision);
+    const decisionLabel = c.resolution?.options?.find(o => o.id === decision)?.label || decision;
     try {
       const res = await authFetch(`${apiBase}/api/compliance/conflicts/resolve`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -207,9 +279,22 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
           reason: reason[c.controlId], newAnswer: newAnswer[c.controlId],
         }),
       });
+      const d = await res.json().catch(() => ({}));
+      const entry = { fbId: `${c.controlId}-${decision}-${Date.now()}`, ok: res.ok, question: c.question, decisionLabel, ...d };
+      setFeedback(fb => [entry, ...fb].slice(0, 8));
       if (res.ok) { load(); onResolved && onResolved(); }
     } finally { setBusy(null); }
   }
+
+  function dismissFeedback(fbId) {
+    setFeedback(fb => fb.filter(f => f.fbId !== fbId));
+  }
+
+  const feedbackNode = feedback.length > 0 && (
+    <div style={{ marginBottom: 14 }}>
+      {feedback.map(f => <ResolutionFeedback key={f.fbId} f={f} onDismiss={() => dismissFeedback(f.fbId)} />)}
+    </div>
+  );
 
   if (!data) return null;
   if (!data.reportingHosts) {
@@ -221,13 +306,16 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
   }
   if (!data.conflicts?.length) {
     return (
-      <div style={{ background: `${C.green}0D`, border: `1px solid ${C.green}33`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
-        <div style={{ color: C.green, fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}>
-          Agent and answers agree
-        </div>
-        <div style={{ color: C.textSec, fontSize: 11.5 }}>
-          {data.confirmed?.length || 0} control(s) independently confirmed across {data.reportingHosts} host(s).
-          That's measured evidence — worth showing an auditor.
+      <div style={{ marginBottom: 16 }}>
+        {feedbackNode}
+        <div style={{ background: `${C.green}0D`, border: `1px solid ${C.green}33`, borderRadius: 10, padding: "12px 14px" }}>
+          <div style={{ color: C.green, fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}>
+            Agent and answers agree
+          </div>
+          <div style={{ color: C.textSec, fontSize: 11.5 }}>
+            {data.confirmed?.length || 0} control(s) independently confirmed across {data.reportingHosts} host(s).
+            That's measured evidence — worth showing an auditor.
+          </div>
         </div>
       </div>
     );
@@ -245,6 +333,8 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
         Your answers and what the agent measured disagree. We won't pick a side — the agent only sees
         endpoints, and you know your environment. {safeText(data.boundary)}
       </p>
+
+      {feedbackNode}
 
       {data.conflicts.map(c => (
         <div key={c.controlId} style={{
@@ -280,15 +370,33 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
             </div>
           </div>
 
-          <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 12 }}>
+          <div style={{ color: C.textMut, fontSize: 11, lineHeight: 1.5, marginBottom: 10 }}>
             The agent can see: {safeText(c.agentObserved.whatItSees)} — but not: {safeText(c.agentObserved.whatItCannotSee)}
           </div>
 
+          {/* What's actually at stake, and what happens if this is left alone. */}
+          {(c.resolution?.whyThisMatters || c.resolution?.unresolvedMeaning) && (
+            <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.6, marginBottom: 12 }}>
+              {c.resolution?.whyThisMatters && <div>{safeText(c.resolution.whyThisMatters)}</div>}
+              {c.resolution?.unresolvedMeaning && (
+                <div style={{ marginTop: 2 }}>{safeText(c.resolution.unresolvedMeaning)}</div>
+              )}
+            </div>
+          )}
+
           {c.previouslyResolved && (
             <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
-              <span style={{ color: C.amber, fontSize: 11 }}>
-                You resolved this before ({safeText(c.previouslyResolved.decision)}) and the telemetry still disagrees.
-              </span>
+              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, marginBottom: 2 }}>
+                Still open — you already decided this
+              </div>
+              <div style={{ color: C.text, fontSize: 11, lineHeight: 1.5 }}>
+                You chose "{safeText(c.previouslyResolved.decisionLabel)}"
+                {c.previouslyResolved.resolvedAt && <> on {fmtWhen(c.previouslyResolved.resolvedAt)}</>}.
+                {c.previouslyResolved.reason && <> Reason given: "{safeText(c.previouslyResolved.reason)}".</>}
+                {" "}The agent's telemetry still disagrees, so it stays on this list — that's expected for
+                "my answer is the goal" and "out of scope" choices, and only clears once the failing host(s)
+                report back clean.
+              </div>
             </div>
           )}
 

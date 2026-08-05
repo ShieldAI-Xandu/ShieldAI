@@ -1,0 +1,87 @@
+#!/bin/bash
+# ============================================================================
+#  ShieldAI Agent — macOS postinstall
+# ----------------------------------------------------------------------------
+#  Runs automatically (as root) after pkgbuild lays down the payload. Prompts
+#  the person for the enrollment token via a native dialog, then runs the
+#  existing macos/install.sh unchanged — same launchd daemon, same config.json,
+#  same behavior as the manual process in INSTALL_CHECKLIST.md.
+#
+#  __SERVER_URL__ is replaced by build-pkg.sh at build time — do not edit
+#  this file directly for a one-off change; rebuild instead so the change
+#  survives the next build.
+# ============================================================================
+
+SERVER_URL="__SERVER_URL__"
+INSTALL_SCRIPT="/usr/local/shieldai/installer/macos/install.sh"
+LOG="/var/log/shieldai-agent-install.log"
+
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >> "$LOG"; }
+log "postinstall starting (server=$SERVER_URL)"
+
+# pkg postinstall scripts always run as root, with no attached GUI session of
+# their own. To show a dialog to the person actually sitting at the machine,
+# we target the console (currently logged-in) user explicitly.
+CONSOLE_USER="$(stat -f "%Su" /dev/console 2>/dev/null || echo "")"
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+  log "No interactive console user detected (unattended/MDM install?)."
+  log "Enroll manually later with:"
+  log "  sudo $INSTALL_SCRIPT --server-url \"$SERVER_URL\" --enrollment-token \"PASTE-TOKEN\""
+  exit 0
+fi
+CONSOLE_UID="$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")"
+if [ -z "$CONSOLE_UID" ]; then
+  log "Could not resolve uid for console user $CONSOLE_USER."
+  exit 0
+fi
+
+ask_token() {
+  launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" osascript <<'APPLESCRIPT'
+try
+  set theResponse to display dialog "Paste the enrollment token for this Mac. You'll find it on your ShieldAI dashboard under Endpoints -> Add Endpoint." default answer "" with title "ShieldAI Agent Setup" buttons {"Cancel", "Continue"} default button "Continue"
+  if button returned of theResponse is "Cancel" then
+    return "CANCELLED"
+  end if
+  return text returned of theResponse
+on error
+  return "CANCELLED"
+end try
+APPLESCRIPT
+}
+
+notify_user() {
+  launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" osascript -e "$1" >/dev/null 2>&1 || true
+}
+
+TOKEN=""
+ATTEMPTS=0
+while [ -z "$TOKEN" ] && [ "$ATTEMPTS" -lt 3 ]; do
+  TOKEN="$(ask_token)"
+  if [ "$TOKEN" = "CANCELLED" ]; then
+    log "User cancelled the enrollment dialog."
+    notify_user 'display alert "ShieldAI Agent" message "Setup was cancelled. The agent files are installed but this Mac is not yet enrolled. Re-run the installer with a fresh token when ready." as warning'
+    exit 0
+  fi
+  ATTEMPTS=$((ATTEMPTS + 1))
+done
+
+if [ -z "$TOKEN" ]; then
+  log "No token entered after $ATTEMPTS attempt(s); giving up."
+  notify_user 'display alert "ShieldAI Agent" message "No token was entered. Re-run the installer with a fresh enrollment token from your ShieldAI dashboard." as warning'
+  exit 0
+fi
+
+log "Token received, running install.sh..."
+if bash "$INSTALL_SCRIPT" --server-url "$SERVER_URL" --enrollment-token "$TOKEN" --interval-minutes 60 >> "$LOG" 2>&1; then
+  log "install.sh completed successfully."
+  notify_user 'display notification "This Mac is now connected to ShieldAI." with title "ShieldAI Agent"'
+else
+  log "install.sh FAILED — see $LOG for details."
+  notify_user 'display alert "ShieldAI Agent" message "Setup did not finish successfully. Check /var/log/shieldai-agent-install.log, or contact your ShieldAI contact." as critical'
+fi
+
+# Always exit 0: the payload (files) installed correctly regardless of
+# enrollment outcome, so Installer.app shouldn't report a failed install for
+# what is really a network/token problem. The log + alerts above carry the
+# real status.
+exit 0

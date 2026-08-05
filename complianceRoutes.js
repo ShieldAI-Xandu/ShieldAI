@@ -456,6 +456,7 @@ Write remediation steps to close this gap. Requirements for your answer:
       .filter(c => c.status === "disputed")
       .map(c => {
         const q = SECURITY_CHECKLIST.find(x => x.id === c.evidenceId);
+        const prev = resolved[c.evidenceId];
         return {
           controlId: c.evidenceId,
           question: c.question,
@@ -473,8 +474,13 @@ Write remediation steps to close this gap. Requirements for your answer:
           resolution: c.resolution,
           // A previously-resolved conflict that reappears is a real signal: the
           // client said "we'll fix it" and the machines still disagree. Shown, not
-          // silently re-opened as if it were new.
-          previouslyResolved: resolved[c.evidenceId] || null,
+          // silently re-opened as if it were new. Enriched with a human label and
+          // the effect text so the UI doesn't have to re-derive it from the id.
+          previouslyResolved: prev ? {
+            ...prev,
+            decisionLabel: RESOLUTION_OPTIONS.find(o => o.id === prev.decision)?.label || prev.decision,
+            effect: RESOLUTION_OPTIONS.find(o => o.id === prev.decision)?.effect || null,
+          } : null,
         };
       });
 
@@ -554,16 +560,41 @@ Write remediation steps to close this gap. Requirements for your answer:
     a.updatedAt = nowIso();
     await db.write();
 
+    // Re-run the same corroboration the conflicts list uses, right now, against
+    // this one control. This is the actual answer to "did that work?" — rather
+    // than making the client infer it from whether a card vanished on reload.
+    const reports = agentReportsFor(targetId);
+    const recheck = corroborate(reports, toEvidence(checklistOf(a))).find(c => c.evidenceId === controlId) || null;
+    const stillDisputed = recheck?.status === "disputed";
+
     res.json({
       controlId, decision,
       recorded: a.data.conflictResolutions[controlId],
       posture: postureDelta,
       effect: opt.effect,
+      stillDisputed,
+      // Only meaningful when stillDisputed is true — concrete next step, not
+      // just "still open". fix-the-gap and out-of-scope are EXPECTED to stay
+      // open by design (the answer didn't change); update-answer staying open
+      // means the new answer still doesn't match every host, which is worth
+      // flagging distinctly.
+      remediation: stillDisputed ? {
+        failingHosts: (recheck.agent.perHost || []).filter(h => h.status === "fail").map(h => h.host),
+        hostsFailing: recheck.agent.fail,
+        hostsTotal: recheck.agent.hosts,
+        recommendation: decision === "fix-the-gap"
+          ? `Apply the required configuration on the ${recheck.agent.fail} failing host(s) below. The conflict clears itself the next time the agent reports back — no need to resolve it again.`
+          : decision === "out-of-scope"
+          ? "Your exception is recorded, so this will keep appearing as an open item by design. If these hosts should come into scope later, remediate them and it'll clear on its own."
+          : "The new answer still doesn't match what the agent measured on every host — check the per-host detail and confirm this is really the current state before moving on.",
+      } : null,
       note: decision === "fix-the-gap"
         ? "Your answer stands. The conflict stays open until the agent's telemetry agrees — it will keep appearing in your report until then, which is the honest state."
         : decision === "out-of-scope"
         ? "Recorded with your reason. The hosts remain out of scope for this control; an auditor may ask you to justify that."
-        : "Answer updated. Your posture score and every affected framework have re-scored.",
+        : stillDisputed
+        ? "Your answer was updated, but it still doesn't match every host the agent reports on."
+        : "Answer updated and confirmed by telemetry. Your posture score and every affected framework have re-scored.",
     });
   });
 

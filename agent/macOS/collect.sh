@@ -13,7 +13,7 @@
 # Pure bash + built-in macOS utilities. Uses `plutil`/`python3` only if present.
 
 set -u
-AGENT_VERSION="1.1.0"
+AGENT_VERSION="1.0.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -132,12 +132,9 @@ else
   add_check "av_present" "Protect" "Built-in malware protection" "unknown" "low" "XProtect not found" \
     "Could not confirm XProtect presence." "10"
 fi
-# Third-party EDR/AV detection
+# Third-party EDR detection
 if [ -d "/Applications/Falcon.app" ] || pgrep -q falcon 2>/dev/null; then add_tool "CrowdStrike Falcon"; fi
 if [ -d "/Applications/SentinelOne" ] || pgrep -q SentinelAgent 2>/dev/null; then add_tool "SentinelOne"; fi
-if [ -d "/Applications/Sophos Endpoint.app" ] || pgrep -qi "Sophos" 2>/dev/null; then add_tool "Sophos"; fi
-if [ -d "/Applications/Malwarebytes.app" ]; then add_tool "Malwarebytes"; fi
-if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon" 2>/dev/null; then add_tool "ESET"; fi
 
 # ── 6. Pending software updates ───────────────────────────────
 if have softwareupdate; then
@@ -190,34 +187,10 @@ else
     "Consider enabling automatic update checks." "7"
 fi
 
-# ── installed software inventory (read-only) ──────────────────
-# Enumerates installed applications + versions. Prefers system_profiler's JSON
-# output (parsed with the built-in plutil/python where available); falls back to
-# reading each /Applications/*.app Info.plist. Read-only. Feeds CVE matching.
-SOFTWARE_JSON=""
-build_software() {
-  local first=1 name ver
-  # Fallback approach that needs no extra tools: read app bundle Info.plists.
-  local appdir line
-  for appdir in /Applications/*.app /Applications/*/*.app; do
-    [ -d "$appdir" ] || continue
-    name="$(basename "$appdir" .app)"
-    ver=""
-    if [ -f "$appdir/Contents/Info.plist" ]; then
-      ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$appdir/Contents/Info.plist" 2>/dev/null)"
-    fi
-    [ -z "$name" ] && continue
-    if [ $first -eq 1 ]; then first=0; else SOFTWARE_JSON+=","; fi
-    SOFTWARE_JSON+="{\"name\":$(json_escape "$name"),\"version\":$(json_escape "${ver:-}")}"
-  done
-}
-build_software 2>/dev/null || SOFTWARE_JSON=""
-
 # ── inventory ─────────────────────────────────────────────────
 INV="{\"localAdmins\":[],\"installedSecurityTools\":[${SEC_TOOLS}],"
 INV+="\"diskEncryption\":$(json_escape "$ENC_OBSERVED"),\"pendingPatches\":0,"
-INV+="\"firewall\":$(json_escape "$FW_OBSERVED"),"
-INV+="\"software\":[${SOFTWARE_JSON}]}"
+INV+="\"firewall\":$(json_escape "$FW_OBSERVED")}"
 
 # ── assemble report ───────────────────────────────────────────
 REPORT="{\"agentVersion\":$(json_escape "$AGENT_VERSION"),\"schema\":1,"

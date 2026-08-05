@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ShieldAI Agent — Linux Installer (self-extracting)
+# ----------------------------------------------------------------------------
+#  Single-file installer: chmod +x, then run it (as root/sudo). No separate
+#  download of scripts, no folder to keep together — everything needed is
+#  packed into this one file.
+#
+#    sudo ./ShieldAI-Agent-Install.run
+#
+#  It prompts for the enrollment token, then runs the existing linux/install.sh
+#  unchanged — same systemd service + timer, same config.json, same behavior
+#  as the manual process in INSTALL_CHECKLIST.md.
+# ============================================================================
+set -euo pipefail
+
+DEFAULT_SERVER_URL="https://shieldai-production-627e.up.railway.app"
+SERVER_URL="$DEFAULT_SERVER_URL"
+INTERVAL_MINUTES=60
+ENROLLMENT_TOKEN=""
+
+# Advanced/testing overrides — clients never need these:
+#   ./ShieldAI-Agent-Install.run --server-url http://localhost:3001
+#   ./ShieldAI-Agent-Install.run --enrollment-token XXXX   (skip the prompt)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --server-url) SERVER_URL="$2"; shift 2 ;;
+    --enrollment-token) ENROLLMENT_TOKEN="$2"; shift 2 ;;
+    --interval-minutes) INTERVAL_MINUTES="$2"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "This installer needs root to register the agent as a system service."
+  echo "Re-run as:  sudo ./ShieldAI-Agent-Install.run"
+  exit 1
+fi
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "systemd (systemctl) is required and wasn't found on this machine." >&2
+  exit 1
+fi
+
+echo "==============================================="
+echo " ShieldAI Agent — Linux Installer"
+echo "==============================================="
+echo
+
+if [ -z "$ENROLLMENT_TOKEN" ]; then
+  echo "In your ShieldAI dashboard: Endpoints -> Add Endpoint, then copy the"
+  echo "enrollment token it generates (valid ~60 minutes, single use)."
+  echo
+  read -r -p "Paste enrollment token: " ENROLLMENT_TOKEN
+  while [ -z "$ENROLLMENT_TOKEN" ]; do
+    read -r -p "Token can't be empty. Paste enrollment token: " ENROLLMENT_TOKEN
+  done
+fi
+
+WORKDIR="$(mktemp -d /tmp/shieldai-install.XXXXXX)"
+cleanup() { rm -rf "$WORKDIR"; }
+trap cleanup EXIT
+
+# Everything after the __PAYLOAD_BELOW__ marker line is a base64-encoded
+# tar.gz of the agent/ folder (linux/install.sh, linux/collect.sh,
+# shared/agent-run.sh). Extract it to a temp dir and run the real installer.
+ARCHIVE_LINE=$(awk '/^__PAYLOAD_BELOW__$/ {print NR + 1; exit}' "$0")
+tail -n "+$ARCHIVE_LINE" "$0" | base64 -d | tar xz -C "$WORKDIR"
+
+echo
+echo "Installing..."
+bash "$WORKDIR/agent/linux/install.sh" \
+  --server-url "$SERVER_URL" \
+  --enrollment-token "$ENROLLMENT_TOKEN" \
+  --interval-minutes "$INTERVAL_MINUTES"
+
+echo
+echo "Verify any time with: systemctl status shieldai-agent.timer"
+exit 0
+
+__PAYLOAD_BELOW__
+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

@@ -1,0 +1,10 @@
+/* No reset previously existed here, so the browser's default <body> margin
+   (8px) sat around every `height: 100vh` app shell in App.jsx, making those
+   shells 16px taller than the actual viewport — a real, if small, source of
+   layout overflow. Margin/padding only — no overflow or height rules, since
+   the marketing site relies on natural body scrolling with no inner scroll
+   wrapper of its own. */
+html, body {
+  margin: 0;
+  padding: 0;
+}
