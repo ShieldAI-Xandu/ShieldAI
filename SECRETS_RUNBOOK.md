@@ -16,9 +16,40 @@ app actually reads.
 | `NVD_API_KEY` | NIST NVD | No | CVE lookups ~78s instead of ~8s | https://nvd.nist.gov/developers/request-an-api-key |
 | `STRIPE_SECRET_KEY` | Stripe | For billing | Billing routes return 503 | https://dashboard.stripe.com/apikeys |
 | `STRIPE_WEBHOOK_SECRET` | Stripe | For billing | Webhooks rejected | https://dashboard.stripe.com/webhooks |
+| `CREDENTIAL_ENCRYPTION_KEY` | ShieldAI | For directory integrations | Connecting M365/Google Workspace/Okta fails (`directoryRoutes.js`) | Generate a new random value — see below |
+| `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_CLIENT_SECRET` | Microsoft (Azure AD app) | For M365 directory integration | "Microsoft 365 isn't configured" on connect | https://portal.azure.com — App registrations |
+| `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google Cloud (OAuth client) | For Google Workspace directory integration | "Google Workspace isn't configured" on connect | https://console.cloud.google.com/apis/credentials |
 
 Non-secret config: `ADMIN_EMAIL`, `ANALYST_EMAIL`, `APP_URL`, `PORT`, `HOST`,
 `DB_DIR`, `HIBP_USER_AGENT`, `SEED_DEMO_ON_BOOT`, `SEED_DEMO_FORCE`.
+
+### A new kind of secret: per-client, not per-deployment
+
+`CREDENTIAL_ENCRYPTION_KEY` is different in shape from every secret above it.
+It doesn't call an API itself — it's the AES-256-GCM key `credentialCrypto.js`
+uses to encrypt each client's OAuth refresh token / Okta API token at rest in
+`directoryConnections` (one encrypted secret **per client connection**, not
+one shared value like the provider keys above). The "one secret → one env
+var → one rotation-log row" model in this document doesn't extend cleanly to
+that: rotating `CREDENTIAL_ENCRYPTION_KEY` re-keys the encryption used for
+*every* stored client credential at once — anything encrypted under the old
+key becomes unreadable unless it's decrypted-and-re-encrypted first (a
+migration step, not a simple swap-and-redeploy like the provider keys).
+Treat rotating it as a real migration, not a routine key swap, until that
+migration path is built.
+
+Generate it with:
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Also worth knowing: `scanSecrets.js`'s leak-detection patterns are all
+fixed-prefix (`sk-ant-`, `AIza…`, `sk_live_…`, etc.) and don't cover an Azure
+client secret or a Google OAuth client secret — neither has a distinctive
+prefix the scanner recognizes. A leaked `MS_GRAPH_CLIENT_SECRET` or
+`GOOGLE_WORKSPACE_CLIENT_SECRET` would not currently trigger a scan finding.
+Not fixed as part of adding these variables — flagging it here so it doesn't
+get lost.
 
 ## When to rotate
 

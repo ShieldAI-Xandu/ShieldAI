@@ -52,6 +52,7 @@ function freshDefaults() {
     clientActions: [], // { id, clientUserId, actorUserId, actorRole, action, detail, recommendationId, at }
     integrations: [],        // { id, ownerUserId, name, provider, tokenHash, status, createdAt, createdBy, revokedAt, lastEventAt, eventCount }
     integrationFindings: [], // { id, integrationId, ownerUserId, dedupeKey, externalId, tool, severity, category, title, message, host, cve, raw, ack, occurrences, firstSeenAt, lastSeenAt }
+    directoryConnections: [], // { id, ownerUserId, provider, kind: "oauth"|"token", label, tenantOrDomain, status, encryptedSecret: {ct,iv,tag}, scopes, connectedAt, connectedBy, lastSyncAt, lastSyncSummary, revokedAt }
   };
 }
 

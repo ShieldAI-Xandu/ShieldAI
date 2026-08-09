@@ -277,6 +277,113 @@ function adaptCrowdstrike(body) {
   return out.length > 0 ? out : null;
 }
 
+// ── Wazuh ──────────────────────────────────────────────────────────
+// Unlike the other five, Wazuh has a genuine native push path: the
+// Integrator module (or a custom active-response script) can POST an
+// alert's own JSON as-is to an arbitrary URL — no "convert first" step
+// needed. Two alert shapes are auto-detected per item, same pattern as the
+// CrowdStrike adapter above:
+//
+// (a) Vulnerability-detector alerts (`data.vulnerability` present) — the
+//     source scanner's own severity string (Low/Medium/High/Critical) is
+//     passed through by Wazuh unchanged, so it lowercases directly onto our
+//     enum. Source: documentation.wazuh.com "Vulnerability detection" alert
+//     format.
+// (b) Everything else (generic rule-based alerts, keyed on `rule.level` /
+//     `rule.description`) — Wazuh has no severity STRING here, only a
+//     numeric rule level 0-15. CONFIDENCE NOTE: the level->severity bucket
+//     below follows Wazuh's own documented rule-classification ranges
+//     (documentation.wazuh.com "Rules classification"), but is our bucketing
+//     choice, not a value the API returns verbatim — verify against a real
+//     tenant's rule levels before trusting it blindly.
+const WAZUH_LEVEL_SEVERITY = (level) => {
+  const n = Number(level);
+  if (!Number.isFinite(n)) return "info";
+  if (n >= 14) return "critical";
+  if (n >= 12) return "high";
+  if (n >= 7) return "medium";
+  if (n >= 4) return "low";
+  return "info";
+};
+
+function adaptWazuhAlert(x) {
+  const agent = x.agent || {};
+  const host = agent.name || agent.ip || null;
+
+  if (x.data && typeof x.data === "object" && x.data.vulnerability) {
+    const vuln = x.data.vulnerability;
+    const pkg = vuln.package?.name || null;
+    return {
+      externalId: `${vuln.cve || vuln.cwe || "unknown"}::${agent.id || host || ""}`,
+      title: pkg ? `${pkg} — ${vuln.cve || "vulnerability"}` : (vuln.cve || "Wazuh vulnerability finding"),
+      severity: canonSeverity(vuln.severity),
+      category: "vulnerability",
+      host,
+      cve: vuln.cve || null,
+      message: vuln.title || vuln.rationale || null,
+      raw: x,
+    };
+  }
+
+  if (x.rule && (x.rule.level != null || x.rule.description)) {
+    return {
+      externalId: x.id || `${x.rule.id || "unknown"}::${agent.id || host || ""}`,
+      title: x.rule.description || `Wazuh rule ${x.rule.id || "unknown"}`,
+      severity: WAZUH_LEVEL_SEVERITY(x.rule.level),
+      category: "detection",
+      host,
+      cve: null,
+      message: x.full_log || null,
+      raw: x,
+    };
+  }
+
+  return null;
+}
+
+function adaptWazuh(body) {
+  const items = Array.isArray(body) ? body
+    : Array.isArray(body?.alerts) ? body.alerts
+    : (body && typeof body === "object" && (body.rule || body.data?.vulnerability)) ? [body]
+    : null;
+  if (!items || items.length === 0) return null;
+
+  const out = items.map(adaptWazuhAlert).filter(Boolean);
+  return out.length > 0 ? out : null;
+}
+
+// ── Splunk ─────────────────────────────────────────────────────────
+// Splunk Enterprise/Cloud's built-in Webhook alert action (no add-on
+// needed) POSTs a fixed envelope — { sid, search_name, app, owner,
+// results_link, result, ... } — where `result` is a single object: the
+// triggering search result's own field:value pairs. Source:
+// docs.splunk.com "Configure webhook alert actions."
+//
+// CONFIDENCE NOTE: unlike the other adapters here, `result`'s field names
+// aren't a vendor-fixed schema at all — they're whatever the customer's own
+// SPL search happens to output. This adapter maps Splunk Enterprise
+// Security's own conventional notable-event field names (urgency, dest,
+// cve_id, ...) as a best-effort default. A plain (non-ES) Splunk search
+// needs to alias its output fields to these names itself (e.g. `| eval
+// urgency="high"`) for the mapping to pick them up — see VENDOR_SETUP_NOTES
+// in AddIntegrationModal.
+function adaptSplunk(body) {
+  if (!body || typeof body !== "object") return null;
+  if (!body.result || typeof body.result !== "object" || !body.search_name) return null;
+
+  const r = body.result;
+  return [{
+    externalId: body.sid ? `${body.sid}::${r._cd || r.event_id || ""}` : null,
+    title: r.rule_title || r.signature || body.search_name || "Splunk alert",
+    severity: canonSeverity(r.urgency || r.severity),
+    category: "detection",
+    host: r.dest || r.dvc || r.host || null,
+    cve: r.cve_id || r.cve || null,
+    message: r.description || r._raw || null,
+    raw: body,
+  }];
+}
+
 // ── dispatch ─────────────────────────────────────────────────────
 const VENDOR_ADAPTERS = {
   nessus: adaptTenable,
@@ -284,6 +391,8 @@ const VENDOR_ADAPTERS = {
   rapid7: adaptRapid7,
   msdefender: adaptMsDefender,
   crowdstrike: adaptCrowdstrike,
+  wazuh: adaptWazuh,
+  splunk: adaptSplunk,
 };
 
 // Normalize an incoming webhook body for the given integration's provider.

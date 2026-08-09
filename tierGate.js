@@ -109,5 +109,10 @@ export const counters = {
   programs: (db, userId) => (db.data.programs || []).filter(p => p.userId === userId).length,
   trainingPrograms: (db, userId) => (db.data.trainingPrograms || []).filter(t => t.userId === userId).length,
   endpoints: (db, userId) => (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked").length,
-  integrations: (db, userId) => (db.data.integrations || []).filter(i => i.ownerUserId === userId && i.status !== "revoked").length,
+  // Counts webhook integrations AND directory connections (M365/Google
+  // Workspace/Okta) toward the same "integrations" entitlement — one
+  // coherent "connect your tools" limit, not two separate caps.
+  integrations: (db, userId) =>
+    (db.data.integrations || []).filter(i => i.ownerUserId === userId && i.status !== "revoked").length +
+    (db.data.directoryConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length,
 };

@@ -16372,6 +16372,24 @@ const VENDOR_SETUP_NOTES = {
   rapid7: "No simple native webhook — InsightVM's webhook feature is experimental and requires pairing with InsightConnect. Join the vulnerability-definition and asset API calls in your script (host isn't included in the definition call alone) and POST the joined objects here.",
   msdefender: "Pull-only API — poll Microsoft Defender's SoftwareVulnerabilitiesByMachine export on a schedule and forward new rows here as-is.",
   crowdstrike: "CrowdStrike Falcon Fusion SOAR can POST here directly: create a workflow triggered on \"Detection,\" add a \"Call webhook\" action, and point it at this URL — no script needed. Falcon Spotlight vulnerability data (CVE-based) is pull-only and needs a script like the others.",
+  wazuh: "Wazuh's Integrator module (or a custom active-response script) can POST alerts here directly — no forwarding script needed, just point it at this URL. Both vulnerability-detector alerts and generic rule-based alerts are recognized natively.",
+  splunk: "Create a Webhook alert action pointed at this URL (Settings → Alert actions, no add-on required). Splunk sends the triggering search result's own fields, so if you're not using Enterprise Security's notable-event fields (urgency, dest, cve_id, ...), alias your SPL output to those names — e.g. `| eval urgency=\"high\"` — so severity/host/CVE map correctly.",
+};
+
+// ─────────────────────────────────────────────────────────────
+//  DIRECTORY INTEGRATIONS — M365/Entra ID, Google Workspace, Okta
+//  (pull-based posture reads, separate from the webhook model above)
+// ─────────────────────────────────────────────────────────────
+
+const DIRECTORY_PROVIDER_OPTIONS = [
+  { id: "m365", label: "Microsoft 365 / Entra ID", kind: "oauth" },
+  { id: "google_workspace", label: "Google Workspace", kind: "oauth" },
+  { id: "okta", label: "Okta", kind: "token" },
+];
+
+const DIRECTORY_SETUP_NOTES = {
+  m365: "You'll be sent to Microsoft to sign in and approve read-only access (directory, policies, and MFA registration reports). You need to be a Global Admin or Privileged Role Admin in your Microsoft 365 tenant — a non-admin sign-in will be blocked by Microsoft, not by ShieldAI.",
+  google_workspace: "You'll be sent to Google to sign in and approve read-only access (user directory and 2-Step Verification status). You need to be a super admin in your Google Workspace account.",
 };
 
 function IntegrationSamplePayload({ webhookUrl, provider }) {
@@ -16650,87 +16668,430 @@ function IntegrationDetail({ integrationId, onBack }) {
   );
 }
 
-function IntegrationsScreen({ onBack }) {
-  const [integrations, setIntegrations] = useState([]);
+function AddDirectoryConnectionModal({ onClose }) {
+  const [provider, setProvider] = useState("m365");
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+  const [label, setLabel] = useState("");
+  const [oktaDomain, setOktaDomain] = useState("");
+  const [apiToken, setApiToken] = useState("");
+
+  const selected = DIRECTORY_PROVIDER_OPTIONS.find(p => p.id === provider);
+
+  async function connectOAuth() {
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/directory/oauth/${provider}/start`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not start the connection.");
+      window.location.href = data.url; // full-page redirect to the provider's consent screen
+    } catch (e) { setError(e.message); setConnecting(false); }
+  }
+
+  async function connectOkta() {
+    if (!oktaDomain.trim() || !apiToken.trim()) { setError("Okta domain and API token are required."); return; }
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/directory/connect/okta`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim() || "Okta", oktaDomain: oktaDomain.trim(), apiToken: apiToken.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not connect to Okta.");
+      onClose(true);
+    } catch (e) { setError(e.message); } finally { setConnecting(false); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={()=>onClose(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:560,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect a Directory</h2>
+          <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+          Read-only, always. ShieldAI never changes anything in your directory — it only reads
+          MFA, admin account, and policy status to surface as recommendations.
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Provider</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {DIRECTORY_PROVIDER_OPTIONS.map(p=>(
+              <button key={p.id} onClick={()=>{ setProvider(p.id); setError(null); }}
+                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:provider===p.id?`${C.accent}22`:C.surface,
+                  border:`1px solid ${provider===p.id?C.accent+"66":C.border}`,
+                  color:provider===p.id?C.accent:C.textSec}}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {selected.kind === "oauth" ? (
+          <>
+            <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+              border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+              {DIRECTORY_SETUP_NOTES[provider]}
+            </div>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectOAuth} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Redirecting…" : `Connect ${selected.label} →`}
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
+              <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Production Okta org"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Okta domain</label>
+              <input value={oktaDomain} onChange={e=>setOktaDomain(e.target.value)} placeholder="yourcompany.okta.com"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Read-only API token</label>
+              <input type="password" value={apiToken} onChange={e=>setApiToken(e.target.value)} placeholder="Paste your Okta API token"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:"0 0 16px"}}>
+              In the Okta admin console: Security → API → Tokens → Create Token. Use an admin account
+              scoped to read-only if your org supports custom admin roles — ShieldAI only ever makes
+              read calls with it.
+            </p>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectOkta} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Connecting…" : "Connect Okta"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DirectoryConnectionDetail({ connectionId, onBack }) {
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/integrations`);
-      if (!res.ok) throw new Error("Could not load integrations.");
-      setIntegrations(await res.json());
+      const res = await authFetch(`${API_BASE}/api/directory/${connectionId}`);
+      if (!res.ok) throw new Error("Could not load this connection.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [connectionId]);
+
+  function flash(msg, tone = C.green) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function sync() {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/directory/${connectionId}/sync`, { method: "POST" });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Sync failed.");
+      flash(`Synced — ${result.findingCount} signal(s), ${result.draftsCreated} new recommendation(s) drafted.`);
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function revoke() {
+    if (!window.confirm("Revoke this connection? ShieldAI will stop syncing from it.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/directory/${connectionId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/directory/${connectionId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !data) return <div style={{padding:24,color:C.red}}>{error}</div>;
+
+  const c = data;
+  const providerLabel = DIRECTORY_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+  const summary = c.lastSyncSummary;
+  const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
+  const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status === "active" && (
+            <button onClick={revoke} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amber,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={removeConnection} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.red,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+              <Badge label={statusLabel} color={statusColor}/>
+            </div>
+            <div style={{color:C.textSec,fontSize:13}}>
+              {providerLabel} · {c.tenantOrDomain} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
+            </div>
+          </div>
+          <button onClick={sync} disabled={busy || c.status === "revoked"}
+            style={{padding:"9px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+              cursor:(busy||c.status==="revoked")?"not-allowed":"pointer",opacity:c.status==="revoked"?0.5:1}}>
+            {busy ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      </Card>
+
+      <SectionLabel text="Posture signals"/>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {summary?.findings?.length > 0 ? summary.findings.map(f=>{
+          const sm = SEV_META[f.severity] || SEV_META.info;
+          return (
+            <Card key={f.externalId} style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <Badge label={sm.label} color={sm.color}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(f.title)}</div>
+                  {f.message && <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{safeText(f.message)}</div>}
+                </div>
+              </div>
+            </Card>
+          );
+        }) : (
+          <div style={{color:C.textMut,fontSize:13}}>
+            {c.status === "revoked" ? "This connection is revoked." : 'Not synced yet — click "Sync now" to pull posture data.'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function IntegrationsScreen({ onBack }) {
+  const [integrations, setIntegrations] = useState([]);
+  const [directoryConnections, setDirectoryConnections] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showAddDirectory, setShowAddDirectory] = useState(false);
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory", id }
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const [wRes, dRes] = await Promise.all([
+        authFetch(`${API_BASE}/api/integrations`),
+        authFetch(`${API_BASE}/api/directory`),
+      ]);
+      if (!wRes.ok) throw new Error("Could not load integrations.");
+      setIntegrations(await wRes.json());
+      // Directory connections are a newer, tier-gated endpoint — don't let a
+      // 402/404 on it block the webhook integrations list from rendering.
+      setDirectoryConnections(dRes.ok ? await dRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
-  if (selected) {
+  // Land back here after an OAuth redirect round-trip (see
+  // directoryRoutes.js's /api/directory/oauth/:provider/callback).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("directoryConnected");
+    const failed = params.get("directoryError");
+    if (connected) {
+      setNotice({ msg: `Connected — pulling posture data for the first time may take a moment.`, tone: C.green });
+      load();
+    } else if (failed) {
+      setNotice({ msg: `Could not complete the connection (${failed.replace(/_/g, " ")}). Try again.`, tone: C.red });
+    }
+    if (connected || failed) {
+      params.delete("directoryConnected"); params.delete("directoryError"); params.delete("provider");
+      const qs = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    }
+  }, []);
+
+  if (selected?.kind === "directory") {
     return (
       <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
-        <IntegrationDetail integrationId={selected} onBack={()=>{ setSelected(null); load(); }}/>
+        <DirectoryConnectionDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
+  if (selected?.kind === "webhook") {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <IntegrationDetail integrationId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
       </div>
     );
   }
 
+  const items = [
+    ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
+    ...directoryConnections.map(c => ({ kind: "directory", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
+  ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
+
   return (
     <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
       {showAdd && <AddIntegrationModal onClose={()=>{ setShowAdd(false); load(); }}/>}
+      {showAddDirectory && <AddDirectoryConnectionModal onClose={(didConnect)=>{ setShowAddDirectory(false); if (didConnect) load(); }}/>}
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
         <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
-        <button onClick={()=>setShowAdd(true)}
-          style={{marginLeft:"auto",padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-            color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-          + Add Integration
-        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          <button onClick={()=>setShowAddDirectory(true)}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Connect Directory
+          </button>
+          <button onClick={()=>setShowAdd(true)}
+            style={{padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Add Integration
+          </button>
+        </div>
       </div>
       <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
-        Connect your vulnerability scanner, EDR, or SIEM's outbound webhook to feed real findings
-        into ShieldAI. Read-only — ShieldAI never calls out to your tool, and nothing here can
-        change anything on your systems. A human always triages what comes in.
+        Connect a vulnerability scanner/EDR/SIEM's outbound webhook, or a directory
+        (Microsoft 365, Google Workspace, Okta) to feed real findings into ShieldAI.
+        Read-only, always — ShieldAI never changes anything on your systems or in your
+        directory. A human always triages what comes in.
       </p>
 
+      {notice && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${notice.tone}18`,
+          border:`1px solid ${notice.tone}44`,borderRadius:8,color:notice.tone,fontSize:13,fontWeight:600}}>
+          {notice.msg}
+        </div>
+      )}
       {error && <div style={{marginBottom:16,color:C.red,fontSize:13}}>{error}</div>}
 
-      {loading ? <Spinner/> : integrations.length === 0 ? (
+      {loading ? <Spinner/> : items.length === 0 ? (
         <Card style={{textAlign:"center",padding:"44px 24px"}}>
           <div style={{fontSize:32,marginBottom:10}}>🔌</div>
           <div style={{color:C.text,fontWeight:600,fontSize:16,marginBottom:6}}>No integrations yet</div>
           <p style={{color:C.textSec,fontSize:13,margin:"0 auto 18px",maxWidth:420,lineHeight:1.6}}>
-            Connect your first security tool to start pulling in real findings.
+            Connect your first security tool or directory to start pulling in real findings.
           </p>
-          <button onClick={()=>setShowAdd(true)}
-            style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-            + Add Integration
-          </button>
+          <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+            <button onClick={()=>setShowAddDirectory(true)}
+              style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Connect Directory
+            </button>
+            <button onClick={()=>setShowAdd(true)}
+              style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Add Integration
+            </button>
+          </div>
         </Card>
       ) : (
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {integrations.map(i=>{
-            const providerLabel = INTEGRATION_PROVIDER_OPTIONS.find(p=>p.id===i.provider)?.label || i.provider;
-            return (
-              <Card key={i.id} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected(i.id)}>
-                <div style={{display:"flex",alignItems:"center",gap:14}}>
-                  <span style={{fontSize:20}}>🔌</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{color:C.text,fontWeight:600,fontSize:14}}>{i.name}</span>
-                      <Badge label={i.status==="active"?"Active":"Revoked"} color={i.status==="active"?C.green:C.textMut}/>
+          {items.map(item => item.kind === "webhook" ? (
+            (() => {
+              const i = integrations.find(x => x.id === item.id);
+              const providerLabel = INTEGRATION_PROVIDER_OPTIONS.find(p=>p.id===i.provider)?.label || i.provider;
+              return (
+                <Card key={`w:${i.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"webhook", id:i.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>🔌</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{i.name}</span>
+                        <Badge label={i.status==="active"?"Active":"Revoked"} color={i.status==="active"?C.green:C.textMut}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {providerLabel} · last finding {timeAgo(i.lastEventAt)}
+                        {i.openFindingCount > 0 && ` · ${i.openFindingCount} open`}
+                      </div>
                     </div>
-                    <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
-                      {providerLabel} · last finding {timeAgo(i.lastEventAt)}
-                      {i.openFindingCount > 0 && ` · ${i.openFindingCount} open`}
-                    </div>
+                    <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
                   </div>
-                  <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
-                </div>
-              </Card>
-            );
-          })}
+                </Card>
+              );
+            })()
+          ) : (
+            (() => {
+              const c = directoryConnections.find(x => x.id === item.id);
+              const providerLabel = DIRECTORY_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+              const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
+              const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+              return (
+                <Card key={`d:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"directory", id:c.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>🗂️</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                        <Badge label={statusLabel} color={statusColor}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {providerLabel} · {c.tenantOrDomain} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
+                      </div>
+                    </div>
+                    <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
+                  </div>
+                </Card>
+              );
+            })()
+          ))}
         </div>
       )}
     </div>
