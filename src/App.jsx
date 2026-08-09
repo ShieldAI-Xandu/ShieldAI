@@ -15058,9 +15058,9 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
                 </span>
               </div>
               <p style={{color:SOC.textMut,fontSize:12,lineHeight:1.5,margin:"0 0 14px"}}>
-                Auto-drafted from incoming agent reports. Review, optionally enrich into client-friendly
-                language, then forward to the client. Nothing is sent until you forward it — and the client
-                still decides who acts.
+                Auto-drafted from incoming agent reports and connected security tool findings. Review,
+                optionally enrich into client-friendly language, then forward to the client. Nothing is
+                sent until you forward it — and the client still decides who acts.
               </p>
               <div style={{display:"flex",flexDirection:"column",gap:10}}>
                 {drafts.map(d=>{
@@ -15074,7 +15074,9 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{color:SOC.text,fontSize:13.5,fontWeight:600}}>{safeText(d.title)}</div>
                           <div style={{color:SOC.textMut,fontSize:11,marginTop:2}}>
-                            {d.owner?.companyName || d.owner?.email || "—"}{d.hostname?` · ${d.hostname}`:""}
+                            {d.owner?.companyName || d.owner?.email || "—"}
+                            {d.hostname?` · ${d.hostname}`:""}
+                            {d.integrationName?` · ${d.integrationName}`:""}
                             {d.aiEnriched && <span style={{color:SOC.purple,marginLeft:6}}>· AI-enriched</span>}
                           </div>
                           <div style={{color:SOC.textSec,fontSize:12.5,marginTop:6,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{safeText(d.detail)}</div>
@@ -16344,6 +16346,374 @@ function EndpointsScreen({ onBack }) {
 
 
 // ─────────────────────────────────────────────────────────────
+//  SECURITY TOOL INTEGRATIONS — inbound webhook findings (client)
+// ─────────────────────────────────────────────────────────────
+
+const INTEGRATION_PROVIDER_OPTIONS = [
+  { id: "nessus", label: "Nessus" },
+  { id: "qualys", label: "Qualys" },
+  { id: "crowdstrike", label: "CrowdStrike" },
+  { id: "wazuh", label: "Wazuh" },
+  { id: "splunk", label: "Splunk" },
+  { id: "custom", label: "Generic / Custom" },
+];
+
+function IntegrationSamplePayload({ webhookUrl }) {
+  const sample = JSON.stringify({
+    findings: [
+      { externalId: "CVE-2024-12345-host-42", title: "Outdated OpenSSL", severity: "high",
+        category: "vulnerability", host: "web-42.internal", cve: "CVE-2024-12345",
+        message: "OpenSSL 3.0.1 has a known vulnerability; upgrade to 3.0.13+." },
+    ],
+  }, null, 2);
+  const curl = `curl -X POST "${webhookUrl}" \\\n  -H "Authorization: Bearer <token>" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ findings: [{ externalId: "...", title: "...", severity: "high" }] })}'`;
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Sample request</div>
+      <pre style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+        padding:"10px 12px",color:C.textSec,fontSize:11,lineHeight:1.6,overflowX:"auto",margin:"0 0 8px"}}>{curl}</pre>
+      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Finding shape</div>
+      <pre style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+        padding:"10px 12px",color:C.textSec,fontSize:11,lineHeight:1.6,overflowX:"auto",margin:0}}>{sample}</pre>
+      <p style={{color:C.textMut,fontSize:11,lineHeight:1.6,margin:"8px 0 0"}}>
+        <code>severity</code>: critical | high | medium | low | info. <code>externalId</code> is optional
+        but recommended — without it, findings are deduped by title + host instead. Up to 500
+        findings per request.
+      </p>
+    </div>
+  );
+}
+
+function AddIntegrationModal({ onClose }) {
+  const [name, setName] = useState("");
+  const [provider, setProvider] = useState("custom");
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState(null); // { id, webhookUrl, token }
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(null); // "token" | "url" | null
+
+  async function handleCreate() {
+    if (!name.trim()) { setError("Give this connection a name."); return; }
+    setCreating(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), provider }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not create the integration.");
+      const origin = API_BASE || window.location.origin;
+      setCreated({ id: data.id, token: data.token, webhookUrl: `${origin}${data.webhookPath}` });
+    } catch (e) { setError(e.message); } finally { setCreating(false); }
+  }
+
+  function copy(text, which) {
+    navigator.clipboard.writeText(text);
+    setCopied(which);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:640,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Add an Integration</h2>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+          ShieldAI only <strong>receives</strong> findings — it never connects out to your tool.
+          Point your scanner/EDR/SIEM's outbound webhook at the URL below.
+        </p>
+
+        {!created ? (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Production Nessus scanner"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:16}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Tool</label>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {INTEGRATION_PROVIDER_OPTIONS.map(p=>(
+                  <button key={p.id} onClick={()=>setProvider(p.id)}
+                    style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                      background:provider===p.id?`${C.accent}22`:C.surface,
+                      border:`1px solid ${provider===p.id?C.accent+"66":C.border}`,
+                      color:provider===p.id?C.accent:C.textSec}}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={handleCreate} disabled={creating}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:creating?"wait":"pointer"}}>
+              {creating ? "Creating…" : "Create connection"}
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:14,padding:"12px 14px",background:`${C.amber}12`,
+              border:`1px solid ${C.amber}40`,borderRadius:9,color:C.amber,fontSize:12.5,lineHeight:1.5}}>
+              This webhook URL and token are shown once — copy them now and configure your tool.
+            </div>
+            <div style={{marginBottom:10}}>
+              <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Webhook URL</div>
+              <div style={{display:"flex",gap:8}}>
+                <code style={{flex:1,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.text,fontSize:11.5,wordBreak:"break-all"}}>{created.webhookUrl}</code>
+                <button onClick={()=>copy(created.webhookUrl,"url")}
+                  style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:7,color:copied==="url"?C.green:C.textSec,fontSize:11.5,cursor:"pointer",whiteSpace:"nowrap"}}>
+                  {copied==="url" ? "Copied ✓" : "Copy"}
+                </button>
+              </div>
+            </div>
+            <div style={{marginBottom:6}}>
+              <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Bearer token</div>
+              <div style={{display:"flex",gap:8}}>
+                <code style={{flex:1,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.text,fontSize:11.5,wordBreak:"break-all"}}>{created.token}</code>
+                <button onClick={()=>copy(created.token,"token")}
+                  style={{padding:"7px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:7,color:copied==="token"?C.green:C.textSec,fontSize:11.5,cursor:"pointer",whiteSpace:"nowrap"}}>
+                  {copied==="token" ? "Copied ✓" : "Copy"}
+                </button>
+              </div>
+            </div>
+            <IntegrationSamplePayload webhookUrl={created.webhookUrl}/>
+            <button onClick={onClose}
+              style={{marginTop:18,padding:"10px 18px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+              Done
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function IntegrationDetail({ integrationId, onBack }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}`);
+      if (!res.ok) throw new Error("Could not load integration.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [integrationId]);
+
+  async function toggleAck(finding) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}/findings/${finding.id}/ack`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ack: !finding.ack }),
+      });
+      if (res.ok) load();
+    } catch { /* surfaced on reload */ }
+  }
+
+  async function revoke() {
+    if (!window.confirm("Revoke this connection? The source tool's next post will be rejected.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeIntegration() {
+    if (!window.confirm("Remove this connection? Its finding history will be deleted. This can't be undone.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !data) return <div style={{padding:24,color:C.red}}>{error}</div>;
+
+  const i = data.integration;
+  const findings = data.findings || [];
+  const providerLabel = INTEGRATION_PROVIDER_OPTIONS.find(p=>p.id===i.provider)?.label || i.provider;
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {i.status === "active" && (
+            <button onClick={revoke} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amber,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={removeIntegration} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.red,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:18}}>{i.name}</span>
+              <Badge label={i.status==="active"?"Active":"Revoked"} color={i.status==="active"?C.green:C.textMut}/>
+            </div>
+            <div style={{color:C.textSec,fontSize:13}}>
+              {providerLabel} · last finding {timeAgo(i.lastEventAt)} · {i.eventCount} received total
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <SectionLabel text={`Findings (${findings.length})`}/>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {findings.map(f=>{
+          const sm = SEV_META[f.severity] || SEV_META.info;
+          return (
+            <Card key={f.id} style={{padding:"12px 14px",opacity:f.ack?0.6:1}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <Badge label={sm.label} color={sm.color}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(f.title)}</div>
+                  {f.message && <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{safeText(f.message)}</div>}
+                  <div style={{color:C.textMut,fontSize:11,marginTop:4}}>
+                    {f.host && `${f.host} · `}{f.cve && `${f.cve} · `}
+                    first seen {timeAgo(f.firstSeenAt)} · last seen {timeAgo(f.lastSeenAt)}
+                    {f.occurrences > 1 && ` · seen ${f.occurrences}×`}
+                  </div>
+                </div>
+                <button onClick={()=>toggleAck(f)}
+                  style={{padding:"5px 11px",background:f.ack?C.surface:`${C.green}18`,
+                    border:`1px solid ${f.ack?C.border:C.green+"55"}`,borderRadius:6,
+                    color:f.ack?C.textSec:C.green,fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                  {f.ack ? "Reopen" : "Acknowledge"}
+                </button>
+              </div>
+            </Card>
+          );
+        })}
+        {findings.length===0 && <div style={{color:C.textMut,fontSize:13}}>No findings received yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+function IntegrationsScreen({ onBack }) {
+  const [integrations, setIntegrations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [selected, setSelected] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/integrations`);
+      if (!res.ok) throw new Error("Could not load integrations.");
+      setIntegrations(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  if (selected) {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <IntegrationDetail integrationId={selected} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+      {showAdd && <AddIntegrationModal onClose={()=>{ setShowAdd(false); load(); }}/>}
+
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
+        <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
+        <button onClick={()=>setShowAdd(true)}
+          style={{marginLeft:"auto",padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+          + Add Integration
+        </button>
+      </div>
+      <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
+        Connect your vulnerability scanner, EDR, or SIEM's outbound webhook to feed real findings
+        into ShieldAI. Read-only — ShieldAI never calls out to your tool, and nothing here can
+        change anything on your systems. A human always triages what comes in.
+      </p>
+
+      {error && <div style={{marginBottom:16,color:C.red,fontSize:13}}>{error}</div>}
+
+      {loading ? <Spinner/> : integrations.length === 0 ? (
+        <Card style={{textAlign:"center",padding:"44px 24px"}}>
+          <div style={{fontSize:32,marginBottom:10}}>🔌</div>
+          <div style={{color:C.text,fontWeight:600,fontSize:16,marginBottom:6}}>No integrations yet</div>
+          <p style={{color:C.textSec,fontSize:13,margin:"0 auto 18px",maxWidth:420,lineHeight:1.6}}>
+            Connect your first security tool to start pulling in real findings.
+          </p>
+          <button onClick={()=>setShowAdd(true)}
+            style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Add Integration
+          </button>
+        </Card>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {integrations.map(i=>{
+            const providerLabel = INTEGRATION_PROVIDER_OPTIONS.find(p=>p.id===i.provider)?.label || i.provider;
+            return (
+              <Card key={i.id} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected(i.id)}>
+                <div style={{display:"flex",alignItems:"center",gap:14}}>
+                  <span style={{fontSize:20}}>🔌</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{color:C.text,fontWeight:600,fontSize:14}}>{i.name}</span>
+                      <Badge label={i.status==="active"?"Active":"Revoked"} color={i.status==="active"?C.green:C.textMut}/>
+                    </div>
+                    <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                      {providerLabel} · last finding {timeAgo(i.lastEventAt)}
+                      {i.openFindingCount > 0 && ` · ${i.openFindingCount} open`}
+                    </div>
+                  </div>
+                  <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
 //  MASTERMIND CONSOLE (admin) — chat, oversight, on-demand analyze
 // ─────────────────────────────────────────────────────────────
 function MastermindConsole({ onClose }) {
@@ -17475,6 +17845,8 @@ export default function ShieldAI() {
   // deleted). Nothing about that section actually depends on a program, so
   // it gets its own direct entry point instead.
   const [showThreatIntel, setShowThreatIntel] = useState(false);
+  // Security tool integrations (SIEM/EDR/scanner webhook ingestion, Growth+).
+  const [showIntegrations, setShowIntegrations] = useState(false);
   // The in-app user manual — a Help Center covering every client-facing
   // feature. Same content Mastermind's client chat draws its "how do I..."
   // answers from (helpManual.js), rendered here as a browsable/searchable
@@ -17516,7 +17888,7 @@ export default function ShieldAI() {
     return {
       phase, publicView,
       showAdmin, showAnalyst, showEndpoints, showMastermind,
-      showClientMastermind, showClientChat, showThreatIntel, showHelp,
+      showClientMastermind, showClientChat, showThreatIntel, showIntegrations, showHelp,
       showSupportCenter,
       assessmentId: currentAssessmentId, programId: currentProgramId,
       // Staff's own token/user, kept so "Exit client view" still works after
@@ -17534,6 +17906,7 @@ export default function ShieldAI() {
     setShowClientMastermind(!!resume.showClientMastermind);
     setShowClientChat(!!resume.showClientChat);
     setShowThreatIntel(!!resume.showThreatIntel);
+    setShowIntegrations(!!resume.showIntegrations);
     setShowHelp(!!resume.showHelp);
     setShowSupportCenter(!!resume.showSupportCenter);
     if (resume.impersonating) setImpersonating(resume.impersonating);
@@ -17580,7 +17953,7 @@ export default function ShieldAI() {
     else window.history.pushState(state, "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, publicView, showAdmin, showAnalyst, showEndpoints, showMastermind,
-      showClientMastermind, showClientChat, showThreatIntel, showHelp, showSupportCenter,
+      showClientMastermind, showClientChat, showThreatIntel, showIntegrations, showHelp, showSupportCenter,
       currentAssessmentId, currentProgramId, restoringSession, impersonating]);
 
   // ── Session restoration on mount ──
@@ -17968,6 +18341,16 @@ export default function ShieldAI() {
             color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🔍 Threat Intel
         </button>
+        <button onClick={() => can("integrations")
+            ? setShowIntegrations(true)
+            : setUpgradePrompt({ error:"Security tool integrations (SIEM/EDR/scanner findings) are available on the Growth plan and above. Upgrade to Growth ($349/mo) to connect your tools.", code:"UPGRADE_REQUIRED", capability:"integrations", currentTier:user.tier, requiresTier:"growth" })}
+          title={can("integrations") ? "" : "Growth plan feature"}
+          style={{padding:"5px 12px",
+            background: can("integrations") ? `${C.accent}18` : C.surface,
+            border:`1px solid ${can("integrations") ? C.accent+"55" : C.border}`,borderRadius:6,
+            color: can("integrations") ? C.accent : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          {can("integrations") ? "🔌 Integrations" : "🔒 Integrations"}
+        </button>
         <button onClick={() => setShowHelp(true)}
           style={{padding:"5px 12px",background:`${C.textSec}18`,
             border:`1px solid ${C.border}`,borderRadius:6,
@@ -18087,6 +18470,31 @@ export default function ShieldAI() {
         </div>
       </div>
       </CapabilityContext.Provider>
+    );
+  }
+
+  if (showIntegrations) {
+    return (
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
+        <TopBar/>
+        <div style={{flex:1}}>
+          <div style={{maxWidth:900,margin:"0 auto",padding:"16px 20px 0"}}>
+            <button onClick={() => setShowIntegrations(false)}
+              style={{padding:"6px 14px",background:"none",border:`1px solid ${C.border}`,
+                borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+              ← Back
+            </button>
+          </div>
+          {can("integrations") ? (
+            <IntegrationsScreen onBack={() => setShowIntegrations(false)}/>
+          ) : (
+            <LockedFeature icon="🔌" title="Security Tool Integrations"
+              blurb="Connect your vulnerability scanner, EDR, or SIEM's outbound webhook to feed real findings into ShieldAI."
+              capability="integrations"
+              points={["Inbound webhook ingestion — ShieldAI never calls out to your tool", "Nessus, Qualys, CrowdStrike, Wazuh, Splunk, or any custom webhook", "A human always triages what comes in"]}/>
+          )}
+        </div>
+      </div>
     );
   }
 

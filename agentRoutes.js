@@ -79,7 +79,7 @@ function ensureCollections(db) {
   db.data.enrollTokens    ||= []; // { tokenHash, ownerUserId, createdAt, expiresAt, usedAt }
   db.data.agentReports    ||= []; // { id, agentId, ownerUserId, receivedAt, report }
   db.data.agentEvents     ||= []; // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
-  db.data.recommendations ||= []; // { id, ownerUserId, agentId?, origin, title, detail, severity, status, history[] }
+  db.data.recommendations ||= []; // { id, ownerUserId, agentId?, integrationId?, findingId?, dedupeKey?, origin, title, detail, severity, status, history[] }
 }
 
 // Map a posture report's worst finding to an overall host status.
@@ -854,10 +854,12 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       .map(r => {
         const owner = (db.data.users || []).find(u => u.id === r.ownerUserId);
         const agent = (db.data.agents || []).find(a => a.id === r.agentId);
+        const integration = (db.data.integrations || []).find(i => i.id === r.integrationId);
         return {
           ...r,
           owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
           hostname: agent ? agent.hostname : null,
+          integrationName: integration ? integration.name : null,
         };
       });
     res.json(out);

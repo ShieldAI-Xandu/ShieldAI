@@ -47,6 +47,7 @@ export const TIERS = {
       downloadExports: false,
       endpoints: false,             // can't enroll agents (feature shown locked)
       threatIntel: false,           // CVE/breach exposure views
+      integrations: false,          // third-party SIEM/EDR/scanner findings ingestion — Growth+
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
       mastermindChat: false,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
@@ -90,6 +91,7 @@ export const TIERS = {
       downloadExports: false,       // no downloads at this tier
       endpoints: true,              // up to 5
       threatIntel: false,
+      integrations: false,          // third-party SIEM/EDR/scanner findings ingestion — Growth+
       analystSupport: false,
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
@@ -144,6 +146,7 @@ export const TIERS = {
       vendors: null,
       employees: null,
       calendarEntries: null,
+      integrations: 3,              // security tool connections (SIEM/EDR/scanner webhooks)
     },
     capabilities: {
       assessments: true,
@@ -154,6 +157,7 @@ export const TIERS = {
       downloadExports: true,        // full downloads/exports
       endpoints: true,              // up to 25
       threatIntel: true,            // CVE/breach exposure
+      integrations: true,           // third-party SIEM/EDR/scanner findings ingestion — capped at limits.integrations (3)
       analystSupport: false,
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
@@ -189,6 +193,7 @@ export const TIERS = {
       vendors: null,
       employees: null,
       calendarEntries: null,
+      integrations: 10,             // security tool connections (SIEM/EDR/scanner webhooks)
     },
     capabilities: {
       assessments: true,
@@ -199,6 +204,7 @@ export const TIERS = {
       downloadExports: true,
       endpoints: true,              // up to 100
       threatIntel: true,
+      integrations: true,           // capped at limits.integrations (10)
       analystSupport: true,         // limited — periodic engineer review
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
@@ -234,6 +240,7 @@ export const TIERS = {
       vendors: null,
       employees: null,
       calendarEntries: null,
+      integrations: null,           // unlimited security tool connections
     },
     capabilities: {
       assessments: true,
@@ -244,6 +251,7 @@ export const TIERS = {
       downloadExports: true,
       endpoints: true,              // unlimited
       threatIntel: true,
+      integrations: true,           // unlimited
       analystSupport: true,         // full — engineer runs the program
       mastermind: true,             // client-facing Q&A
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
@@ -296,6 +304,7 @@ export const FEATURE_CATALOG = [
   { key: "endpoints",        capability: "endpoints",        name: "Endpoint monitoring agents",       minTier: "starter" },
   { key: "complianceAccess", capability: "complianceAccess", name: "Compliance framework tracking (2 frameworks)", minTier: "starter" },
   { key: "threatIntel",      capability: "threatIntel",      name: "Threat intelligence (CVE exposure & dark-web breach monitoring)", minTier: "growth" },
+  { key: "integrations",     capability: "integrations",     name: "Security tool integrations (SIEM/EDR/scanner findings)", minTier: "growth" },
   { key: "trainingDelivery", capability: "trainingDelivery", name: "Full training generation & delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
   { key: "reportsAccess",    capability: "reportsAccess",    name: "Status, compliance & insurance reports", minTier: "growth" },
   { key: "evidenceAccess",   capability: "evidenceAccess",   name: "Evidence & audit readiness", minTier: "growth" },

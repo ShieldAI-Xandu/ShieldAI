@@ -36,6 +36,7 @@ import {
 } from "./demoGateway.js";
 import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
+import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
@@ -1733,6 +1734,7 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 registerDemoRoutes(app, db, { redeemLimiter: demoCodeLimiter });
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter });
+registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });

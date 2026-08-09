@@ -109,4 +109,5 @@ export const counters = {
   programs: (db, userId) => (db.data.programs || []).filter(p => p.userId === userId).length,
   trainingPrograms: (db, userId) => (db.data.trainingPrograms || []).filter(t => t.userId === userId).length,
   endpoints: (db, userId) => (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked").length,
+  integrations: (db, userId) => (db.data.integrations || []).filter(i => i.ownerUserId === userId && i.status !== "revoked").length,
 };
