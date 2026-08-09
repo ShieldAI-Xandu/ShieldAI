@@ -132,6 +132,45 @@ export const HELP_MANUAL = [
   },
 
   {
+    id: "integrations",
+    title: "Security Tool & Directory Integrations",
+    icon: "🔌",
+    tier: "Growth and above (3 connections on Growth, 10 on Guided, unlimited on Managed)",
+    articles: [
+      {
+        id: "connect-webhook-tool",
+        title: "Connect a scanner, EDR, or SIEM",
+        intro: "Feed real findings from your existing security tools into ShieldAI instead of re-entering them by hand. ShieldAI only receives what your tool sends — it never connects out to your tool or changes anything there.",
+        steps: [
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Add Integration.\"",
+          "Name the connection and pick your tool: Nessus/Tenable, Qualys, Rapid7 InsightVM, Microsoft Defender, CrowdStrike, Wazuh, Splunk, or Generic/Custom for anything else.",
+          "ShieldAI shows a webhook URL and a bearer token — shown once, so copy both now. Point your tool's outbound webhook, forwarding script, or SOAR workflow at that URL with the token as a Bearer Authorization header.",
+          "Findings appear on the connection's detail page as they come in. Anything medium severity or above is automatically drafted into a recommendation for your analyst to review before it ever reaches you.",
+        ],
+        notes: [
+          "Most of these tools don't push data on their own — Nessus, Qualys, Rapid7, Defender, and Falcon Spotlight need a small script or a SOAR/iPaaS workflow (Zapier, Tines, a scheduled job) polling the tool and forwarding results. CrowdStrike Falcon Fusion SOAR and Wazuh's Integrator module can point straight at the webhook URL with no script. The Add Integration screen shows setup guidance specific to whichever tool you pick.",
+          "Acknowledging a finding is triage only — it never changes anything back on the source tool.",
+        ],
+      },
+      {
+        id: "connect-directory",
+        title: "Connect Microsoft 365, Google Workspace, or Okta",
+        intro: "Directory connections pull security-posture facts you'd otherwise have to check manually — MFA coverage, privileged/admin accounts, stale accounts, and policy gaps — straight from the directory you already run. Read-only, always: ShieldAI can see this data but can never change anything in your directory.",
+        steps: [
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Directory.\"",
+          "Pick your provider. Microsoft 365 and Google Workspace use a normal sign-in-and-approve screen — you'll need to be a tenant admin (Microsoft) or super admin (Google) for the consent screen to succeed. Okta instead asks for your Okta domain and a read-only API token, which your Okta admin generates from Security → API → Tokens in the Okta console.",
+          "Once connected, open the connection and click \"Sync now\" to pull the latest posture data. Syncing isn't automatic yet — run it again any time you want a fresh check.",
+          "Findings like \"no MFA on 3 admin accounts\" or \"no Conditional Access policies enabled\" appear on the connection page, and medium-or-above findings are drafted into a recommendation the same way webhook findings are.",
+        ],
+        notes: [
+          "This never changes your posture score directly — your score stays based on your assessment answers. Directory findings show up as recommendations so you or your analyst can act on them, not as a silent second score.",
+          "If a connection shows \"Needs reconnect,\" access has expired or was revoked on the provider's side (for example, an admin removed consent) — reconnect it the same way you connected it the first time.",
+        ],
+      },
+    ],
+  },
+
+  {
     id: "recommendations-tasks",
     title: "Recommendations & Remediation Tasks",
     icon: "✅",
