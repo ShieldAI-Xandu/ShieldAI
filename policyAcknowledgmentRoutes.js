@@ -21,6 +21,7 @@
 
 import { randomUUID } from "crypto";
 import { sendEmail, emailConfigured } from "./emailService.js";
+import { notify } from "./notificationDispatch.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -121,6 +122,14 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
       action: "policy_assigned_for_acknowledgment",
       detail: `Assigned "${policy.policyName}" to ${created.length} team member(s).` });
+    if (created.length > 0) {
+      await notify(db, {
+        ownerUserId: scope.clientUserId, event: "policy.signoff_pending",
+        title: `"${policy.policyName}" assigned for sign-off`,
+        detail: `${created.length} team member(s) need to acknowledge this policy.`,
+        severity: "info", actionable: false,
+      });
+    }
     res.json({ ok: true, assigned: created.length, skipped: learners.length - created.length, rows: created });
   });
 

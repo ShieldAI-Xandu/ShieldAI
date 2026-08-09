@@ -25,6 +25,7 @@
 import { randomUUID } from "crypto";
 import { SECURITY_CHECKLIST, SCORING_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
+import { notify } from "./notificationDispatch.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -474,6 +475,15 @@ export function registerTaskRoutes(app, {
       } catch { /* non-fatal */ }
     }
     await db.write();
+
+    // Outbound-only — the task is already done, there's no action left to
+    // offer a Slack button for.
+    await notify(db, {
+      ownerUserId: task.ownerUserId, event: "task.completed",
+      title: `Task completed: ${task.title}`,
+      detail: `Posture ${before.postureScore} → ${after.postureScore} (${task.actualGain >= 0 ? "+" : ""}${task.actualGain}).`,
+      severity: "info", actionable: false,
+    });
 
     res.json({
       task: publicTask(db, task),

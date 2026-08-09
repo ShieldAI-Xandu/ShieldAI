@@ -167,6 +167,21 @@ export const HELP_MANUAL = [
           "If a connection shows \"Needs reconnect,\" access has expired or was revoked on the provider's side (for example, an admin removed consent) — reconnect it the same way you connected it the first time.",
         ],
       },
+      {
+        id: "connect-slack",
+        title: "Get Slack notifications",
+        intro: "Connect Slack to get pinged in a channel of your choosing whenever there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off. ShieldAI only ever posts messages; it never reads your Slack history or anything else in your workspace.",
+        steps: [
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Slack.\"",
+          "You'll be sent to Slack to approve ShieldAI posting to your workspace, then land back here automatically.",
+          "Open the connection and click \"Choose a channel\" to pick where ShieldAI should post — only channels the ShieldAI Slack app has been invited to will show up, so invite it to a channel first if you don't see the one you want.",
+          "Turn on the specific events you want to hear about under \"Notify on.\" You need a channel picked before any notification can go out.",
+        ],
+        notes: [
+          "A new recommendation posted to Slack comes with action buttons — \"I'll handle it,\" \"Mark done,\" or \"Decline\" — so you can respond right from Slack instead of opening ShieldAI. Other notifications (task completed, phishing sent, policy assigned) are informational only, with no buttons.",
+          "If several recommendations get drafted at once, Slack still only shows a message for each one at the moment it's actually proposed to you by your analyst — nothing reaches Slack before a human has reviewed it, same as everywhere else in ShieldAI.",
+        ],
+      },
     ],
   },
 

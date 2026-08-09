@@ -38,6 +38,7 @@ import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerDirectoryRoutes } from "./directoryRoutes.js";
+import { registerProductivityRoutes } from "./productivityRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
@@ -153,10 +154,12 @@ app.use(cors({
     callback(null, !origin || ALLOWED_ORIGINS.has(origin));
   },
 }));
-// The Stripe webhook needs the RAW body for signature verification, so exclude
-// just that path from the global JSON parser. Everything else parses JSON.
+// The Stripe webhook and Slack's interactivity callback both need the RAW
+// body for signature verification, so exclude just those paths from the
+// global JSON parser. Everything else parses JSON.
+const RAW_BODY_PATHS = new Set(["/api/billing/webhook", "/api/productivity/slack/interactivity"]);
 app.use((req, res, next) => {
-  if (req.originalUrl === "/api/billing/webhook") return next();
+  if (RAW_BODY_PATHS.has(req.originalUrl)) return next();
   return express.json({ limit: "5mb" })(req, res, next);
 });
 
@@ -1737,6 +1740,7 @@ registerDemoRoutes(app, db, { redeemLimiter: demoCodeLimiter });
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter });
 registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
+registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, express });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });

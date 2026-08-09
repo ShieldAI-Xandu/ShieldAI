@@ -16922,46 +16922,275 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   );
 }
 
+function AddProductivityConnectionModal({ onClose }) {
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function connectSlack() {
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/oauth/slack/start`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not start the connection.");
+      window.location.href = data.url; // full-page redirect to Slack's install screen
+    } catch (e) { setError(e.message); setConnecting(false); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={()=>onClose(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:520,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect Slack</h2>
+          <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 12px"}}>
+          Get notified in a Slack channel when there's new security work — a recommendation is
+          ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off.
+          Recommendation alerts include action buttons — you can respond right from Slack.
+        </p>
+        <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+          border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+          You'll be sent to Slack to approve ShieldAI posting messages to a channel of your
+          choosing. ShieldAI never reads your Slack messages or channel history — only posts.
+        </div>
+        {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+        <button onClick={connectSlack} disabled={connecting}
+          style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+            cursor:connecting?"wait":"pointer"}}>
+          {connecting ? "Redirecting…" : "Connect Slack →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProductivityConnectionDetail({ connectionId, onBack }) {
+  const [data, setData] = useState(null); // { connection, availableEvents }
+  const [channels, setChannels] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}`);
+      if (!res.ok) throw new Error("Could not load this connection.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [connectionId]);
+
+  function flash(msg, tone = C.green) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function loadChannels() {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}/channels`);
+      const list = await res.json();
+      if (!res.ok) throw new Error(list.error || "Could not list channels.");
+      setChannels(list);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function setChannel(ch) {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId: ch.id, channelName: ch.name }),
+      });
+      if (!res.ok) throw new Error("Could not set the channel.");
+      flash(`Now posting to #${ch.name}`);
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function toggleEvent(eventId) {
+    const current = data.connection.enabledEvents || [];
+    const next = current.includes(eventId) ? current.filter(e => e !== eventId) : [...current, eventId];
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabledEvents: next }),
+      });
+      if (!res.ok) throw new Error("Could not update notification settings.");
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function revoke() {
+    if (!window.confirm("Revoke this connection? ShieldAI will stop posting to Slack.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !data) return <div style={{padding:24,color:C.red}}>{error}</div>;
+
+  const c = data.connection;
+  const statusColor = c.status === "active" ? C.green : C.textMut;
+  const statusLabel = c.status === "active" ? "Connected" : "Revoked";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status === "active" && (
+            <button onClick={revoke} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amber,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={removeConnection} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.red,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+          <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+          <Badge label={statusLabel} color={statusColor}/>
+        </div>
+        <div style={{color:C.textSec,fontSize:13}}>
+          {c.teamOrWorkspace} · {c.channelName ? `posting to #${c.channelName}` : "no channel set yet"}
+        </div>
+      </Card>
+
+      <SectionLabel text="Post to channel"/>
+      <div style={{marginBottom:18}}>
+        {!channels ? (
+          <button onClick={loadChannels} disabled={busy || c.status==="revoked"}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            {busy ? "Loading channels…" : "Choose a channel"}
+          </button>
+        ) : channels.length === 0 ? (
+          <div style={{color:C.textMut,fontSize:13}}>
+            No channels found — invite the ShieldAI Slack app to a channel first, then reload.
+          </div>
+        ) : (
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {channels.map(ch => (
+              <button key={ch.id} onClick={()=>setChannel(ch)} disabled={busy}
+                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:c.channelId===ch.id?`${C.accent}22`:C.surface,
+                  border:`1px solid ${c.channelId===ch.id?C.accent+"66":C.border}`,
+                  color:c.channelId===ch.id?C.accent:C.textSec}}>
+                #{ch.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SectionLabel text="Notify on"/>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {data.availableEvents.map(ev => {
+          const on = (c.enabledEvents || []).includes(ev.id);
+          return (
+            <Card key={ev.id} style={{padding:"11px 14px",cursor:c.status==="revoked"?"default":"pointer",opacity:c.status==="revoked"?0.6:1}}
+              onClick={()=>c.status!=="revoked" && !busy && toggleEvent(ev.id)}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:16}}>{on ? "✅" : "⬜"}</span>
+                <span style={{color:C.text,fontSize:13}}>{ev.label}</span>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+      {!c.channelId && (
+        <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:0}}>
+          Choose a channel above before enabling notifications — without one, ShieldAI has nowhere to post.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function IntegrationsScreen({ onBack }) {
   const [integrations, setIntegrations] = useState([]);
   const [directoryConnections, setDirectoryConnections] = useState([]);
+  const [productivityConnections, setProductivityConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showAddDirectory, setShowAddDirectory] = useState(false);
-  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory", id }
+  const [showAddProductivity, setShowAddProductivity] = useState(false);
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity", id }
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [wRes, dRes] = await Promise.all([
+      const [wRes, dRes, pRes] = await Promise.all([
         authFetch(`${API_BASE}/api/integrations`),
         authFetch(`${API_BASE}/api/directory`),
+        authFetch(`${API_BASE}/api/productivity`),
       ]);
       if (!wRes.ok) throw new Error("Could not load integrations.");
       setIntegrations(await wRes.json());
-      // Directory connections are a newer, tier-gated endpoint — don't let a
-      // 402/404 on it block the webhook integrations list from rendering.
+      // Directory/productivity connections are newer, tier-gated endpoints —
+      // don't let a 402/404 on either block the webhook list from rendering.
       setDirectoryConnections(dRes.ok ? await dRes.json() : []);
+      setProductivityConnections(pRes.ok ? await pRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
   // Land back here after an OAuth redirect round-trip (see
-  // directoryRoutes.js's /api/directory/oauth/:provider/callback).
+  // directoryRoutes.js's and productivityRoutes.js's /oauth/.../callback).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const connected = params.get("directoryConnected");
-    const failed = params.get("directoryError");
+    const connected = params.get("directoryConnected") || params.get("productivityConnected");
+    const failed = params.get("directoryError") || params.get("productivityError");
     if (connected) {
-      setNotice({ msg: `Connected — pulling posture data for the first time may take a moment.`, tone: C.green });
+      setNotice({ msg: `Connected.`, tone: C.green });
       load();
     } else if (failed) {
       setNotice({ msg: `Could not complete the connection (${failed.replace(/_/g, " ")}). Try again.`, tone: C.red });
     }
     if (connected || failed) {
-      params.delete("directoryConnected"); params.delete("directoryError"); params.delete("provider");
+      params.delete("directoryConnected"); params.delete("directoryError");
+      params.delete("productivityConnected"); params.delete("productivityError"); params.delete("provider"); params.delete("id");
       const qs = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
     }
@@ -16971,6 +17200,13 @@ function IntegrationsScreen({ onBack }) {
     return (
       <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
         <DirectoryConnectionDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
+  if (selected?.kind === "productivity") {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <ProductivityConnectionDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
       </div>
     );
   }
@@ -16985,16 +17221,23 @@ function IntegrationsScreen({ onBack }) {
   const items = [
     ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
     ...directoryConnections.map(c => ({ kind: "directory", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
+    ...productivityConnections.map(c => ({ kind: "productivity", id: c.id, sortAt: c.lastNotifiedAt || c.connectedAt })),
   ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
 
   return (
     <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
       {showAdd && <AddIntegrationModal onClose={()=>{ setShowAdd(false); load(); }}/>}
       {showAddDirectory && <AddDirectoryConnectionModal onClose={(didConnect)=>{ setShowAddDirectory(false); if (didConnect) load(); }}/>}
+      {showAddProductivity && <AddProductivityConnectionModal onClose={(didConnect)=>{ setShowAddProductivity(false); if (didConnect) load(); }}/>}
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
         <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
-        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+        <div style={{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>setShowAddProductivity(true)}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Connect Slack
+          </button>
           <button onClick={()=>setShowAddDirectory(true)}
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
@@ -17008,10 +17251,10 @@ function IntegrationsScreen({ onBack }) {
         </div>
       </div>
       <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
-        Connect a vulnerability scanner/EDR/SIEM's outbound webhook, or a directory
-        (Microsoft 365, Google Workspace, Okta) to feed real findings into ShieldAI.
-        Read-only, always — ShieldAI never changes anything on your systems or in your
-        directory. A human always triages what comes in.
+        Connect a vulnerability scanner/EDR/SIEM's outbound webhook, a directory (Microsoft 365,
+        Google Workspace, Okta), or Slack to feed real findings into ShieldAI and get notified
+        about new security work. Read-only where it matters — ShieldAI never changes anything on
+        your systems or in your directory, and only ever posts messages to Slack, never reads them.
       </p>
 
       {notice && (
@@ -17027,9 +17270,14 @@ function IntegrationsScreen({ onBack }) {
           <div style={{fontSize:32,marginBottom:10}}>🔌</div>
           <div style={{color:C.text,fontWeight:600,fontSize:16,marginBottom:6}}>No integrations yet</div>
           <p style={{color:C.textSec,fontSize:13,margin:"0 auto 18px",maxWidth:420,lineHeight:1.6}}>
-            Connect your first security tool or directory to start pulling in real findings.
+            Connect your first security tool, directory, or Slack to get started.
           </p>
-          <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+            <button onClick={()=>setShowAddProductivity(true)}
+              style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Connect Slack
+            </button>
             <button onClick={()=>setShowAddDirectory(true)}
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
@@ -17044,8 +17292,8 @@ function IntegrationsScreen({ onBack }) {
         </Card>
       ) : (
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {items.map(item => item.kind === "webhook" ? (
-            (() => {
+          {items.map(item => {
+            if (item.kind === "webhook") {
               const i = integrations.find(x => x.id === item.id);
               const providerLabel = INTEGRATION_PROVIDER_OPTIONS.find(p=>p.id===i.provider)?.label || i.provider;
               return (
@@ -17066,32 +17314,51 @@ function IntegrationsScreen({ onBack }) {
                   </div>
                 </Card>
               );
-            })()
-          ) : (
-            (() => {
-              const c = directoryConnections.find(x => x.id === item.id);
-              const providerLabel = DIRECTORY_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
-              const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
-              const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+            }
+            if (item.kind === "productivity") {
+              const c = productivityConnections.find(x => x.id === item.id);
+              const statusColor = c.status === "active" ? C.green : C.textMut;
+              const statusLabel = c.status === "active" ? "Connected" : "Revoked";
               return (
-                <Card key={`d:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"directory", id:c.id })}>
+                <Card key={`p:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"productivity", id:c.id })}>
                   <div style={{display:"flex",alignItems:"center",gap:14}}>
-                    <span style={{fontSize:20}}>🗂️</span>
+                    <span style={{fontSize:20}}>💬</span>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
                         <Badge label={statusLabel} color={statusColor}/>
                       </div>
                       <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
-                        {providerLabel} · {c.tenantOrDomain} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
+                        {c.teamOrWorkspace} · {c.channelName ? `#${c.channelName}` : "no channel set"} · last notified {c.lastNotifiedAt ? timeAgo(c.lastNotifiedAt) : "never"}
                       </div>
                     </div>
                     <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
                   </div>
                 </Card>
               );
-            })()
-          ))}
+            }
+            const c = directoryConnections.find(x => x.id === item.id);
+            const providerLabel = DIRECTORY_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+            const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
+            const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+            return (
+              <Card key={`d:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"directory", id:c.id })}>
+                <div style={{display:"flex",alignItems:"center",gap:14}}>
+                  <span style={{fontSize:20}}>🗂️</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                      <Badge label={statusLabel} color={statusColor}/>
+                    </div>
+                    <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                      {providerLabel} · {c.tenantOrDomain} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
+                    </div>
+                  </div>
+                  <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
+                </div>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

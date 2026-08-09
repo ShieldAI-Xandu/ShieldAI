@@ -23,6 +23,7 @@ import JSZip from "jszip";
 import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 import { refreshClientExposure } from "./cveService.js";
 import { buildInstaller } from "./agentInstallerBuilder.js";
+import { notify } from "./notificationDispatch.js";
 
 // ── agent installer package (served from the source-of-truth agent/ dir) ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -834,6 +835,14 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
         });
       }
       await db.write();
+      // Fires only here / at /forward — the moment a recommendation
+      // actually becomes visible to the client, not when the AI first
+      // drafts it as "suggested" (still analyst-only at that point).
+      await notify(db, {
+        ownerUserId, event: "recommendation.drafted",
+        title: rec.title, detail: rec.detail, severity: rec.severity,
+        actionable: true, refs: { refType: "recommendation", refId: rec.id },
+      });
       res.json(rec);
     } catch (err) {
       console.error("Create recommendation error:", err.message);
@@ -887,6 +896,11 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     if (severity) rec.severity = String(severity).slice(0, 16);
     pushHistory(rec, "analyst", req.userId, "proposed", "Forwarded to client.");
     await db.write();
+    await notify(db, {
+      ownerUserId: rec.ownerUserId, event: "recommendation.drafted",
+      title: rec.title, detail: rec.detail, severity: rec.severity,
+      actionable: true, refs: { refType: "recommendation", refId: rec.id },
+    });
     res.json(rec);
   });
 

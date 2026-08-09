@@ -30,6 +30,7 @@ import { randomUUID } from "crypto";
 import { getScenario, scenarioSummaries, renderScenario } from "./phishingScenarios.js";
 import { sendEmail, emailConfigured } from "./emailService.js";
 import { hasTrainingDelivery, getTier, priceLabel, getAddon } from "./tiers.js";
+import { notify } from "./notificationDispatch.js";
 
 function ensureCollections(db) {
   // isTrial: true marks the one free campaign a non-paying client is allowed.
@@ -281,6 +282,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     await db.write();
 
     const APP_URL = process.env.APP_URL || "http://localhost:5173";
+    let sentCount = 0, failedCount = 0;
     for (const target of targets) {
       const token = randomUUID().replace(/-/g, "");
       const link = `${APP_URL}/phish/${token}`;
@@ -288,6 +290,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
       const result = await sendEmail({
         to: target.email, subject, html, fromName: senderName, fromLocal: scenario.senderLocal,
       });
+      if (result.ok) sentCount++; else failedCount++;
       db.data.phishingResults.push({
         id: randomUUID(), campaignId: campaign.id, learnerId: target.learnerId,
         recipientName: target.learnerId ? null : target.name,
@@ -301,6 +304,17 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     campaign.status = "sent";
     campaign.sentAt = new Date().toISOString();
     await db.write();
+
+    // Covers the synchronous "sending finished" moment only — click results
+    // trickle in later via the public /api/phish/:token link, which would
+    // need a scheduler to notify about, out of scope here.
+    await notify(db, {
+      ownerUserId: scope.clientUserId, event: "phishing.campaign_sent",
+      title: `Phishing simulation sent: ${scenario?.name || campaign.scenarioId}`,
+      detail: `Sent to ${sentCount} recipient(s)${failedCount ? `, ${failedCount} failed` : ""}.`,
+      severity: "info", actionable: false,
+    });
+
     res.json(campaignSummary(db, campaign));
   });
 
