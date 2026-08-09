@@ -16350,15 +16350,31 @@ function EndpointsScreen({ onBack }) {
 // ─────────────────────────────────────────────────────────────
 
 const INTEGRATION_PROVIDER_OPTIONS = [
-  { id: "nessus", label: "Nessus" },
+  { id: "nessus", label: "Nessus / Tenable.io" },
   { id: "qualys", label: "Qualys" },
+  { id: "rapid7", label: "Rapid7 InsightVM" },
+  { id: "msdefender", label: "Microsoft Defender" },
   { id: "crowdstrike", label: "CrowdStrike" },
   { id: "wazuh", label: "Wazuh" },
   { id: "splunk", label: "Splunk" },
   { id: "custom", label: "Generic / Custom" },
 ];
 
-function IntegrationSamplePayload({ webhookUrl }) {
+// Per-vendor setup guidance. Only CrowdStrike has a genuine point-and-click
+// outbound webhook among these — everyone else is a pull/REST API, so a
+// small script or SOAR/iPaaS workflow (Zapier, Tines, a scheduled job) has
+// to poll the vendor and forward results here. ShieldAI's adapter recognizes
+// each vendor's own native JSON shape (see integrationAdapters.js) so that
+// script doesn't need to reshape the data — just forward it as-is, JSON-encoded.
+const VENDOR_SETUP_NOTES = {
+  nessus: "No native outbound webhook. Poll Tenable's /vulns/export API on a schedule (a script or SOAR/iPaaS job) and POST the exported finding objects here as-is — ShieldAI recognizes Tenable's native shape.",
+  qualys: "No native outbound webhook, and Qualys's Host List Detection API returns XML, not JSON. Convert that XML to its JSON equivalent (trivial in any scripting language) before posting. Qualys doesn't include a finding title without a separate KnowledgeBase lookup, so findings will show as \"QID 12345\" unless your script attaches its own title.",
+  rapid7: "No simple native webhook — InsightVM's webhook feature is experimental and requires pairing with InsightConnect. Join the vulnerability-definition and asset API calls in your script (host isn't included in the definition call alone) and POST the joined objects here.",
+  msdefender: "Pull-only API — poll Microsoft Defender's SoftwareVulnerabilitiesByMachine export on a schedule and forward new rows here as-is.",
+  crowdstrike: "CrowdStrike Falcon Fusion SOAR can POST here directly: create a workflow triggered on \"Detection,\" add a \"Call webhook\" action, and point it at this URL — no script needed. Falcon Spotlight vulnerability data (CVE-based) is pull-only and needs a script like the others.",
+};
+
+function IntegrationSamplePayload({ webhookUrl, provider }) {
   const sample = JSON.stringify({
     findings: [
       { externalId: "CVE-2024-12345-host-42", title: "Outdated OpenSSL", severity: "high",
@@ -16367,9 +16383,18 @@ function IntegrationSamplePayload({ webhookUrl }) {
     ],
   }, null, 2);
   const curl = `curl -X POST "${webhookUrl}" \\\n  -H "Authorization: Bearer <token>" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify({ findings: [{ externalId: "...", title: "...", severity: "high" }] })}'`;
+  const vendorNote = VENDOR_SETUP_NOTES[provider];
   return (
     <div style={{marginTop:14}}>
-      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Sample request</div>
+      {vendorNote && (
+        <div style={{marginBottom:12,padding:"10px 12px",background:`${C.accent}0f`,
+          border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+          {vendorNote}
+        </div>
+      )}
+      <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>
+        {vendorNote ? "Or send our generic shape directly" : "Sample request"}
+      </div>
       <pre style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
         padding:"10px 12px",color:C.textSec,fontSize:11,lineHeight:1.6,overflowX:"auto",margin:"0 0 8px"}}>{curl}</pre>
       <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Finding shape</div>
@@ -16489,7 +16514,7 @@ function AddIntegrationModal({ onClose }) {
                 </button>
               </div>
             </div>
-            <IntegrationSamplePayload webhookUrl={created.webhookUrl}/>
+            <IntegrationSamplePayload webhookUrl={created.webhookUrl} provider={provider}/>
             <button onClick={onClose}
               style={{marginTop:18,padding:"10px 18px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>

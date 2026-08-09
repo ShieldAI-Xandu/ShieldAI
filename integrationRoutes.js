@@ -28,6 +28,7 @@
 
 import { randomUUID, randomBytes, createHash } from "crypto";
 import { counters } from "./tierGate.js";
+import { normalizeIncomingFindings } from "./integrationAdapters.js";
 
 const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -248,12 +249,17 @@ export function registerIntegrationRoutes(app, { db, requireAuth, gate, callClau
   app.post("/api/integrations/webhook/:id", requireIntegration, async (req, res) => {
     try {
       const body = req.body || {};
-      if (!Array.isArray(body.findings)) {
-        return res.status(400).json({ error: "Malformed payload (expected findings[])." });
+      const integration = req.integration;
+
+      // Try a vendor-specific format adapter first (only "claims" the
+      // payload if it recognizes that vendor's native shape); falls back to
+      // our generic { findings: [...] } wrapper. See integrationAdapters.js.
+      const normalized = normalizeIncomingFindings(integration.provider, body);
+      if (!Array.isArray(normalized)) {
+        return res.status(400).json({ error: "Malformed payload (expected findings[], or a recognized vendor shape)." });
       }
 
-      const integration = req.integration;
-      const batch = body.findings.slice(0, 500);
+      const batch = normalized.slice(0, 500);
       const existing = db.data.integrationFindings || (db.data.integrationFindings = []);
       let stored = 0, duplicates = 0;
       const batchRecords = []; // the stored/updated row for every finding in this call, for drafting below
