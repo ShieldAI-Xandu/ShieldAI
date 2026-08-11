@@ -125,6 +125,13 @@ if systemctl is-active --quiet sentinelone 2>/dev/null || have sentinelctl; then
 if systemctl is-active --quiet sophos-spl 2>/dev/null || have savdstatus; then add_av "Sophos"; fi
 if systemctl is-active --quiet wazuh-agent 2>/dev/null; then add_av "Wazuh Agent"; fi
 if systemctl is-active --quiet esets 2>/dev/null || have esets_daemon; then add_av "ESET"; fi
+# Bitdefender GravityZone Business Security for Linux. Service unit naming
+# has varied across GravityZone agent versions (bd / epsecurity are the two
+# most commonly documented); unlike the checks above this one couldn't be
+# verified against a live install — confirm against a real GravityZone-for-
+# Linux host before trusting it blindly, same caveat this repo's other
+# best-effort vendor detections carry.
+if systemctl is-active --quiet bd 2>/dev/null || systemctl is-active --quiet epsecurity 2>/dev/null || have bdscan; then add_av "Bitdefender"; fi
 if [ -n "$AV_TOOLS" ]; then
   add_check "av_present" "Protect" "Endpoint protection installed" "pass" "info" "$AV_TOOLS" \
     "An endpoint protection product is installed." "10"

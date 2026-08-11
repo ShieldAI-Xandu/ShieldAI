@@ -85,19 +85,110 @@ $inventory = [ordered]@{
   software = @()
 }
 
-# ── 1. Microsoft Defender / registered AV ─────────────────────
+# ── 1a. Full AV/security product enumeration (Security Center) ──
+# Windows Security Center tracks EVERY registered AV product on the
+# machine — this is how we catch a third-party AV/EDR (Bitdefender, Norton,
+# Sophos, CrowdStrike, SentinelOne, etc.) instead of only ever reporting
+# Defender's state, which is what an SMB is actually protected by if
+# they've replaced/augmented Defender. Runs BEFORE the Defender-specific
+# block below because that block needs to know whether a third-party AV is
+# active to correctly interpret Defender's own state (see the note there).
+#
+# Plain try/catch (not the Try-Run helper) for the CIM query itself —
+# Try-Run invokes its scriptblock via `&`, which runs in a child scope, so
+# `Try-Run { $avProducts = ... }` would silently never update $avProducts
+# in the outer scope, same footgun documented elsewhere in this file for
+# $boot/$age/$nlaOn.
+$avProducts = @()
+try {
+  $avProducts = @(Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop)
+} catch {
+  # Non-fatal: Security Center's WMI provider isn't present on Server SKUs
+  # (no Action Center service) or may be restricted — the Defender-specific
+  # checks below still provide baseline AV visibility in that case.
+}
+
+# Two passes: the first just decodes each product's real-time state so we
+# know, BEFORE adding any check, whether a third-party AV is confirmed
+# active — Defender's own Security-Center entry needs that fact to score
+# itself correctly (see below), and depending on enumeration order Defender
+# could come before the third-party product in $avProducts.
+$decoded = @{}  # name -> { rtOn, defUpToDate }
+foreach ($p in $avProducts) {
+  $name = "$($p.displayName)".Trim()
+  if ([string]::IsNullOrWhiteSpace($name) -or $decoded.ContainsKey($name)) { continue }
+  $rtOn = $false; $defUpToDate = $false
+  try {
+    $stateHex = "{0:X6}" -f [int]$p.productState
+    $rtOn = $stateHex.Substring(2,2) -in @("10","11")
+    $defUpToDate = $stateHex.Substring(4,2) -eq "00"
+  } catch { }
+  $decoded[$name] = @{ rtOn = $rtOn; defUpToDate = $defUpToDate }
+}
+$activeThirdPartyAv = ($decoded.GetEnumerator() | Where-Object { $_.Value.rtOn -and $_.Key -ne "Windows Defender" } | Select-Object -First 1).Key
+
+foreach ($name in $decoded.Keys) {
+  if (-not ($inventory.installedSecurityTools -contains $name)) {
+    [void]$inventory.installedSecurityTools.Add($name)
+  }
+  $rtOn = $decoded[$name].rtOn
+  $defUpToDate = $decoded[$name].defUpToDate
+  $statusText = "registered with Security Center"
+  $checkStatus = "pass"; $checkSeverity = "info"
+  if ($rtOn -and $defUpToDate) {
+    $statusText = "enabled, definitions current"; $checkStatus = "pass"; $checkSeverity = "info"
+  } elseif ($rtOn) {
+    $statusText = "enabled, definitions may be stale"; $checkStatus = "warn"; $checkSeverity = "medium"
+  } elseif ($name -eq "Windows Defender" -and $activeThirdPartyAv) {
+    # Same passive-mode reasoning as av_realtime below: Defender showing
+    # "disabled" here is EXPECTED when $activeThirdPartyAv is confirmed
+    # active, not a gap — don't flag it as a high-severity failure.
+    $statusText = "passive - $activeThirdPartyAv is the active antivirus"; $checkStatus = "pass"; $checkSeverity = "info"
+  } else {
+    $statusText = "protection appears disabled"; $checkStatus = "fail"; $checkSeverity = "high"
+  }
+  Add-Check -Id "av_product_$($name -replace '[^a-zA-Z0-9]','_')" -Category "Protect" `
+    -Title "Registered AV product: $name" -Status $checkStatus -Severity $checkSeverity `
+    -Observed $statusText -Detail "Reported by Windows Security Center." -CisControl "10"
+}
+if ($avProducts.Count -eq 0) {
+  Add-Check -Id "av_registered" -Category "Protect" -Title "Registered AV products" `
+    -Status "warn" -Severity "medium" -Observed "None registered with Security Center" `
+    -Detail "No antivirus product is registered with Windows Security Center." -CisControl "10"
+}
+
+# ── 1b. Microsoft Defender's own detailed state ─────────────────
 Try-Run {
   $mp = Get-MpComputerStatus
   if ($mp) {
-    # Real-time protection
+    # Real-time protection. When a third-party AV (e.g. Bitdefender) is
+    # installed, Windows correctly and intentionally puts Defender into
+    # Passive Mode — RealTimeProtectionEnabled goes to $false as EXPECTED
+    # behavior, not a protection gap. The old version of this check treated
+    # that as an unconditional high-severity failure, which produced a
+    # false "no real-time protection" finding on every machine running a
+    # third-party AV — exactly the kind of false negative that made a
+    # correctly-installed Bitdefender look like it wasn't being detected.
+    # AMRunningMode (values: Normal | Passive Mode | SxS Passive Mode |
+    # EDR Block Mode) is what tells us WHY it's off, so we can tell a real
+    # gap apart from expected passive-mode behavior.
+    $passiveMode = ($mp.PSObject.Properties.Name -contains "AMRunningMode") -and ($mp.AMRunningMode -ne "Normal")
     if ($mp.RealTimeProtectionEnabled) {
       Add-Check -Id "av_realtime" -Category "Protect" -Title "Antivirus real-time protection" `
-        -Status "pass" -Severity "info" -Observed "Enabled" `
+        -Status "pass" -Severity "info" -Observed "Enabled (Microsoft Defender)" `
         -Detail "Microsoft Defender real-time protection is enabled." -CisControl "10"
+    } elseif ($passiveMode -and $activeThirdPartyAv) {
+      Add-Check -Id "av_realtime" -Category "Protect" -Title "Antivirus real-time protection" `
+        -Status "pass" -Severity "info" -Observed "Enabled ($activeThirdPartyAv)" `
+        -Detail "Defender is intentionally in $($mp.AMRunningMode) because $activeThirdPartyAv is the active antivirus — this is expected, not a gap. See the 'Registered AV product: $activeThirdPartyAv' check for its own status." -CisControl "10"
+    } elseif ($passiveMode) {
+      Add-Check -Id "av_realtime" -Category "Protect" -Title "Antivirus real-time protection" `
+        -Status "warn" -Severity "medium" -Observed "Defender passive ($($mp.AMRunningMode)), no active third-party AV confirmed" `
+        -Detail "Defender reports $($mp.AMRunningMode) but no other registered antivirus product could be confirmed active via Security Center — verify a real-time AV is actually running." -CisControl "10"
     } else {
       Add-Check -Id "av_realtime" -Category "Protect" -Title "Antivirus real-time protection" `
         -Status "fail" -Severity "high" -Observed "Disabled" `
-        -Detail "Real-time protection is OFF. The endpoint is not actively protected." -CisControl "10"
+        -Detail "Real-time protection is OFF and no other antivirus is active. The endpoint is not actively protected." -CisControl "10"
     }
     # Signature freshness
     $age = $null
@@ -134,7 +225,7 @@ Try-Run {
 } {
   Add-Check -Id "av_realtime" -Category "Protect" -Title "Antivirus real-time protection" `
     -Status "unknown" -Severity "medium" -Observed "Not determinable" `
-    -Detail "Could not query Defender (it may be replaced by a third-party AV; check installed security tools)." -CisControl "10"
+    -Detail "Could not query Defender directly. See the 'Registered AV product' checks above for what Security Center reports instead." -CisControl "10"
 }
 
 # Active/quarantined threats → events
@@ -157,59 +248,6 @@ Try-Run {
       -Status "pass" -Severity "info" -Observed "None recorded" `
       -Detail "No recent Defender threat detections." -CisControl "10"
   }
-}
-
-# ── 1b. Full AV/security product enumeration (Security Center) ──
-# Get-MpComputerStatus only reports on Defender itself. Windows Security
-# Center tracks EVERY registered AV product on the machine — this is how we
-# catch a third-party AV/EDR (Norton, Sophos, CrowdStrike, SentinelOne, etc.)
-# instead of only ever reporting Defender's state, which is what an SMB is
-# actually protected by if they've replaced/augmented Defender.
-Try-Run {
-  $avProducts = @(Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop)
-  $seenNames = @{}
-  foreach ($p in $avProducts) {
-    $name = "$($p.displayName)".Trim()
-    if ([string]::IsNullOrWhiteSpace($name) -or $seenNames.ContainsKey($name)) { continue }
-    $seenNames[$name] = $true
-    if (-not ($inventory.installedSecurityTools -contains $name)) {
-      [void]$inventory.installedSecurityTools.Add($name)
-    }
-    # Best-effort decode of the long-standing community convention for the
-    # productState bitmask (Microsoft publishes no official schema for it,
-    # but this decode is widely used and stable across Windows versions).
-    # Falls back to just reporting the product's presence if decoding fails.
-    $statusText = "registered with Security Center"
-    $checkStatus = "pass"; $checkSeverity = "info"
-    # Plain try/catch (not the Try-Run helper) — Try-Run invokes its
-    # scriptblock via `&`, which runs in a child scope, so assignments to
-    # $statusText/$checkStatus/$checkSeverity inside it would shadow rather
-    # than update these outer variables. A bare try/catch shares this scope.
-    try {
-      $stateHex = "{0:X6}" -f [int]$p.productState
-      $rtOn = $stateHex.Substring(2,2) -in @("10","11")
-      $defUpToDate = $stateHex.Substring(4,2) -eq "00"
-      if ($rtOn -and $defUpToDate) {
-        $statusText = "enabled, definitions current"; $checkStatus = "pass"; $checkSeverity = "info"
-      } elseif ($rtOn) {
-        $statusText = "enabled, definitions may be stale"; $checkStatus = "warn"; $checkSeverity = "medium"
-      } else {
-        $statusText = "protection appears disabled"; $checkStatus = "fail"; $checkSeverity = "high"
-      }
-    } catch { }
-    Add-Check -Id "av_product_$($name -replace '[^a-zA-Z0-9]','_')" -Category "Protect" `
-      -Title "Registered AV product: $name" -Status $checkStatus -Severity $checkSeverity `
-      -Observed $statusText -Detail "Reported by Windows Security Center." -CisControl "10"
-  }
-  if ($avProducts.Count -eq 0) {
-    Add-Check -Id "av_registered" -Category "Protect" -Title "Registered AV products" `
-      -Status "warn" -Severity "medium" -Observed "None registered with Security Center" `
-      -Detail "No antivirus product is registered with Windows Security Center." -CisControl "10"
-  }
-} {
-  # Non-fatal: Security Center's WMI provider isn't present on Server SKUs
-  # (no Action Center service) or may be restricted — the Defender-specific
-  # checks above still provide baseline AV visibility in that case.
 }
 
 # ── 2. Firewall ───────────────────────────────────────────────

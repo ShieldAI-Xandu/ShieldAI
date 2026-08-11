@@ -138,6 +138,16 @@ if [ -d "/Applications/SentinelOne" ] || pgrep -q SentinelAgent 2>/dev/null; the
 if [ -d "/Applications/Sophos Endpoint.app" ] || pgrep -qi "Sophos" 2>/dev/null; then add_tool "Sophos"; fi
 if [ -d "/Applications/Malwarebytes.app" ]; then add_tool "Malwarebytes"; fi
 if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon" 2>/dev/null; then add_tool "ESET"; fi
+# Bitdefender: consumer (Bitdefender Antivirus for Mac) installs as one of a
+# few app-bundle names depending on version/edition; GravityZone Business
+# Security for Mac runs as a background agent under /Library/Bitdefender
+# without necessarily showing an /Applications bundle at all, so the process
+# check matters as much as the app-bundle one, not just as a fallback.
+if [ -d "/Applications/Bitdefender Antivirus for Mac.app" ] || [ -d "/Applications/Bitdefender.app" ] \
+  || [ -d "/Library/Bitdefender" ] || pgrep -qi "bitdefender" 2>/dev/null \
+  || pgrep -qi "epsecurityd" 2>/dev/null || pgrep -qi "bdservicehost" 2>/dev/null; then
+  add_tool "Bitdefender"
+fi
 
 # ── 6. Pending software updates ───────────────────────────────
 if have softwareupdate; then
