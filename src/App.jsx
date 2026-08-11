@@ -14526,6 +14526,105 @@ function ClientNotePanel({ clientId }) {
   );
 }
 
+// Mastermind slide-out panel for AnalystConsole below. MUST be a stable,
+// module-level component rather than defined inline inside AnalystConsole's
+// render — a function declared inside a render body gets a brand-new
+// identity every render, and since it's invoked as a JSX component, React
+// treats each render's version as a different component TYPE from the
+// last one and unmounts/remounts the whole
+// subtree — including this panel's own <input> — on every re-render.
+// Every keystroke in the chat box calls setMmDraft, which re-renders
+// AnalystConsole, which used to redefine this component fresh each time:
+// the input (and its focus) was destroyed and recreated after every single
+// character, which is why typing looked like the cursor "clicked off"
+// after each letter. Declaring it here, once, at module scope, with all
+// its data threaded through as props, fixes that by construction — React
+// now sees the same component type across renders and only updates props.
+function AnalystMastermindPanel({ mmOpen, setMmOpen, active, mmThread, mmThinking, mmDraft, setMmDraft, mmSend }) {
+  return (
+    <div style={{position:"fixed",top:0,right:0,bottom:0,width:mmOpen?380:0,
+      background:SOC.panel,borderLeft:mmOpen?`1px solid ${SOC.purple}44`:"none",
+      boxShadow:mmOpen?`-8px 0 40px rgba(0,0,0,0.5)`:"none",
+      transition:"width 0.25s ease",overflow:"hidden",zIndex:50,display:"flex",flexDirection:"column"}}>
+      {mmOpen && (
+        <>
+          {/* Panel header */}
+          <div style={{padding:"14px 16px",borderBottom:`1px solid ${SOC.border}`,
+            display:"flex",alignItems:"center",gap:9,
+            background:`linear-gradient(135deg,${SOC.purple}22,transparent)`}}>
+            <div style={{width:28,height:28,borderRadius:8,background:`${SOC.purple}33`,
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>✦</div>
+            <div style={{flex:1}}>
+              <div style={{color:SOC.text,fontWeight:700,fontSize:13}}>ShieldAI Mastermind</div>
+              <div style={{color:SOC.purple,fontSize:9,letterSpacing:1}}>DIAGNOSTIC CO-PILOT</div>
+            </div>
+            <button onClick={()=>setMmOpen(false)} style={{background:"none",border:"none",
+              color:SOC.textMut,fontSize:18,cursor:"pointer",lineHeight:1}}>×</button>
+          </div>
+
+          {/* Context line */}
+          <div style={{padding:"8px 16px",fontSize:10,color:SOC.textMut,borderBottom:`1px solid ${SOC.border}`}}>
+            {active ? <>Context: <span style={{color:SOC.textSec}}>{safeText(active.name)}</span></> : "Context: Portfolio overview"}
+          </div>
+
+          {/* Thread */}
+          <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
+            {mmThread.map((m,i)=>(
+              <div key={i} style={{alignSelf:m.from==="analyst"?"flex-end":"flex-start",maxWidth:"88%"}}>
+                {m.from==="mm" && (
+                  <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
+                )}
+                <div style={{padding:"10px 12px",borderRadius:10,fontSize:12,lineHeight:1.6,
+                  background:m.from==="analyst"?SOC.cyan:SOC.bg,
+                  color:m.from==="analyst"?SOC.bg:SOC.text,
+                  border:m.from==="analyst"?"none":`1px solid ${SOC.border}`}}>
+                  {m.from==="analyst"
+                    ? m.text
+                    : <ChatMarkdown text={m.text} color={SOC.text} mutedColor={SOC.textSec}/>}
+                </div>
+              </div>
+            ))}
+            {mmThinking && (
+              <div style={{alignSelf:"flex-start"}}>
+                <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
+                <div style={{padding:"10px 14px",borderRadius:10,background:SOC.bg,border:`1px solid ${SOC.border}`,
+                  color:SOC.textMut,fontSize:12}}>Analyzing…</div>
+              </div>
+            )}
+          </div>
+
+          {/* Quick actions */}
+          <div style={{padding:"10px 14px",borderTop:`1px solid ${SOC.border}`,display:"flex",flexWrap:"wrap",gap:6}}>
+            {MASTERMIND_QUICK.map(q=>(
+              <button key={q.id} onClick={()=>mmSend(q.id)}
+                style={{padding:"6px 10px",background:SOC.bg,border:`1px solid ${SOC.border}`,
+                  borderRadius:16,color:SOC.textSec,fontSize:10,cursor:"pointer",
+                  display:"flex",alignItems:"center",gap:4}}>
+                <span>{q.icon}</span>{q.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Input */}
+          <div style={{padding:"10px 14px",borderTop:`1px solid ${SOC.border}`,display:"flex",gap:8}}>
+            <input value={mmDraft} onChange={e=>setMmDraft(e.target.value)}
+              onKeyDown={e=>{ if(e.key==="Enter"&&mmDraft.trim()){ mmSend(null, mmDraft.trim()); } }}
+              placeholder="Ask Mastermind…"
+              style={{flex:1,padding:"9px 12px",background:SOC.bg,border:`1px solid ${SOC.border}`,
+                borderRadius:8,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
+            <button onClick={()=>mmDraft.trim()&&mmSend(null, mmDraft.trim())}
+              style={{padding:"9px 14px",background:SOC.purple,color:SOC.bg,border:"none",
+                borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
+          </div>
+          <div style={{padding:"6px 14px 12px",fontSize:9,color:SOC.textMut,textAlign:"center"}}>
+            Scripted preview · becomes live AI in production
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AnalystConsole({ user, onExit, onImpersonate }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
@@ -14822,89 +14921,9 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     </div>
   );
 
-  // ── Mastermind slide-out panel (shared across views) ──
-  const Mastermind = () => (
-    <div style={{position:"fixed",top:0,right:0,bottom:0,width:mmOpen?380:0,
-      background:SOC.panel,borderLeft:mmOpen?`1px solid ${SOC.purple}44`:"none",
-      boxShadow:mmOpen?`-8px 0 40px rgba(0,0,0,0.5)`:"none",
-      transition:"width 0.25s ease",overflow:"hidden",zIndex:50,display:"flex",flexDirection:"column"}}>
-      {mmOpen && (
-        <>
-          {/* Panel header */}
-          <div style={{padding:"14px 16px",borderBottom:`1px solid ${SOC.border}`,
-            display:"flex",alignItems:"center",gap:9,
-            background:`linear-gradient(135deg,${SOC.purple}22,transparent)`}}>
-            <div style={{width:28,height:28,borderRadius:8,background:`${SOC.purple}33`,
-              display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>✦</div>
-            <div style={{flex:1}}>
-              <div style={{color:SOC.text,fontWeight:700,fontSize:13}}>ShieldAI Mastermind</div>
-              <div style={{color:SOC.purple,fontSize:9,letterSpacing:1}}>DIAGNOSTIC CO-PILOT</div>
-            </div>
-            <button onClick={()=>setMmOpen(false)} style={{background:"none",border:"none",
-              color:SOC.textMut,fontSize:18,cursor:"pointer",lineHeight:1}}>×</button>
-          </div>
-
-          {/* Context line */}
-          <div style={{padding:"8px 16px",fontSize:10,color:SOC.textMut,borderBottom:`1px solid ${SOC.border}`}}>
-            {active ? <>Context: <span style={{color:SOC.textSec}}>{safeText(active.name)}</span></> : "Context: Portfolio overview"}
-          </div>
-
-          {/* Thread */}
-          <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
-            {mmThread.map((m,i)=>(
-              <div key={i} style={{alignSelf:m.from==="analyst"?"flex-end":"flex-start",maxWidth:"88%"}}>
-                {m.from==="mm" && (
-                  <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
-                )}
-                <div style={{padding:"10px 12px",borderRadius:10,fontSize:12,lineHeight:1.6,
-                  background:m.from==="analyst"?SOC.cyan:SOC.bg,
-                  color:m.from==="analyst"?SOC.bg:SOC.text,
-                  border:m.from==="analyst"?"none":`1px solid ${SOC.border}`}}>
-                  {m.from==="analyst"
-                    ? m.text
-                    : <ChatMarkdown text={m.text} color={SOC.text} mutedColor={SOC.textSec}/>}
-                </div>
-              </div>
-            ))}
-            {mmThinking && (
-              <div style={{alignSelf:"flex-start"}}>
-                <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
-                <div style={{padding:"10px 14px",borderRadius:10,background:SOC.bg,border:`1px solid ${SOC.border}`,
-                  color:SOC.textMut,fontSize:12}}>Analyzing…</div>
-              </div>
-            )}
-          </div>
-
-          {/* Quick actions */}
-          <div style={{padding:"10px 14px",borderTop:`1px solid ${SOC.border}`,display:"flex",flexWrap:"wrap",gap:6}}>
-            {MASTERMIND_QUICK.map(q=>(
-              <button key={q.id} onClick={()=>mmSend(q.id)}
-                style={{padding:"6px 10px",background:SOC.bg,border:`1px solid ${SOC.border}`,
-                  borderRadius:16,color:SOC.textSec,fontSize:10,cursor:"pointer",
-                  display:"flex",alignItems:"center",gap:4}}>
-                <span>{q.icon}</span>{q.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Input */}
-          <div style={{padding:"10px 14px",borderTop:`1px solid ${SOC.border}`,display:"flex",gap:8}}>
-            <input value={mmDraft} onChange={e=>setMmDraft(e.target.value)}
-              onKeyDown={e=>{ if(e.key==="Enter"&&mmDraft.trim()){ mmSend(null, mmDraft.trim()); } }}
-              placeholder="Ask Mastermind…"
-              style={{flex:1,padding:"9px 12px",background:SOC.bg,border:`1px solid ${SOC.border}`,
-                borderRadius:8,color:SOC.text,fontSize:12,fontFamily:"Inter,system-ui,sans-serif"}}/>
-            <button onClick={()=>mmDraft.trim()&&mmSend(null, mmDraft.trim())}
-              style={{padding:"9px 14px",background:SOC.purple,color:SOC.bg,border:"none",
-                borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
-          </div>
-          <div style={{padding:"6px 14px 12px",fontSize:9,color:SOC.textMut,textAlign:"center"}}>
-            Scripted preview · becomes live AI in production
-          </div>
-        </>
-      )}
-    </div>
-  );
+  // Mastermind slide-out panel: rendered via the AnalystMastermindPanel
+  // component declared at module scope above (see its own comment for why
+  // it can't be defined inline here).
 
   // ═══ CLIENT COMMAND CENTER ═══
   if (workspaceClient) {
@@ -14916,7 +14935,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title="My Clients"/>
-        <Mastermind/>
+        <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+          mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:1000,margin:"0 auto",padding:"20px"}}>
           {actionsFor ? (
             <div>
@@ -15006,7 +15026,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title="White-Label Branding"/>
-        <Mastermind/>
+        <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+          mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
           <BrandingManager isAdmin={!!user.isAdmin}/>
         </div>
@@ -15018,7 +15039,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title="Support Requests"/>
-        <Mastermind/>
+        <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+          mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
           <SupportRequestConsole/>
         </div>
@@ -15033,7 +15055,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title="Live Endpoint Fleet"/>
-        <Mastermind/>
+        <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+          mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:1100,margin:"0 auto",padding:"20px"}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:SOC.textMut,letterSpacing:1,textTransform:"uppercase",fontWeight:700}}>
@@ -15219,7 +15242,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
         <Header title={c.name} backTo={{ label:"Portfolio", fn:()=>{setView("portfolio");setActive(null);} }}/>
-        <Mastermind/>
+        <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+          mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:1180,margin:"0 auto",padding:"20px"}}>
 
           {/* Top band: posture + agent + compliance + plan */}
@@ -15537,7 +15561,8 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
   return (
     <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
       <Header title="Portfolio Command Center"/>
-      <Mastermind/>
+      <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
+        mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
       <div style={{maxWidth:1180,margin:"0 auto",padding:"20px"}}>
 
         {/* KPI row */}
