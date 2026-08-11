@@ -257,6 +257,11 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
   const [busy, setBusy] = useState(null);
   const [reason, setReason] = useState({});
   const [newAnswer, setNewAnswer] = useState({});
+  // Per-control gate in front of "update-answer": undefined = not yet chosen,
+  // "yes" = agrees with the agent (narrowed to just the agent-consistent
+  // answers, or applied immediately if there's only one), "no" = wants the
+  // full answer list instead.
+  const [agreeChoice, setAgreeChoice] = useState({});
   const [feedback, setFeedback] = useState([]);
   const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
 
@@ -266,9 +271,13 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
   }, [apiBase, clientId]);
   useEffect(load, [load]);
 
-  async function resolve(c, decision) {
+  async function resolve(c, decision, answerOverride) {
+    // answerOverride lets the one-click "Yes, matches the agent" path submit
+    // immediately when there's exactly one agent-consistent answer, without
+    // waiting on a setState-then-click round-trip through the newAnswer state.
+    const answerToUse = answerOverride !== undefined ? answerOverride : newAnswer[c.controlId];
     if (decision === "out-of-scope" && !String(reason[c.controlId] || "").trim()) return;
-    if (decision === "update-answer" && !newAnswer[c.controlId]) return;
+    if (decision === "update-answer" && !answerToUse) return;
     setBusy(c.controlId + decision);
     const decisionLabel = c.resolution?.options?.find(o => o.id === decision)?.label || decision;
     try {
@@ -276,13 +285,16 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           controlId: c.controlId, decision, clientId,
-          reason: reason[c.controlId], newAnswer: newAnswer[c.controlId],
+          reason: reason[c.controlId], newAnswer: answerToUse,
         }),
       });
       const d = await res.json().catch(() => ({}));
       const entry = { fbId: `${c.controlId}-${decision}-${Date.now()}`, ok: res.ok, question: c.question, decisionLabel, ...d };
       setFeedback(fb => [entry, ...fb].slice(0, 8));
-      if (res.ok) { load(); onResolved && onResolved(); }
+      if (res.ok) {
+        setAgreeChoice(s => { const n = { ...s }; delete n[c.controlId]; return n; });
+        load(); onResolved && onResolved();
+      }
     } finally { setBusy(null); }
   }
 
@@ -402,43 +414,114 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
 
           {/* The decision. Rule 2: the client chooses. */}
           <div style={{ display: "grid", gap: 8 }}>
-            {c.resolution.options.map(o => (
-              <div key={o.id} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{safeText(o.label)}</div>
-                <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{safeText(o.effect)}</div>
+            {c.resolution.options.map(o => {
+              if (o.id === "update-answer") {
+                const suggested = c.resolution.agentSuggestedAnswers || [];
+                const choice = agreeChoice[c.controlId];
+                return (
+                  <UpdateAnswerOption key={o.id} o={o} c={c} suggested={suggested} choice={choice}
+                    newAnswer={newAnswer[c.controlId] || ""}
+                    setChoice={(v) => setAgreeChoice(s => ({ ...s, [c.controlId]: v }))}
+                    setAnswer={(v) => setNewAnswer(s => ({ ...s, [c.controlId]: v }))}
+                    busy={busy === c.controlId + o.id}
+                    onSubmit={(answer) => resolve(c, o.id, answer)} />
+                );
+              }
+              return (
+                <div key={o.id} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{safeText(o.label)}</div>
+                  <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{safeText(o.effect)}</div>
 
-                {o.id === "update-answer" && (
-                  <select value={newAnswer[c.controlId] || ""} onChange={e => setNewAnswer(s => ({ ...s, [c.controlId]: e.target.value }))}
+                  {o.requiresReason && (
+                    <input value={reason[c.controlId] || ""} onChange={e => setReason(s => ({ ...s, [c.controlId]: e.target.value }))}
+                      placeholder="Why aren't these hosts representative? An auditor will read this."
+                      style={{
+                        width: "100%", marginBottom: 8, padding: "6px 8px", borderRadius: 6,
+                        background: C.bg, color: C.text, border: `1px solid ${C.border}`, fontSize: 12,
+                      }} />
+                  )}
+
+                  <button onClick={() => resolve(c, o.id)} disabled={busy === c.controlId + o.id}
                     style={{
-                      width: "100%", marginBottom: 8, padding: "6px 8px", borderRadius: 6,
-                      background: C.bg, color: C.text, border: `1px solid ${C.border}`, fontSize: 12,
+                      padding: "6px 12px", borderRadius: 6, border: "none", cursor: "pointer",
+                      fontSize: 11.5, fontWeight: 700, color: C.bg,
+                      background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
                     }}>
-                    <option value="">Choose the answer that matches reality…</option>
-                    {(c.validAnswers || []).map(a => <option key={a} value={a}>{a}</option>)}
-                  </select>
-                )}
-                {o.requiresReason && (
-                  <input value={reason[c.controlId] || ""} onChange={e => setReason(s => ({ ...s, [c.controlId]: e.target.value }))}
-                    placeholder="Why aren't these hosts representative? An auditor will read this."
-                    style={{
-                      width: "100%", marginBottom: 8, padding: "6px 8px", borderRadius: 6,
-                      background: C.bg, color: C.text, border: `1px solid ${C.border}`, fontSize: 12,
-                    }} />
-                )}
-
-                <button onClick={() => resolve(c, o.id)} disabled={busy === c.controlId + o.id}
-                  style={{
-                    padding: "6px 12px", borderRadius: 6, border: "none", cursor: "pointer",
-                    fontSize: 11.5, fontWeight: 700, color: C.bg,
-                    background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
-                  }}>
-                  {busy === c.controlId + o.id ? "Saving…" : "Choose this"}
-                </button>
-              </div>
-            ))}
+                    {busy === c.controlId + o.id ? "Saving…" : "Choose this"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// The "update-answer" resolution option specifically: a Yes/No gate in front
+// of picking an answer, rather than an open-ended dropdown up front.
+//   Yes -> agrees with what the agent measured. If only one answer is
+//          consistent with that verdict, applies it immediately (one click —
+//          nothing to pick, since there's nothing ambiguous about it). If
+//          more than one is consistent (e.g. disk encryption's "fail" bucket
+//          covers both "Some systems only" and "No / not sure" — genuinely
+//          different real-world states), narrows the dropdown to just those
+//          instead of guessing which one.
+//   No  -> wants a different answer than what the agent implies. Shows the
+//          full list, same as before this was added.
+function UpdateAnswerOption({ o, c, suggested, choice, newAnswer, setChoice, setAnswer, busy, onSubmit }) {
+  const selectStyle = {
+    width: "100%", marginBottom: 8, padding: "6px 8px", borderRadius: 6,
+    background: C.bg, color: C.text, border: `1px solid ${C.border}`, fontSize: 12,
+  };
+  const buttonStyle = {
+    padding: "6px 12px", borderRadius: 6, border: "none", cursor: busy ? "wait" : "pointer",
+    fontSize: 11.5, fontWeight: 700, color: C.bg,
+    background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
+  };
+  const backLink = (
+    <button onClick={() => { setChoice(undefined); setAnswer(""); }} disabled={busy}
+      style={{ background: "none", border: "none", color: C.textMut, fontSize: 11, cursor: "pointer", padding: 0, marginLeft: 10 }}>
+      ← back
+    </button>
+  );
+
+  return (
+    <div style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+      <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{safeText(o.label)}</div>
+      <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>{safeText(o.effect)}</div>
+
+      {choice === undefined ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: C.textSec, fontSize: 11.5, marginRight: 2 }}>Update your answer to match?</span>
+          <button
+            onClick={() => (suggested.length === 1 ? onSubmit(suggested[0]) : setChoice("yes"))}
+            disabled={busy} style={{ ...buttonStyle, padding: "5px 14px" }}>
+            {busy ? "Saving…" : "Yes"}
+          </button>
+          <button onClick={() => setChoice("no")} disabled={busy}
+            style={{
+              padding: "5px 14px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, fontWeight: 700,
+              color: C.textSec, background: "transparent", border: `1px solid ${C.border}`,
+            }}>
+            No
+          </button>
+        </div>
+      ) : (
+        <>
+          <select value={newAnswer} onChange={e => setAnswer(e.target.value)} style={selectStyle}>
+            <option value="">
+              {choice === "yes" ? "Choose which matches reality…" : "Choose the answer that matches reality…"}
+            </option>
+            {(choice === "yes" ? suggested : (c.validAnswers || [])).map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <button onClick={() => onSubmit(newAnswer)} disabled={busy || !newAnswer} style={buttonStyle}>
+            {busy ? "Saving…" : "Choose this"}
+          </button>
+          {backLink}
+        </>
+      )}
     </div>
   );
 }

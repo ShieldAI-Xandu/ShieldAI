@@ -249,7 +249,8 @@ export const HELP_MANUAL = [
         intro: "When your monitoring agent measures something that disagrees with what you answered on your assessment, it shows up in the Conflict Queue rather than silently changing either one.",
         steps: [
           "Open the Conflict Queue to see the disputed control with both values side by side.",
-          "Choose: keep your original answer, update it to match what the agent measured, or mark the affected hosts \"not representative\" (a reason is required).",
+          "Under \"The agent is right — update my answer,\" click Yes or No. Yes applies the agent's finding — instantly if there's only one answer that matches it, or narrowed to just the matching answers if more than one could fit, so you're never guessing. No opens the full list of answers instead, if what actually happened isn't well described by the agent's finding.",
+          "Or choose one of the other two options: keep your answer and open a fix-it task for the failing hosts, or mark the affected hosts \"not representative\" (a reason is required).",
         ],
       },
       {

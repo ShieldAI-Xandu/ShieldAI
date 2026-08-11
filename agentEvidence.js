@@ -175,7 +175,7 @@ export const RESOLUTION_OPTIONS = [
  * The decision a client is being asked to make about one dispute.
  * Pure data — presenting it is the UI's job, deciding is the human's.
  */
-function resolutionFor(mapping, roll, answerLabel) {
+function resolutionFor(mapping, roll, answerLabel, agentSuggestedAnswers) {
   return {
     required: true,
     question: `Your answer says "${answerLabel}". The agent found something different on ${roll.fail > 0 ? `${roll.fail} of ${roll.hosts}` : `${roll.hosts}`} host(s). Which is right?`,
@@ -189,6 +189,14 @@ function resolutionFor(mapping, roll, answerLabel) {
       whatItSees: mapping.observes,
       whatItCannotSee: mapping.limits,
     },
+    // The answer label(s) consistent with what the agent measured — from
+    // AGENT_EVIDENCE_MAP's own consistentWith table, never inferred. Lets the
+    // UI offer a fast "the agent's right" path for "update-answer" without
+    // guessing: when there's exactly one, it can be applied directly; when
+    // there's more than one (e.g. disk encryption's fail bucket covers both
+    // "Some systems only" and "No / not sure" — genuinely different states),
+    // the UI still narrows the choice rather than picking one silently.
+    agentSuggestedAnswers: agentSuggestedAnswers || [],
     whyThisMatters:
       "An auditor asks how you know. A control backed by measured evidence is stronger than one backed by a checkbox — and a control where the two disagree is the first thing they'll pull on.",
     unresolvedMeaning:
@@ -242,6 +250,7 @@ export function corroborate(agentReports = [], checklistAnswers = {}) {
     const answerLabel = typeof answer === "string" ? answer : answer?.label ?? null;
 
     let status, note;
+    let agentSuggestedAnswers = [];
     if (m.informationalOnly) {
       status = STATUS.UNCORROBORATED;
       note = "Informational only — this observation is too weak to corroborate the control.";
@@ -255,15 +264,18 @@ export function corroborate(agentReports = [], checklistAnswers = {}) {
       if (claimsGood && roll.verdict === "fail") {
         status = STATUS.DISPUTED;
         note = `The questionnaire says "${answerLabel}", but the agent found this failing on ${roll.fail} of ${roll.hosts} reporting host(s). Worth reconciling before an auditor does.`;
+        agentSuggestedAnswers = m.consistentWith.fail || [];
       } else if (claimsGood && roll.verdict === "mixed") {
         status = STATUS.DISPUTED;
         note = `The questionnaire says "${answerLabel}", but agent results are mixed across ${roll.hosts} host(s) — ${roll.pass} pass, ${roll.fail} fail, ${roll.warn} warn.`;
+        agentSuggestedAnswers = m.consistentWith.fail || [];
       } else if (claimsGood && roll.verdict === "pass") {
         status = STATUS.CONFIRMED;
         note = `The agent independently confirms this on all ${roll.hosts} reporting host(s). This is measured evidence, not a self-assessment — worth showing an auditor.`;
       } else if (claimsBad && roll.verdict === "pass") {
         status = STATUS.DISPUTED;
         note = `The questionnaire says "${answerLabel}", but the agent found this passing on all ${roll.hosts} reporting host(s). The answer may understate reality — or the agent's hosts may not be representative.`;
+        agentSuggestedAnswers = m.consistentWith.pass || [];
       } else {
         status = STATUS.UNCORROBORATED;
         note = `The agent observed this on ${roll.hosts} host(s); it neither confirms nor contradicts the questionnaire answer.`;
@@ -283,7 +295,7 @@ export function corroborate(agentReports = [], checklistAnswers = {}) {
       agent: roll,
       // A dispute the client can't act on is just a red badge. This is the
       // decision point: both sides shown, options offered, nothing auto-chosen.
-      resolution: status === STATUS.DISPUTED ? resolutionFor(m, roll, answerLabel) : null,
+      resolution: status === STATUS.DISPUTED ? resolutionFor(m, roll, answerLabel, agentSuggestedAnswers) : null,
       // The rule, restated on every record so it can't be lost in the UI.
       authority: "informational",
       authorityNote:
