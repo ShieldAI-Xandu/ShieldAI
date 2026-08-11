@@ -108,6 +108,12 @@ function publicAgent(a, latest) {
     createdAt: a.createdAt, lastSeen: a.lastSeen, revokedAt: a.revokedAt || null,
     summary: latest ? summarizeReport(latest.report) : null,
     lastReportAt: latest ? latest.receivedAt : null,
+    // On-demand check-in state (POST /api/agent-checkin/:id sets these) — so
+    // the client UI can show "requested, waiting on the next poll" and avoid
+    // letting someone queue up duplicate requests.
+    pendingCheckIn: !!a.pendingCheckIn,
+    checkInRequestedAt: a.checkInRequestedAt || null,
+    lastCheckInServedAt: a.lastCheckInServedAt || null,
   };
 }
 

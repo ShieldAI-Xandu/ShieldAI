@@ -16025,17 +16025,18 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [removing, setRemoving] = useState(false);
+  const [requestingCheckIn, setRequestingCheckIn] = useState(false);
+  const [checkInNote, setCheckInNote] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const res = await authFetch(`${API_BASE}/api/admin/endpoints/${endpointId}`);
-        if (!res.ok) throw new Error("Could not load endpoint.");
-        setData(await res.json());
-      } catch (e) { setError(e.message); } finally { setLoading(false); }
-    })();
-  }, [endpointId]);
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/endpoints/${endpointId}`);
+      if (!res.ok) throw new Error("Could not load endpoint.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [endpointId]);
 
   async function removeEndpoint() {
     if (!window.confirm("Remove this endpoint? It will stop appearing in your fleet and its history will be deleted. This can't be undone.")) return;
@@ -16045,6 +16046,17 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
       if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove endpoint.");
       onBack();
     } catch (e) { setError(e.message); setRemoving(false); }
+  }
+
+  async function requestCheckIn() {
+    setRequestingCheckIn(true); setError(null); setCheckInNote(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/agent-checkin/${endpointId}`, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Could not request a check-in.");
+      setCheckInNote(d.note || "Requested — the endpoint will report on its next poll.");
+      load();
+    } catch (e) { setError(e.message); } finally { setRequestingCheckIn(false); }
   }
 
   if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
@@ -16064,15 +16076,32 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
           border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
           ← Back to fleet
         </button>
-        {!isAnalystView && (
-          <button onClick={removeEndpoint} disabled={removing}
-            style={{marginLeft:"auto",padding:"6px 14px",background:`${C.red}12`,
-              border:`1px solid ${C.red}40`,borderRadius:6,color:C.red,fontSize:12,fontWeight:600,
-              cursor:removing?"wait":"pointer"}}>
-            {removing?"Removing…":"Remove endpoint"}
+        <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={requestCheckIn}
+            disabled={requestingCheckIn || a.pendingCheckIn || a.status === "revoked"}
+            title="Flags the agent to send a fresh report on its next scheduled poll — not instant."
+            style={{padding:"6px 14px",background:`${C.accent}12`,border:`1px solid ${C.accent}40`,
+              borderRadius:6,color:C.accent,fontSize:12,fontWeight:600,
+              cursor:(requestingCheckIn||a.pendingCheckIn||a.status==="revoked")?"default":"pointer",
+              opacity:a.status==="revoked"?0.5:1}}>
+            {requestingCheckIn ? "Requesting…" : a.pendingCheckIn ? "Check-in requested" : "Request check-in"}
           </button>
-        )}
+          {!isAnalystView && (
+            <button onClick={removeEndpoint} disabled={removing}
+              style={{padding:"6px 14px",background:`${C.red}12`,
+                border:`1px solid ${C.red}40`,borderRadius:6,color:C.red,fontSize:12,fontWeight:600,
+                cursor:removing?"wait":"pointer"}}>
+              {removing?"Removing…":"Remove endpoint"}
+            </button>
+          )}
+        </div>
       </div>
+      {checkInNote && (
+        <div style={{marginBottom:14,padding:"9px 12px",background:`${C.green}12`,
+          border:`1px solid ${C.green}33`,borderRadius:7,color:C.green,fontSize:12.5}}>
+          {checkInNote}
+        </div>
+      )}
       {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
 
       <Card style={{marginBottom:16}}>
@@ -16085,6 +16114,11 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
             </div>
             <div style={{color:C.textSec,fontSize:13}}>
               {report?.host?.osVersion || a.os} · last report {timeAgo(a.lastReportAt)}
+              {a.pendingCheckIn && (
+                <span style={{color:C.amber,marginLeft:8}}>
+                  · check-in requested {timeAgo(a.checkInRequestedAt)}, waiting on the next poll
+                </span>
+              )}
             </div>
           </div>
           <div style={{textAlign:"right"}}>
