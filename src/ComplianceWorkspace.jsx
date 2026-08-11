@@ -660,7 +660,10 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
           )}
 
           <div style={{ display: "grid", gap: 8 }}>
-            {reqs.map(r => <RequirementRow key={r.id} r={r} />)}
+            {reqs.map(r => (
+              <RequirementRow key={r.id} r={r} authFetch={authFetch} apiBase={apiBase}
+                clientId={clientId} onSaved={load} />
+            ))}
           </div>
 
           {data.detail?.disclaimer && (
@@ -674,7 +677,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
   );
 }
 
-function RequirementRow({ r }) {
+function RequirementRow({ r, authFetch, apiBase, clientId, onSaved }) {
   const [open, setOpen] = useState(false);
   const color = STATUS_COLOR[r.status];
   return (
@@ -728,10 +731,91 @@ function RequirementRow({ r }) {
                   Target: {safeText(c.bestAnswer)}
                 </div>
               )}
+
+              {/* Editing while there's a live agent disagreement would bypass the
+                  Conflict Queue's resolution/audit path above (which is the
+                  message shown in that case) — so the inline editor only offers
+                  itself when there's nothing to reconcile. */}
+              {authFetch && !(c.sources?.agent?.length > 0 && !c.sources.agree) && (
+                <ControlAnswerEditor c={c} authFetch={authFetch} apiBase={apiBase}
+                  clientId={clientId} onSaved={onSaved} />
+              )}
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Inline "fix this answer" editor for one control. Calls the already-built
+// POST /api/compliance/answer (had no frontend caller before this) — a
+// client no longer has to go through the blunt whole-checklist "Edit
+// Assessment" flow, or wait for the Conflict Queue, just to correct one
+// wrong answer inside a framework's walkthrough.
+function ControlAnswerEditor({ c, authFetch, apiBase, clientId, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null); // { text, tone }
+
+  async function pick(option) {
+    if (option.label === c.answer || saving) return;
+    setSaving(true); setMsg(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/compliance/answer`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ controlId: c.controlId, answer: option.label, clientId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that answer.");
+      const delta = data.posture?.delta;
+      setMsg({
+        text: `Saved.${delta ? ` Posture ${delta > 0 ? "+" : ""}${delta}.` : ""}`,
+        tone: C.green,
+      });
+      setEditing(false);
+      onSaved?.();
+    } catch (e) {
+      setMsg({ text: e.message, tone: C.red });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div style={{ marginTop: 6 }}>
+        <button onClick={() => { setEditing(true); setMsg(null); }}
+          style={{ background: "none", border: "none", color: C.accent, fontSize: 11,
+            fontWeight: 600, cursor: "pointer", padding: 0 }}>
+          Update answer
+        </button>
+        {msg && <span style={{ color: msg.tone, fontSize: 11, marginLeft: 10 }}>{msg.text}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {c.options.map(o => (
+          <button key={o.label} onClick={() => pick(o)} disabled={saving}
+            style={{
+              padding: "5px 10px", borderRadius: 6, fontSize: 11, textAlign: "left",
+              cursor: saving ? "wait" : "pointer",
+              border: `1px solid ${o.label === c.answer ? C.accent : C.border}`,
+              background: o.label === c.answer ? `${C.accent}1A` : "transparent",
+              color: o.label === c.answer ? C.accent : C.textSec,
+            }}>
+            {safeText(o.label)}
+          </button>
+        ))}
+        <button onClick={() => setEditing(false)} disabled={saving}
+          style={{ background: "none", border: "none", color: C.textMut, fontSize: 11, cursor: "pointer" }}>
+          Cancel
+        </button>
+      </div>
+      {msg && <div style={{ color: msg.tone, fontSize: 11, marginTop: 6 }}>{msg.text}</div>}
     </div>
   );
 }

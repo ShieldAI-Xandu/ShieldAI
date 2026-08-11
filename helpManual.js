@@ -227,7 +227,20 @@ export const HELP_MANUAL = [
         steps: [
           "Each framework shows as a card with a readiness percentage and met/partial/gap/not-assessed counts.",
           "A badge on each card is honest about depth: \"Control-mapped\" means every real, cited control is assessed deterministically (e.g. all 93 ISO 27001 Annex A controls); \"AI-assisted\" means a contextual gap analysis rather than control-by-control; \"Planned\" means it's not built out yet.",
-          "Click into a framework for a control-by-control walkthrough, filterable by status. Some frameworks (like SOC 2) have their own short scoping questionnaire that narrows exactly which controls apply to you.",
+          "Click into a framework for a control-by-control walkthrough, filterable by status. Some frameworks (like SOC 2) have their own short scoping questionnaire — expand \"Update scoping\" at the top of the walkthrough any time your answers there change (report type, in-scope systems, and similar); it isn't a one-time form.",
+        ],
+      },
+      {
+        id: "fix-a-control-answer",
+        title: "Correct a specific control's answer",
+        intro: "Got a control wrong, or something changed? Fix it right from the walkthrough instead of redoing your whole assessment.",
+        steps: [
+          "In a framework's control-by-control walkthrough, click a control to expand it, then click \"Update answer.\"",
+          "Pick the new answer from the list shown — it's scored and saved immediately, and your posture score and every framework's readiness recompute right away.",
+        ],
+        notes: [
+          "If a control shows a CONFLICT badge (your answer disagrees with what the monitoring agent measured), this inline editor is hidden — resolve it in the Conflict Queue instead, so the disagreement gets recorded properly rather than one side silently overwriting the other.",
+          "This only touches the one control you're editing. To change company-wide details (industry, employee count, which frameworks you're tracking), use \"Edit Assessment\" from Home instead.",
         ],
       },
       {

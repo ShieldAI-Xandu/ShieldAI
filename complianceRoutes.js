@@ -80,7 +80,7 @@ export function complianceSummary(db, depth = "summary") {
 }
 
 export function registerComplianceRoutes(app, {
-  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter,
+  db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter, logClientAction,
 }) {
   const userById = (id) => (db.data.users || []).find(u => u.id === id) || null;
 
@@ -616,6 +616,7 @@ Write remediation steps to close this gap. Requirements for your answer:
       return res.status(400).json({ error: "Not a valid answer for this control." });
     }
 
+    const previousAnswer = checklistOf(a)[controlId] || null;
     const before = computePostureScore(a.data);
     a.data = a.data || {};
     a.data.checklist = { ...checklistOf(a), [controlId]: answer };
@@ -629,6 +630,15 @@ Write remediation steps to close this gap. Requirements for your answer:
       score: after.postureScore, level: after.postureLevel,
       reason: `control:${controlId}`,
     });
+
+    if (logClientAction && answer !== previousAnswer) {
+      logClientAction(db, {
+        clientUserId: targetId, actorUserId: req.userId,
+        actorRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+        action: "compliance_answer_updated",
+        detail: `${q.question || controlId}: "${previousAnswer || "(unanswered)"}" -> "${answer}".`,
+      });
+    }
 
     await db.write();
     res.json({

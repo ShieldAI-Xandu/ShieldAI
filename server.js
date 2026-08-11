@@ -1748,7 +1748,7 @@ registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate });
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter });
+registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter, logClientAction });
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
