@@ -25,6 +25,8 @@
 // the three. Same caveat integrationAdapters.js already carries for its five
 // vendors — verify against a real tenant before trusting blindly.
 
+import { assertSafeExternalHost } from "./outboundUrlSafety.js";
+
 const CANON_SEVERITIES = new Set(["critical", "high", "medium", "low", "info"]);
 function sev(s) {
   const v = String(s || "").toLowerCase().trim();
@@ -249,6 +251,10 @@ export function mapGoogleWorkspacePostureToFindings(facts) {
 // support honestly (MFA enrollment policy presence, stale accounts) and
 // says so explicitly for admin coverage instead of guessing.
 export async function fetchOktaPosture({ apiToken, oktaDomain }) {
+  // Re-checked on every sync, not just at connect time — a connection's
+  // stored domain could otherwise be revalidated once and then reused
+  // indefinitely against a host that later resolves somewhere private.
+  await assertSafeExternalHost(`https://${oktaDomain}`);
   const base = `https://${oktaDomain}`;
   const headers = { Authorization: `SSWS ${apiToken}`, Accept: "application/json" };
 

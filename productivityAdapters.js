@@ -5,52 +5,9 @@
 // split as directoryRoutes.js/directoryAdapters.js: this file only holds
 // calls made with an already-obtained token).
 
-import { lookup } from "dns/promises";
-import net from "net";
+import { assertSafeExternalHost } from "./outboundUrlSafety.js";
 
 const SEVERITY_EMOJI = { critical: "🔴", high: "🟠", medium: "🟡", low: "🔵", info: "⚪" };
-
-// Teams is the only provider here where the client fully controls the
-// outbound *host* (Slack/other providers always call a fixed, hardcoded
-// provider URL) — a raw fetch(webhookUrl) would let a client point ShieldAI
-// at an internal/cloud-metadata address. Resolves the hostname and rejects
-// private/loopback/link-local/CGNAT ranges. Called on every send (not just
-// at connect time), so a DNS-rebinding attack — resolving to a public IP
-// when the connection is validated, then to an internal one on a later
-// scheduled send — doesn't slip through.
-function isPrivateOrReservedIp(ip) {
-  const kind = net.isIP(ip);
-  if (kind === 4) {
-    const [a, b] = ip.split(".").map(Number);
-    if (a === 10) return true;                          // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return true;    // 172.16.0.0/12
-    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
-    if (a === 127) return true;                          // 127.0.0.0/8 (loopback)
-    if (a === 169 && b === 254) return true;             // 169.254.0.0/16 (link-local + cloud metadata)
-    if (a === 100 && b >= 64 && b <= 127) return true;    // 100.64.0.0/10 (CGNAT)
-    if (a === 0) return true;                             // 0.0.0.0/8
-    return false;
-  }
-  if (kind === 6) {
-    const lower = ip.toLowerCase();
-    if (lower === "::1") return true;                                        // loopback
-    if (lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd")) return true; // link-local + unique-local
-    if (lower.startsWith("::ffff:")) return isPrivateOrReservedIp(lower.slice(7)); // IPv4-mapped
-    return false;
-  }
-  return true; // couldn't classify the address at all — fail closed
-}
-
-async function assertSafeWebhookHost(webhookUrl) {
-  let hostname;
-  try { ({ hostname } = new URL(webhookUrl)); } catch { throw new Error("Invalid webhook URL."); }
-  let address;
-  try { ({ address } = await lookup(hostname)); }
-  catch { throw new Error("Could not resolve that webhook URL's host."); }
-  if (isPrivateOrReservedIp(address)) {
-    throw new Error("That webhook URL points at a private or internal address, which isn't allowed.");
-  }
-}
 
 // Slack mrkdwn requires escaping these three characters — unescaped, a
 // title/detail containing "&", "<", or ">" would corrupt the message
@@ -146,7 +103,7 @@ function teamsDeepLink(action, refs) {
 }
 
 export async function sendTeamsMessage({ webhookUrl, title, detail, severity, actionable, refs }) {
-  await assertSafeWebhookHost(webhookUrl);
+  await assertSafeExternalHost(webhookUrl);
   const emoji = SEVERITY_EMOJI[severity] || SEVERITY_EMOJI.info;
   const card = {
     type: "AdaptiveCard",
