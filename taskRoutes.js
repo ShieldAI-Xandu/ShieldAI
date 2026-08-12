@@ -102,6 +102,18 @@ function ensure(db) {
   return db.data.tasks;
 }
 
+// Used by taskTrackerRoutes.js (Jira/Asana/Trello sync) to record/update a
+// task's link to an external ticket — exported rather than having that file
+// reach into db.data.tasks directly, since this is the one place that owns
+// the task shape. Returns the updated task, or null if not found.
+export function setTaskExternalRef(db, taskId, ref) {
+  const task = ensure(db).find(t => t.id === taskId);
+  if (!task) return null;
+  task.externalRef = ref; // { provider, externalId, externalUrl, syncedAt } or null to unlink
+  task.updatedAt = nowIso();
+  return task;
+}
+
 function publicTask(db, t) {
   const control = getControl(t.controlId);
   return {
@@ -347,6 +359,15 @@ export function registerTaskRoutes(app, {
       // Snapshot of the projected benefit at creation time.
       projectedGain: sim ? sim.delta : null,
       scoreAtCreate: sim ? sim.current : null,
+      // Set by taskTrackerRoutes.js once this task is synced to an external
+      // tracker (Jira/Asana/Trello) — null until then. { provider, externalId,
+      // externalUrl, externalStatus, externalPriority, syncedAt }.
+      // externalStatus/externalPriority are informational only — pulling a
+      // status from the tracker never drives this task through the real
+      // /complete endpoint (which has posture-scoring side effects); a human
+      // still clicks "Mark done" in ShieldAI to actually complete it, same
+      // as the Slack/Teams notification buttons never auto-complete a task.
+      externalRef: null,
       evidence: [],
       history: [],
     };

@@ -1,7 +1,7 @@
 // directoryAdapters.js
 // Per-provider connectors for directoryRoutes.js: pull security-posture facts
 // (MFA coverage, privileged accounts, stale accounts, policy gaps) from a
-// client's own Microsoft 365/Entra ID, Google Workspace, or Okta tenant.
+// client's own Microsoft 365/Entra ID, Google Workspace, Okta, or Zoom tenant.
 //
 // SCOPE BOUNDARY (read this before adding a provider or a scope): every
 // scope requested below is READ-ONLY. This file must never request a
@@ -120,6 +120,7 @@ export function mapM365PostureToFindings(facts) {
 export const GOOGLE_WORKSPACE_SCOPES = [
   "https://www.googleapis.com/auth/admin.directory.user.readonly",
   "https://www.googleapis.com/auth/admin.reports.audit.readonly",
+  "https://www.googleapis.com/auth/admin.directory.customer.readonly",
 ];
 
 async function listAllWorkspaceUsers(accessToken) {
@@ -139,8 +140,33 @@ async function listAllWorkspaceUsers(accessToken) {
   return users;
 }
 
+// Meet safety settings — best-effort, unlike the stable, well-documented
+// Directory API user-listing call above. Google's admin API surface for
+// per-tenant Meet safety configuration (host controls, external-participant
+// restrictions, and similar) has moved around and isn't confidently
+// documented as of this writing. This call degrades honestly to `null` on
+// ANY failure (wrong path, missing scope, surface moved again) rather than
+// guessing — same discipline the Okta admin-coverage gap already uses in
+// this file. Verify against a real tenant before trusting the endpoint
+// path itself.
+async function fetchGoogleMeetSafetySettings(accessToken) {
+  try {
+    const res = await fetch("https://admin.googleapis.com/admin/directory/v1/customer/my_customer/policies/meet", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchGoogleWorkspacePosture({ accessToken }) {
-  return { users: await listAllWorkspaceUsers(accessToken) };
+  const [users, meetSettings] = await Promise.all([
+    listAllWorkspaceUsers(accessToken),
+    fetchGoogleMeetSafetySettings(accessToken),
+  ]);
+  return { users, meetSettings };
 }
 
 export function mapGoogleWorkspacePostureToFindings(facts) {
@@ -184,6 +210,28 @@ export function mapGoogleWorkspacePostureToFindings(facts) {
       severity: "medium",
       message: stale.slice(0, 10).map(u => u.primaryEmail).join(", "),
       raw: stale,
+    }));
+  }
+
+  // Meet safety: honest either way. A successful read isn't parsed into a
+  // specific pass/fail claim yet (the field shape isn't confirmed against a
+  // live tenant), so it's surfaced as raw for visibility rather than
+  // invented; a failed read says so explicitly instead of silently omitting it.
+  if (facts.meetSettings) {
+    out.push(finding({
+      externalId: "gws-meet-safety",
+      title: "Meet safety settings retrieved",
+      severity: "info",
+      message: "Meet safety configuration was retrieved but isn't parsed into specific pass/fail findings yet — shown for visibility while the exact settings surface is confirmed against a live tenant. Review Meet safety settings directly in the Admin console in the meantime.",
+      raw: facts.meetSettings,
+    }));
+  } else {
+    out.push(finding({
+      externalId: "gws-meet-safety-unavailable",
+      title: "Meet safety settings not available",
+      severity: "info",
+      message: "Could not retrieve Meet safety configuration for this tenant — this may need a different Admin SDK scope, or Google's API surface for this may have changed since this adapter was written. Review Meet safety settings directly in the Admin console.",
+      raw: null,
     }));
   }
 
@@ -261,9 +309,78 @@ export function mapOktaPostureToFindings(facts) {
   return out;
 }
 
+// ── Zoom ─────────────────────────────────────────────────────────────
+// Source: marketplace.zoom.us API reference. Read-only scope only. Zoom has
+// been migrating from broad "classic" scopes (account:read:admin) toward
+// granular ones (e.g. account:read:list_settings:admin) — this uses the
+// classic scope for broad compatibility with existing Marketplace apps as
+// of this writing; verify current guidance when registering the app.
+export const ZOOM_SCOPES = ["account:read:admin"];
+
+export async function fetchZoomPosture({ accessToken }) {
+  const res = await fetch("https://api.zoom.us/v2/accounts/me/settings", {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Zoom account settings failed: ${res.status} ${await res.text().catch(() => "")}`);
+  return res.json();
+}
+
+// CONFIDENCE NOTE: field paths below (in_meeting.*, schedule_meeting.*) are
+// sourced from Zoom's published Account Settings API docs, not verified
+// against a live account — Zoom's settings schema has shifted across API
+// versions before. Every access is optional-chained so a renamed/missing
+// field degrades to an "unknown" — style finding rather than throwing.
+export function mapZoomPostureToFindings(facts) {
+  const inMeeting = facts.in_meeting || {};
+  const schedule = facts.schedule_meeting || {};
+  const out = [];
+
+  const passcodeRequired = schedule.require_password_for_scheduling_new_meetings ?? inMeeting.require_password_for_scheduling_new_meetings ?? null;
+  out.push(finding({
+    externalId: "zoom-passcode-required",
+    title: passcodeRequired === null ? "Passcode requirement not determinable" : passcodeRequired ? "Meeting passcodes required" : "Meeting passcodes not required",
+    severity: passcodeRequired === false ? "high" : "info",
+    message: passcodeRequired === null
+      ? "Could not read this setting from the Zoom account settings API."
+      : passcodeRequired
+        ? "New meetings require a passcode by default."
+        : "New meetings can be scheduled without a passcode, increasing the risk of uninvited join (\"Zoombombing\").",
+    raw: { passcodeRequired },
+  }));
+
+  const waitingRoom = inMeeting.waiting_room ?? null;
+  out.push(finding({
+    externalId: "zoom-waiting-room",
+    title: waitingRoom === null ? "Waiting room setting not determinable" : waitingRoom ? "Waiting room enabled" : "Waiting room not enabled",
+    severity: waitingRoom === false ? "high" : "info",
+    message: waitingRoom === null
+      ? "Could not read this setting from the Zoom account settings API."
+      : waitingRoom
+        ? "Hosts must admit participants before they can join."
+        : "Participants can join meetings without host approval.",
+    raw: { waitingRoom },
+  }));
+
+  const e2ee = inMeeting.end_to_end_encrypted_meetings ?? null;
+  out.push(finding({
+    externalId: "zoom-encryption",
+    title: e2ee === null ? "Encryption setting not determinable" : e2ee ? "End-to-end encryption available" : "End-to-end encryption not enabled",
+    severity: e2ee === false ? "medium" : "info",
+    message: e2ee === null
+      ? "Could not read this setting from the Zoom account settings API."
+      : e2ee
+        ? "Meetings can be hosted with end-to-end encryption."
+        : "End-to-end encryption isn't enabled account-wide; meetings default to standard (transport) encryption only.",
+    raw: { e2ee },
+  }));
+
+  return out;
+}
+
 // ── dispatch ─────────────────────────────────────────────────────────
 export const DIRECTORY_PROVIDERS = {
   m365: { scopes: M365_SCOPES, fetchPosture: fetchM365Posture, mapPostureToFindings: mapM365PostureToFindings, kind: "oauth" },
   google_workspace: { scopes: GOOGLE_WORKSPACE_SCOPES, fetchPosture: fetchGoogleWorkspacePosture, mapPostureToFindings: mapGoogleWorkspacePostureToFindings, kind: "oauth" },
   okta: { scopes: null, fetchPosture: fetchOktaPosture, mapPostureToFindings: mapOktaPostureToFindings, kind: "token" },
+  zoom: { scopes: ZOOM_SCOPES, fetchPosture: fetchZoomPosture, mapPostureToFindings: mapZoomPostureToFindings, kind: "oauth" },
 };

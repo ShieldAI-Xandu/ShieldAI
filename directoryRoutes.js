@@ -44,9 +44,9 @@ const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
 
-const PROVIDER_LABELS = { m365: "Microsoft 365", google_workspace: "Google Workspace", okta: "Okta" };
+const PROVIDER_LABELS = { m365: "Microsoft 365", google_workspace: "Google Workspace", okta: "Okta", zoom: "Zoom" };
 
-// ── OAuth provider config (M365 + Google only; Okta uses a pasted token) ──
+// ── OAuth provider config (M365/Google/Zoom; Okta uses a pasted token) ──
 const OAUTH_PROVIDERS = {
   m365: {
     // /organizations/ (not /common/) excludes personal Microsoft accounts —
@@ -73,6 +73,17 @@ const OAUTH_PROVIDERS = {
     // access_type=offline + prompt=consent guarantee a refresh_token comes
     // back — Google only issues one on first consent otherwise.
     extraAuthParams: { access_type: "offline", prompt: "consent", include_granted_scopes: "true" },
+  },
+  zoom: {
+    // Marketplace OAuth app, multi-account model — matches how M365/Google
+    // are built for many different customer tenants, not Zoom's simpler
+    // single-account app variant.
+    authorizeUrl: "https://zoom.us/oauth/authorize",
+    tokenUrl: "https://zoom.us/oauth/token",
+    scope: () => DIRECTORY_PROVIDERS.zoom.scopes.join(" "),
+    clientId: () => process.env.ZOOM_CLIENT_ID,
+    clientSecret: () => process.env.ZOOM_CLIENT_SECRET,
+    extraAuthParams: {},
   },
 };
 
@@ -295,9 +306,19 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
       if (!tokens.refresh_token) return fail("no_refresh_token");
 
       const claims = tokens.id_token ? decodeJwtPayload(tokens.id_token) : {};
-      const tenantOrDomain = provider === "m365"
-        ? (claims.tid || "unknown-tenant")
-        : (claims.hd || claims.email || "unknown-domain");
+      let tenantOrDomain;
+      if (provider === "m365") {
+        tenantOrDomain = claims.tid || "unknown-tenant";
+      } else if (provider === "zoom") {
+        // Zoom's OAuth token response carries no id_token (openid scope
+        // isn't requested) — one extra call to identify the connected
+        // account for a readable label.
+        tenantOrDomain = await fetch("https://api.zoom.us/v2/users/me", {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        }).then(r => r.ok ? r.json() : null).then(u => u?.account_id || u?.email || "unknown-account").catch(() => "unknown-account");
+      } else {
+        tenantOrDomain = claims.hd || claims.email || "unknown-domain";
+      }
 
       const connection = {
         id: randomUUID(),

@@ -5,7 +5,7 @@
 // phishingRoutes.js's send) builds its own message inline and calls
 // emailService.js's sendEmail() directly; there was nothing to subscribe
 // to. This is that subscription point for productivity-tool channels
-// (Slack now; Teams/others per INTEGRATIONS_SETUP.md's roadmap).
+// (Slack and Microsoft Teams).
 //
 // Scope for this pass: EVENT-triggered notifications only — something that
 // happens synchronously inside a request (a recommendation gets drafted, a
@@ -63,8 +63,12 @@ export async function notify(db, { ownerUserId, event, title, detail, severity =
     const adapter = PRODUCTIVITY_PROVIDERS[conn.provider];
     if (!adapter) continue;
     try {
-      const accessToken = decryptSecret(conn.encryptedSecret);
-      await adapter.send({ accessToken, channelId: conn.channelId, title, detail, severity, actionable, refs });
+      // The decrypted secret means different things per provider (Slack: a
+      // bot access token; Teams: the webhook URL itself) — pass it under
+      // both names and let each adapter's send() destructure the one it
+      // actually uses, rather than branching on provider here.
+      const secret = decryptSecret(conn.encryptedSecret);
+      await adapter.send({ accessToken: secret, webhookUrl: secret, channelId: conn.channelId, title, detail, severity, actionable, refs });
       conn.lastNotifiedAt = new Date().toISOString();
       wrote = true;
     } catch (err) {

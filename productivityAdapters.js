@@ -4,9 +4,6 @@
 // action. OAuth token exchange itself lives in productivityRoutes.js (same
 // split as directoryRoutes.js/directoryAdapters.js: this file only holds
 // calls made with an already-obtained token).
-//
-// Slack is the only provider implemented in this pass — see
-// INTEGRATIONS_SETUP.md's roadmap for Teams/Jira/Asana/Trello/Zoom/Meet.
 
 const SEVERITY_EMOJI = { critical: "🔴", high: "🟠", medium: "🟡", low: "🔵", info: "⚪" };
 
@@ -79,6 +76,59 @@ export async function respondToSlack({ responseUrl, text }) {
   }).catch(() => {}); // best-effort — the action already applied in ShieldAI regardless
 }
 
+// ── Microsoft Teams ──────────────────────────────────────────────
+// No OAuth: connecting Teams is "paste the webhook URL Teams (or its 2024+
+// replacement, a Power Automate workflow) generates for a specific
+// channel" — the URL itself is already bound to one channel, so unlike
+// Slack there's no separate channel picker. Uses the Adaptive Card +
+// `attachments` envelope Power Automate's "Post card in a channel" trigger
+// expects, rather than the older MessageCard format some legacy Incoming
+// Webhook connectors still accept — this is the forward-looking choice,
+// but Microsoft's own migration here has been in flux, so verify against a
+// real webhook URL before trusting the exact envelope shape blindly (same
+// "verify against a live setup" caveat this codebase applies to every
+// adapter built from docs rather than a tested live account).
+//
+// "Two-way" for Teams works differently than Slack: there's no inbound
+// interactivity endpoint, since a bare webhook URL can't receive replies.
+// Action buttons are Action.OpenUrl deep links back into ShieldAI
+// (`?action=...&refType=...&refId=...`), handled by a page-load effect in
+// the frontend that applies the action the same way Slack's interactivity
+// handler does — "two-way" via a page load instead of a background POST.
+function teamsDeepLink(action, refs) {
+  const base = (process.env.APP_URL || "http://localhost:5173").replace(/\/$/, "");
+  return `${base}/?action=${encodeURIComponent(action)}&refType=${encodeURIComponent(refs.refType)}&refId=${encodeURIComponent(refs.refId)}`;
+}
+
+export async function sendTeamsMessage({ webhookUrl, title, detail, severity, actionable, refs }) {
+  const emoji = SEVERITY_EMOJI[severity] || SEVERITY_EMOJI.info;
+  const card = {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.4",
+    body: [
+      { type: "TextBlock", text: `${emoji} ${title}`, weight: "bolder", size: "medium", wrap: true },
+      ...(detail ? [{ type: "TextBlock", text: detail, wrap: true, isSubtle: true }] : []),
+    ],
+  };
+  if (actionable && refs?.refType && refs?.refId) {
+    card.actions = [
+      { type: "Action.OpenUrl", title: "I'll handle it", url: teamsDeepLink("handle", refs) },
+      { type: "Action.OpenUrl", title: "Mark done", url: teamsDeepLink("complete", refs) },
+      { type: "Action.OpenUrl", title: "Decline", url: teamsDeepLink("decline", refs) },
+    ];
+  }
+
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }] }),
+  });
+  if (!res.ok) throw new Error(`Teams webhook POST failed: ${res.status} ${await res.text().catch(() => "")}`);
+  return { ok: true };
+}
+
 export const PRODUCTIVITY_PROVIDERS = {
   slack: { send: sendSlackMessage },
+  teams: { send: sendTeamsMessage },
 };

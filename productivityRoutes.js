@@ -1,8 +1,9 @@
 // productivityRoutes.js
-// Productivity-tool connections: Slack in this pass (OAuth app install,
-// channel picking, notification delivery, and two-way interactive actions).
-// See INTEGRATIONS_SETUP.md for the Teams/Jira/Asana/Trello/Zoom/Meet
-// roadmap this was scoped alongside.
+// Productivity-tool connections: Slack (OAuth app install, channel picking,
+// notification delivery, and inbound interactive actions) and Microsoft
+// Teams (paste-in webhook URL, notification delivery, and deep-link
+// actions — see the apply-action route below for why Teams' "two-way"
+// works differently than Slack's).
 //
 // BOUNDARY: outbound (notify()) only ever POSTS a message ShieldAI wrote —
 // it never reads a client's Slack history or anything else in their
@@ -27,7 +28,7 @@
 import { randomUUID } from "crypto";
 import { counters } from "./tierGate.js";
 import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
-import { fetchSlackChannels, respondToSlack } from "./productivityAdapters.js";
+import { fetchSlackChannels, respondToSlack, sendTeamsMessage } from "./productivityAdapters.js";
 import { verifySlackSignature } from "./webhookSignature.js";
 import { NOTIFICATION_EVENTS, NOTIFICATION_EVENT_IDS } from "./notificationDispatch.js";
 
@@ -61,15 +62,16 @@ function publicConnection(c) {
 // the established convention in this codebase, per integrationRoutes.js and
 // directoryRoutes.js already mirroring agentRoutes.js's draft-building
 // rather than importing it, is each ingestion/action source carries its own
-// copy of the shape it writes). Only the three actions the Slack buttons
-// offer are handled here — "handle"/"complete"/"decline" map exactly onto
-// the client's existing decision+complete recommendation actions
-// (agentRoutes.js's /api/admin/recommendations/:id/decision and
+// copy of the shape it writes). Only the three actions the Slack/Teams
+// buttons offer are handled here — "handle"/"complete"/"decline" map
+// exactly onto the client's existing decision+complete recommendation
+// actions (agentRoutes.js's /api/admin/recommendations/:id/decision and
 // /api/recommendations/:id/complete). Task completion has real scoring
 // side effects (re-answers the assessment checklist, recomputes posture) —
-// too risky to duplicate inline, so it's never offered as a Slack action;
-// task.completed is an outbound-only notification.
-const SLACK_ACTION_STATUS = { handle: "client_performing", complete: "completed", decline: "declined" };
+// too risky to duplicate inline, so it's never offered as a button action;
+// task.completed is an outbound-only notification. Shared by both the
+// Slack interactivity handler and Teams' apply-action route below.
+const PRODUCTIVITY_ACTION_STATUS = { handle: "client_performing", complete: "completed", decline: "declined" };
 
 function pushRecHistory(rec, actorType, actorId, status, note) {
   rec.history = rec.history || [];
@@ -121,10 +123,13 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
     res.json({ ok: true, connection: publicConnection(c) });
   });
 
-  // Channels the bot has been invited to, for the channel picker.
+  // Channels the bot has been invited to, for the channel picker. Slack
+  // only — a Teams webhook URL is already bound to one specific channel at
+  // creation time in Teams itself, so there's nothing to list or pick.
   app.get("/api/productivity/:id/channels", requireAuth, async (req, res) => {
     const c = (db.data.productivityConnections || []).find(x => x.id === req.params.id && x.ownerUserId === req.userId);
     if (!c) return res.status(404).json({ error: "Connection not found." });
+    if (c.provider !== "slack") return res.json([]);
     try {
       const accessToken = decryptSecret(c.encryptedSecret);
       const channels = await fetchSlackChannels({ accessToken });
@@ -134,6 +139,53 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
       res.status(502).json({ error: "Could not list Slack channels — check the connection is still authorized." });
     }
   });
+
+  // ── Teams: paste-in webhook URL, no OAuth ───────────────────────
+  app.post("/api/productivity/connect/teams", requireAuth,
+    gate.capability("integrations"),
+    gate.limit("integrations", counters.integrations),
+    async (req, res) => {
+      try {
+        const label = String(req.body?.label || "Microsoft Teams").slice(0, 200).trim();
+        const webhookUrl = String(req.body?.webhookUrl || "").trim();
+        if (!webhookUrl || !/^https:\/\//.test(webhookUrl)) {
+          return res.status(400).json({ error: "A valid webhook URL is required." });
+        }
+        // Prove it works before storing it — same "validate before saving a
+        // pasted credential" discipline the Okta connect route uses.
+        const check = await sendTeamsMessage({
+          webhookUrl, title: "ShieldAI connected", severity: "info", actionable: false,
+          detail: "You'll get notifications here for the events you enable.",
+        }).catch(err => ({ __error: err.message }));
+        if (check?.__error) {
+          return res.status(400).json({ error: `Could not post to that webhook URL: ${check.__error}` });
+        }
+
+        const connection = {
+          id: randomUUID(),
+          ownerUserId: req.userId,
+          provider: "teams",
+          kind: "webhook",
+          label,
+          teamOrWorkspace: "Microsoft Teams",
+          status: "active",
+          encryptedSecret: encryptSecret(webhookUrl),
+          channelId: null, // the webhook URL is already channel-bound; nothing to pick
+          channelName: null,
+          enabledEvents: [],
+          connectedAt: nowIso(),
+          connectedBy: req.userId,
+          lastNotifiedAt: null,
+          revokedAt: null,
+        };
+        db.data.productivityConnections.push(connection);
+        await db.write();
+        res.json({ ok: true, id: connection.id });
+      } catch (err) {
+        console.error("Teams connect error:", err.message);
+        res.status(500).json({ error: "Could not connect to Teams." });
+      }
+    });
 
   // ── Slack: OAuth app-install flow ───────────────────────────────
   // Returns the authorize URL as JSON rather than redirecting directly —
@@ -283,7 +335,7 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
       // matched Slack connection's ownerUserId is.
       if (!rec || rec.ownerUserId !== conn.ownerUserId) throw new Error("Recommendation not found for this workspace.");
 
-      const status = SLACK_ACTION_STATUS[decoded.action];
+      const status = PRODUCTIVITY_ACTION_STATUS[decoded.action];
       if (!status) throw new Error("Unsupported action.");
       if (status === "completed" && rec.status !== "permitted" && rec.status !== "client_performing" && rec.status !== "proposed" && rec.status !== "suggested") {
         throw new Error("This recommendation can't be completed from its current state.");
@@ -307,6 +359,44 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
     }
 
     res.status(200).send("");
+  });
+
+  // ── Teams-style deep-link actions ────────────────────────────────
+  // Teams has no inbound interactivity endpoint the way Slack does — a bare
+  // webhook URL can't receive replies. Its "two-way" instead works via
+  // Action.OpenUrl deep links (see productivityAdapters.js's
+  // sendTeamsMessage) that open the browser to
+  // `${APP_URL}/?action=...&refType=...&refId=...`; the frontend detects
+  // those query params on load and POSTs here. Unlike the Slack path, this
+  // IS behind requireAuth — the browser opening the link is the actual
+  // logged-in user, so there's a real session to check ownership against
+  // directly, no team-id resolution trick needed.
+  app.post("/api/productivity/apply-action", requireAuth, async (req, res) => {
+    try {
+      const { refType, refId, action } = req.body || {};
+      if (refType !== "recommendation") return res.status(400).json({ error: "Unsupported action target." });
+      const rec = (db.data.recommendations || []).find(r => r.id === refId);
+      if (!rec) return res.status(404).json({ error: "Recommendation not found." });
+      if (rec.ownerUserId !== req.userId) return res.status(403).json({ error: "Not permitted." });
+
+      const status = PRODUCTIVITY_ACTION_STATUS[action];
+      if (!status) return res.status(400).json({ error: "Unsupported action." });
+      if (status === "completed" && !["permitted", "client_performing", "proposed", "suggested"].includes(rec.status)) {
+        return res.status(409).json({ error: "This recommendation can't be completed from its current state." });
+      }
+
+      pushRecHistory(rec, "client_admin", req.userId, status, "Via a Teams notification link.");
+      if (logClientAction) logClientAction(db, {
+        clientUserId: rec.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
+        action: `recommendation_${action}`, recommendationId: rec.id,
+        detail: "Applied via a Teams notification link.",
+      });
+      await db.write();
+      res.json({ ok: true, status, title: rec.title });
+    } catch (err) {
+      console.error("Apply-action error:", err.message);
+      res.status(500).json({ error: "Could not apply that action." });
+    }
   });
 
   console.log("ShieldAI productivity integration routes registered.");

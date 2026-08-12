@@ -137,7 +137,7 @@ export const HELP_MANUAL = [
 
   {
     id: "integrations",
-    title: "Security Tool & Directory Integrations",
+    title: "Security Tool, Directory & Productivity Integrations",
     icon: "🔌",
     tier: "Growth and above (3 connections on Growth, 10 on Guided, unlimited on Managed)",
     articles: [
@@ -158,13 +158,13 @@ export const HELP_MANUAL = [
       },
       {
         id: "connect-directory",
-        title: "Connect Microsoft 365, Google Workspace, or Okta",
-        intro: "Directory connections pull security-posture facts you'd otherwise have to check manually — MFA coverage, privileged/admin accounts, stale accounts, and policy gaps — straight from the directory you already run. Read-only, always: ShieldAI can see this data but can never change anything in your directory.",
+        title: "Connect Microsoft 365, Google Workspace, Okta, or Zoom",
+        intro: "Directory connections pull security-posture facts you'd otherwise have to check manually — MFA coverage, privileged/admin accounts, stale accounts, meeting security settings, and policy gaps — straight from the tools you already run. Read-only, always: ShieldAI can see this data but can never change anything in your account.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Directory.\"",
-          "Pick your provider. Microsoft 365 and Google Workspace use a normal sign-in-and-approve screen — you'll need to be a tenant admin (Microsoft) or super admin (Google) for the consent screen to succeed. Okta instead asks for your Okta domain and a read-only API token, which your Okta admin generates from Security → API → Tokens in the Okta console.",
+          "Pick your provider. Microsoft 365, Google Workspace, and Zoom use a normal sign-in-and-approve screen — you'll need admin access in that account for the consent screen to succeed. Okta instead asks for your Okta domain and a read-only API token, which your Okta admin generates from Security → API → Tokens in the Okta console.",
           "Once connected, open the connection and click \"Sync now\" to pull the latest posture data. Syncing isn't automatic yet — run it again any time you want a fresh check.",
-          "Findings like \"no MFA on 3 admin accounts\" or \"no Conditional Access policies enabled\" appear on the connection page, and medium-or-above findings are drafted into a recommendation the same way webhook findings are.",
+          "Findings like \"no MFA on 3 admin accounts,\" \"no Conditional Access policies enabled,\" or \"meeting passcodes not required\" appear on the connection page, and medium-or-above findings are drafted into a recommendation the same way webhook findings are.",
         ],
         notes: [
           "This never changes your posture score directly — your score stays based on your assessment answers. Directory findings show up as recommendations so you or your analyst can act on them, not as a silent second score.",
@@ -173,18 +173,44 @@ export const HELP_MANUAL = [
       },
       {
         id: "connect-slack",
-        title: "Get Slack notifications",
-        intro: "Connect Slack to get pinged in a channel of your choosing whenever there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off. ShieldAI only ever posts messages; it never reads your Slack history or anything else in your workspace.",
+        title: "Get Slack or Microsoft Teams notifications",
+        intro: "Connect Slack or Teams to get pinged in a channel of your choosing whenever there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off. ShieldAI only ever posts messages; it never reads your channel history or anything else in your workspace.",
         steps: [
-          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Slack.\"",
-          "You'll be sent to Slack to approve ShieldAI posting to your workspace, then land back here automatically.",
-          "Open the connection and click \"Choose a channel\" to pick where ShieldAI should post — only channels the ShieldAI Slack app has been invited to will show up, so invite it to a channel first if you don't see the one you want.",
-          "Turn on the specific events you want to hear about under \"Notify on.\" You need a channel picked before any notification can go out.",
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Chat Tool,\" and pick Slack or Microsoft Teams.",
+          "Slack: you'll be sent to Slack to approve ShieldAI posting to your workspace, then land back here automatically. Open the connection and click \"Choose a channel\" to pick where ShieldAI should post — only channels the ShieldAI Slack app has been invited to will show up, so invite it to a channel first if you don't see the one you want.",
+          "Teams: in the channel you want alerts in, add a webhook (⋯ → Workflows → \"Post to a channel when a webhook request is received,\" or on older setups Connectors → Incoming Webhook), copy the URL it gives you, and paste it into ShieldAI. The channel is already fixed by that URL, so there's no separate channel picker.",
+          "Turn on the specific events you want to hear about under \"Notify on.\" Slack needs a channel picked first — Teams doesn't, since the webhook URL already points at one.",
         ],
         notes: [
-          "A new recommendation posted to Slack comes with action buttons — \"I'll handle it,\" \"Mark done,\" or \"Decline\" — so you can respond right from Slack instead of opening ShieldAI. Other notifications (task completed, phishing sent, policy assigned) are informational only, with no buttons.",
-          "If several recommendations get drafted at once, Slack still only shows a message for each one at the moment it's actually proposed to you by your analyst — nothing reaches Slack before a human has reviewed it, same as everywhere else in ShieldAI.",
+          "A new recommendation posted to Slack comes with action buttons — \"I'll handle it,\" \"Mark done,\" or \"Decline\" — so you can respond right from Slack instead of opening ShieldAI. In Teams, those same buttons open your browser to apply the action instead, since a bare Teams webhook can't receive button clicks the way Slack can — you'll land back in ShieldAI already signed in, and it applies immediately. Other notifications (task completed, phishing sent, policy assigned) are informational only, with no buttons, on either platform.",
+          "If several recommendations get drafted at once, notifications still only go out at the moment each one is actually proposed to you by your analyst — nothing reaches Slack or Teams before a human has reviewed it, same as everywhere else in ShieldAI.",
         ],
+      },
+      {
+        id: "connect-task-tracker",
+        title: "Sync remediation tasks to Jira, Asana, or Trello",
+        intro: "Turn a ShieldAI remediation task into a real ticket in the tracker your team already works from, and check its status without leaving ShieldAI.",
+        steps: [
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Task Tracker,\" and pick Jira, Asana, or Trello.",
+          "Jira and Asana send you to sign in and approve; Trello asks you to paste an API key and token from your Trello account instead (trello.com/power-ups/admin) — no sign-in redirect for Trello.",
+          "Finish setup by picking where new tickets go: a Jira project, an Asana workspace and project, or — for Trello, which has no built-in status field — a board plus which list counts as \"default\" and which counts as \"done.\"",
+          "On any remediation task, click \"Sync to [tracker]\" to create the ticket, or \"Sync status\" once it's already synced to pull its current state back.",
+        ],
+        notes: [
+          "Syncing a task only ever creates that one ticket — ShieldAI never reads or changes anything else in your tracker. Status is pulled on demand, not automatically, so click \"Sync status\" for a fresh check.",
+          "Pulling a tracker's status never marks the ShieldAI task complete by itself — you still click \"Complete & Re-score\" in ShieldAI to actually finish it and update your posture score. The tracker's status shows alongside the task as information, not a substitute for that.",
+        ],
+      },
+      {
+        id: "schedule-a-call",
+        title: "Schedule a call with Zoom or Google Meet",
+        intro: "Create a meeting link for an advisor check-in or an incident call, right from the Support Center.",
+        steps: [
+          "Open the Support Center and find \"Schedule a call.\"",
+          "The first time, connect Zoom or Google Meet — a normal sign-in-and-approve screen for your own personal account, separate from any directory connection you may have set up.",
+          "Pick a topic, date/time, and duration, then click \"Schedule.\" ShieldAI creates the meeting and shows you the join link immediately.",
+        ],
+        notes: ["This is the one place ShieldAI ever creates something in a connected account rather than just reading from it — and it only ever creates the exact meeting you asked for, nothing else. No calendar access, no recurring connection beyond that one request."],
       },
     ],
   },

@@ -81,12 +81,62 @@ function portfolioSnapshot(db, depth = "summary") {
       online: isOnline(a.lastSeen), lastReportAt: a.lastReportAt || null,
       posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
       fails, warns, checkCount: checks.length,
+      // On-demand check-in state (see agentRoutes.js's POST /api/agent-checkin/:id) —
+      // without this, Mastermind could explain the feature from the manual but
+      // never confirm whether a specific client's request actually went through.
+      checkInRequested: !!a.pendingCheckIn, checkInRequestedAt: a.checkInRequestedAt || null,
       ...(full ? {
         checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
         recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
         inventory: rep?.report?.inventory || {},
       } : {}),
     };
+  }
+
+  // Connection counts per client (webhook tools, directories, chat tools,
+  // task trackers, scheduling) — without this, Mastermind could describe
+  // what each integration family does (from the manual) but never confirm
+  // whether THIS client actually has one connected.
+  function connectionSummary(ownerUserId) {
+    const active = (arr) => (arr || []).filter(c => c.ownerUserId === ownerUserId && c.status !== "revoked").length;
+    return {
+      webhookTools: active(db.data.integrations),
+      directories: active(db.data.directoryConnections),
+      chatTools: active(db.data.productivityConnections),
+      taskTrackers: active(db.data.taskTrackerConnections),
+      scheduling: active(db.data.schedulingConnections),
+    };
+  }
+
+  // Open compliance-conflict count (agent telemetry disagreeing with a
+  // self-reported answer) — a minimal, module-scope-safe version of the
+  // same corroborate() call complianceRoutes.js's Conflict Queue and this
+  // file's own check_agent_evidence tool already make; kept intentionally
+  // light (a count, not full detail) since the tool covers the full detail
+  // case for admin/analyst chat on demand.
+  function openConflictCount(ownerUserId) {
+    const assessments = (db.data.assessments || []).filter(a => a.userId === ownerUserId);
+    if (!assessments.length) return 0;
+    const a = assessments.reduce((b, x) => !b || new Date(x.updatedAt || x.createdAt) > new Date(b.updatedAt || b.createdAt) ? x : b, null);
+    const checklist = a?.data?.checklist || a?.data?.securityChecklist || {};
+    const evidence = {};
+    for (const q of SECURITY_CHECKLIST) {
+      const raw = checklist[q.id];
+      const label = typeof raw === "string" ? raw : raw?.label;
+      if (label) evidence[q.id] = label;
+    }
+    const byHost = new Map();
+    for (const r of (db.data.agentReports || [])) {
+      if (r.ownerUserId !== ownerUserId) continue;
+      const rep = r.report || r;
+      const host = rep?.host?.hostname;
+      if (!host) continue;
+      const prev = byHost.get(host);
+      if (!prev || new Date(r.receivedAt || 0) > new Date(prev.receivedAt || 0)) byHost.set(host, rep);
+    }
+    const reports = [...byHost.values()];
+    if (!reports.length) return 0;
+    return corroborate(reports, evidence).filter(c => c.status === "disputed").length;
   }
 
   const clients = clientUsers.map(u => {
@@ -102,6 +152,8 @@ function portfolioSnapshot(db, depth = "summary") {
       billing: sub ? { status: sub.status, currentPeriodEnd: sub.currentPeriodEnd, stripeLinked: !!sub.stripeCustomerId } : { status: u.tier === "free" || !u.tier ? "free" : "none" },
       endpointCount: myAgents.length,
       endpoints: myAgents.map(postureOf),
+      integrations: connectionSummary(u.id),
+      openComplianceConflicts: openConflictCount(u.id),
       cveExposure: exp ? {
         counts: exp.counts, refreshedAt: exp.refreshedAt, degraded: exp.degraded,
         ...(full ? { software: exp.software, top: exp.top }
@@ -984,10 +1036,43 @@ Limit findings to 6 and recommendations to 5.`;
           posture: fails ? "at_risk" : warns ? "needs_attention" : "healthy",
           checks: checks.map(c => ({ id: c.id, title: c.title, status: c.status, severity: c.severity, observed: c.observed, cisControl: c.cisControl })),
           recentEvents: (rep?.report?.events || []).slice(0, 8).map(e => ({ severity: e.severity, type: e.type, message: e.message })),
+          // See agentRoutes.js's POST /api/agent-checkin/:id — without this,
+          // Mastermind can explain the feature but never confirm a specific
+          // request actually went through.
+          checkInRequested: !!a.pendingCheckIn, checkInRequestedAt: a.checkInRequestedAt || null,
         };
       });
       snap.endpoints = endpoints;
       snap.totals = { endpoints: endpoints.length, atRisk: endpoints.filter(e => e.posture === "at_risk").length };
+    }
+
+    // ── Integration connections (Growth+) ───────────────────────
+    // Counts only (never credentials) — so Mastermind can answer "do I have
+    // X connected?" from real state instead of only explaining how to
+    // connect it from the manual.
+    if (has("integrations")) {
+      const active = (arr) => (arr || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length;
+      snap.integrations = {
+        webhookTools: active(db.data.integrations),
+        directories: active(db.data.directoryConnections),
+        chatTools: active(db.data.productivityConnections),
+        taskTrackers: active(db.data.taskTrackerConnections),
+        scheduling: active(db.data.schedulingConnections),
+      };
+    }
+
+    // ── Open compliance conflicts (agent vs. self-reported answer) ──
+    {
+      const reports = latestReportPerHost(userId);
+      if (reports.length) {
+        const list = (db.data.assessments || []).filter(a => a.userId === userId);
+        const a = list.length ? list.reduce((b, x) => !b || new Date(x.updatedAt || x.createdAt) > new Date(b.updatedAt || b.createdAt) ? x : b, null) : null;
+        if (a) {
+          const checklist = a?.data?.checklist || a?.data?.securityChecklist || {};
+          const disputed = corroborate(reports, toEvidenceShape(checklist)).filter(c => c.status === "disputed").length;
+          if (disputed > 0) snap.openComplianceConflicts = disputed;
+        }
+      }
     }
 
     // ── Threat intelligence: CVE + dark-web (Growth+) ───────────

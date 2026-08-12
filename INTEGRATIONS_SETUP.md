@@ -1,59 +1,79 @@
 # ShieldAI Integrations — Setup
 
-This covers three integration families, all reachable from the client's
-**🔌 Integrations** screen:
+This covers five integration families, all reachable from the client's
+**🔌 Integrations** screen (scheduling is the one exception, reachable from
+the Support Center instead):
 
 1. **Security-tool webhooks** (`integrationRoutes.js` /
    `integrationAdapters.js`) — Nessus/Tenable, Qualys, Rapid7 InsightVM,
    Microsoft Defender, CrowdStrike, Wazuh, Splunk, or a generic custom
    payload. **Fully live today, nothing to configure.**
 2. **Directory connections** (`directoryRoutes.js` / `directoryAdapters.js`)
-   — Microsoft 365/Entra ID, Google Workspace, Okta. Okta is live today;
-   Microsoft 365 and Google Workspace need an OAuth app registered with
-   each vendor first (steps below) before a client can connect one.
+   — Microsoft 365/Entra ID, Google Workspace, Okta, Zoom. Okta is live
+   today; the other three need an OAuth app registered with each vendor
+   first (steps below).
 3. **Productivity notifications** (`productivityRoutes.js` /
-   `productivityAdapters.js` / `notificationDispatch.js`) — Slack in this
-   pass (Teams/Jira/Asana/Trello/Zoom/Google Meet are a documented roadmap,
-   not built yet — see "Roadmap" below). Needs a Slack app created first
-   (steps below).
+   `productivityAdapters.js` / `notificationDispatch.js`) — Slack and
+   Microsoft Teams. Slack needs an app created first; Teams needs no app
+   registration at all (paste-in webhook URL).
+4. **Task trackers** (`taskTrackerRoutes.js` / `taskTrackerAdapters.js`) —
+   Jira, Asana, Trello. Jira/Asana need an OAuth app each; Trello needs no
+   app registration (paste-in API key + token).
+5. **Scheduling** (`schedulingRoutes.js` / `schedulingAdapters.js`) — Zoom,
+   Google Meet. "Schedule a call" from the Support Center. Reuses the same
+   Zoom/Google OAuth apps directory connections use, requesting a different
+   (write) scope on a separate, personal connection.
 
-All three are gated behind the same `integrations` tier capability (Growth
+All five are gated behind the same `integrations` tier capability (Growth
 and above — see `tiers.js`'s `FEATURE_CATALOG`, 3/10/unlimited connections
-on Growth/Guided/Managed). Parts 1 and 2 feed the same place: findings at
-medium severity or above get auto-drafted into the analyst recommendation
-queue by Mastermind, exactly like the endpoint monitoring agent's findings
-do. Part 3 is the other direction — it's what tells a client's team, via
-Slack, once that queue's contents actually reach them. Neither family
-touches `riskEngine.js`'s posture score directly — that engine is a closed,
-fixed set of assessment-driven factors by design (see `CLAUDE.md`);
-integration findings surface as recommendations, not a second score.
+on Growth/Guided/Managed). Parts 1, 2, and 4 (as a read source) feed the
+same place: findings/synced tickets surface as recommendations or task
+metadata, never a second posture score — that engine (`riskEngine.js`) is a
+closed, fixed set of assessment-driven factors by design (see `CLAUDE.md`).
+Part 3 is the other direction: telling a client's team, via chat, once
+something actually reaches them. Part 5 is the only WRITE capability in
+this whole framework — see its own section below for why that's a
+deliberate, bounded exception rather than a relaxation of anything.
 
 ## Security model (why it's safe)
 
 - **Webhooks are one-way in.** ShieldAI never calls out to a connected tool.
   The webhook response is just a receipt (`{ok, received, stored, ...}`) —
   no directive, no command.
-- **Directory connections are read-only.** Every OAuth scope requested
-  (Microsoft Graph `Directory.Read.All`/`Policy.Read.All`/`Reports.Read.All`,
-  Google `admin.directory.user.readonly`/`admin.reports.audit.readonly`) is
-  a read scope. Okta's token is validated against a read-only API call
-  before it's ever stored. ShieldAI cannot change anything in a connected
-  directory — there's no write path anywhere in `directoryAdapters.js`.
+- **Directory connections are read-only.** Every OAuth scope requested is a
+  read scope (Microsoft Graph `Directory.Read.All`/`Policy.Read.All`/
+  `Reports.Read.All`; Google `admin.directory.user.readonly`/
+  `admin.reports.audit.readonly`/`admin.directory.customer.readonly`; Zoom
+  `account:read:admin`). Okta's token is validated against a read-only API
+  call before it's ever stored. ShieldAI cannot change anything in a
+  connected directory — there's no write path anywhere in `directoryAdapters.js`.
+- **Task trackers only ever create the one ticket you send, then read its
+  status back on request.** No inbound webhooks from any tracker (each
+  signs differently — Asana HMAC-SHA256, Trello HMAC-SHA1, Jira Cloud not
+  signed by default — real per-provider complexity for marginal benefit
+  over a manual "Sync status" button, the same pattern directory
+  connections' "Sync now" already established). Pulling a tracker's status
+  never drives a ShieldAI task through the real `/complete` endpoint (which
+  has posture-scoring side effects) — a human still clicks "Complete &
+  Re-score" in ShieldAI itself.
+- **Scheduling creates exactly one meeting per request, nothing else.** No
+  calendar reads, no meeting management, no recurring access. Uses a
+  **separate, personal-user connection** from the org-admin directory
+  connections — reusing an admin's read-only consent grant for a write
+  action would violate least-privilege, and the person scheduling a call
+  isn't necessarily the same person who connected the directory.
 - **Per-client secrets are encrypted at rest.** OAuth refresh tokens, the
-  Okta API token, and Slack's bot token are all AES-256-GCM encrypted
-  (`credentialCrypto.js`) using `CREDENTIAL_ENCRYPTION_KEY`, never stored in
-  plaintext. Nothing else in ShieldAI stores a reversible secret like this —
-  see `SECRETS_RUNBOOK.md` for why it's treated differently from the other
-  provider keys (rotating it is a migration, not a routine swap).
-- **Slack notifications are outbound-only, and inbound actions replay
-  through the same handlers the in-app buttons use.** ShieldAI never reads
-  Slack channel history — only posts. The Slack interactivity endpoint
-  (button clicks) is HMAC-signature-verified (`webhookSignature.js`) and
-  resolves the calling workspace to a specific ShieldAI account by its
-  Slack team id before applying anything — a click can never act on another
-  client's data, and it can only ever apply the exact same
-  handle/complete/decline action the in-app recommendation buttons already
-  offer, nothing broader.
+  Okta API token, Trello's API key/token, and Slack's/Teams' bot
+  token/webhook URL are all AES-256-GCM encrypted (`credentialCrypto.js`)
+  using `CREDENTIAL_ENCRYPTION_KEY`, never stored in plaintext.
+- **Slack/Teams notifications are outbound-only, and inbound actions replay
+  through the same handlers the in-app buttons use.** Slack's interactivity
+  endpoint is HMAC-signature-verified and resolves the calling workspace to
+  a specific ShieldAI account by its Slack team id — never trusted from the
+  button payload itself. Teams has no inbound endpoint at all (a bare
+  webhook URL can't receive replies) — its buttons deep-link back into
+  ShieldAI instead, applying the action through a normal authenticated
+  session, not a spoofable payload.
 
 ## Part 1 — Webhook tool integrations (live now)
 
@@ -85,33 +105,22 @@ No setup required. To test end-to-end:
 
 1. In the target Okta org (a free
    [Okta Developer Edition](https://developer.okta.com/signup/) org works
-   for testing): Security → API → Tokens → **Create Token**. Use an admin
-   scoped to read-only if your org supports custom admin roles.
+   for testing): Security → API → Tokens → **Create Token**.
 2. In ShieldAI: Integrations → **+ Connect Directory** → Okta → enter the
    domain (`yourorg.okta.com`) and paste the token → Connect.
-3. Open the connection → **Sync now** → confirm posture findings appear
-   (MFA enrollment policy status, stale accounts).
+3. Open the connection → **Sync now** → confirm posture findings appear.
 
 ### Microsoft 365 / Entra ID — needs an Azure AD app registration first
 
 1. [portal.azure.com](https://portal.azure.com) → **App registrations** →
-   New registration.
-2. Supported account types: **multitenant** ("Accounts in any organizational
-   directory") — this is what lets any customer's tenant admin consent,
-   not just yours. Personal Microsoft accounts are intentionally excluded
-   (`directoryRoutes.js` uses the `/organizations/` authorize endpoint).
-3. Redirect URI (Web platform): `<APP_URL>/api/directory/oauth/m365/callback`
-   — must match `APP_URL` exactly (see the env var table below).
-4. API permissions → Microsoft Graph → **Delegated** permissions:
-   `Directory.Read.All`, `Policy.Read.All`, `Reports.Read.All`. These are
-   effectively admin-only scopes — Microsoft shows its own admin-consent
-   screen automatically when the signed-in user is a tenant admin.
-5. Certificates & secrets → New client secret → copy the value immediately
-   (Azure only shows it once).
-6. Set `MS_GRAPH_CLIENT_ID` and `MS_GRAPH_CLIENT_SECRET` (below).
-7. To test against a real tenant without touching a customer's: a free
-   [Microsoft 365 Developer Program](https://developer.microsoft.com/microsoft-365/dev-program)
-   sandbox gives you a disposable tenant with admin rights.
+   New registration → **multitenant** ("Accounts in any organizational
+   directory").
+2. Redirect URI (Web platform): `<APP_URL>/api/directory/oauth/m365/callback`.
+3. API permissions → Microsoft Graph → **Delegated**: `Directory.Read.All`,
+   `Policy.Read.All`, `Reports.Read.All`.
+4. Certificates & secrets → New client secret → copy immediately.
+5. Set `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_CLIENT_SECRET` (below). Test against
+   a free [Microsoft 365 Developer Program](https://developer.microsoft.com/microsoft-365/dev-program) sandbox.
 
 ### Google Workspace — needs a Google Cloud OAuth client first
 
@@ -119,58 +128,128 @@ No setup required. To test end-to-end:
    Services → Credentials → **Create OAuth client ID** (Web application).
 2. Authorized redirect URI:
    `<APP_URL>/api/directory/oauth/google_workspace/callback`.
-3. Configure the **OAuth consent screen**. `admin.directory.user.readonly`
-   and `admin.reports.audit.readonly` are sensitive scopes — Google
-   requires app verification before anyone outside your listed **test
-   users** can consent. Add your test super-admin account as a test user to
-   develop against without waiting on verification; plan for the
-   verification review before onboarding real customers.
-4. Set `GOOGLE_WORKSPACE_CLIENT_ID` and `GOOGLE_WORKSPACE_CLIENT_SECRET`
-   (below).
-5. A Google Workspace free trial gives you a super-admin account to test
-   with.
+3. Configure the **OAuth consent screen** — these are sensitive scopes;
+   Google requires app verification before anyone outside your test users
+   can consent. Add your super-admin test account as a test user.
+4. Set `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET`.
+5. Meet safety settings (part of this same connection's posture pull) are
+   **best-effort** — the exact Admin SDK surface for that specifically
+   wasn't confidently verified; it degrades to an honest "not available"
+   finding rather than a fabricated one if the call fails.
 
-## Part 3 — Slack
+### Zoom — needs a Zoom Marketplace app first
 
-### Needs a Slack app created first
+1. [marketplace.zoom.us](https://marketplace.zoom.us) → Develop → Build App
+   → **General App** (OAuth, multi-account — not the single-account
+   variant, to match how M365/Google support many customer tenants).
+2. Redirect URL: `<APP_URL>/api/directory/oauth/zoom/callback`.
+3. Scopes: `account:read:admin` (Zoom has been migrating toward more
+   granular scopes — verify current guidance when registering).
+4. Set `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET`. This same app is reused for
+   Part 5's scheduling connection, requesting `meeting:write` instead.
+
+## Part 3 — Slack and Microsoft Teams
+
+### Slack — needs a Slack app created first
 
 1. [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** →
    From scratch.
-2. **OAuth & Permissions** → Bot Token Scopes → add `chat:write`,
-   `channels:read`, `groups:read` (posting, and listing channels for the
-   channel picker — nothing that reads messages).
-3. Same page → Redirect URLs → add
-   `<APP_URL>/api/productivity/oauth/slack/callback`.
-4. **Interactivity & Shortcuts** → turn on → Request URL:
-   `<APP_URL>/api/productivity/slack/interactivity` (this is what makes the
-   recommendation action buttons work — Slack POSTs here when someone
-   clicks one).
-5. **Basic Information** → copy the **Client ID**, **Client Secret**, and
-   **Signing Secret**.
-6. Set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET`
-   (below).
-7. To test: install the app to a free Slack workspace of your own (Slack's
-   free tier is enough — no paid plan needed to test bot messages and
-   interactivity).
+2. **OAuth & Permissions** → Bot Token Scopes → `chat:write`,
+   `channels:read`, `groups:read`.
+3. Redirect URLs → `<APP_URL>/api/productivity/oauth/slack/callback`.
+4. **Interactivity & Shortcuts** → on → Request URL:
+   `<APP_URL>/api/productivity/slack/interactivity`.
+5. **Basic Information** → copy Client ID, Client Secret, Signing Secret →
+   set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET`.
+6. Test on a free Slack workspace — no paid plan needed.
 
-### Environment variables
+### Microsoft Teams — no app registration needed
+
+Paste-in webhook URL, same model as Okta/Trello. In the target Teams
+channel: ⋯ → Workflows → "Post to a channel when a webhook request is
+received" (or, on older setups, Connectors → Incoming Webhook) → copy the
+URL → paste into ShieldAI. Nothing to configure server-side. Note:
+Microsoft has been deprecating classic Incoming Webhooks in favor of
+Workflows/Power Automate — both are URL-based so `sendTeamsMessage`'s
+POST-to-URL approach adapts to either, but verify current guidance since
+this has been in flux.
+
+## Part 4 — Task trackers
+
+### Trello — no app registration needed
+
+Paste-in API key + token, same model as Okta. At
+[trello.com/power-ups/admin](https://trello.com/power-ups/admin), grab an
+API key, then generate a token from it (scope: read + write). In ShieldAI:
+Integrations → **+ Connect Task Tracker** → Trello → paste both. After
+connecting, pick a board and which list is "default" vs. "done" — Trello
+has no universal status concept the way Jira/Asana do, so moving a card
+between those two chosen lists **is** the status signal.
+
+### Jira — needs an Atlassian OAuth app first
+
+1. [developer.atlassian.com/console/myapps](https://developer.atlassian.com/console/myapps)
+   → Create → OAuth 2.0 integration.
+2. Permissions → add the Jira API, scopes `read:jira-work`,
+   `write:jira-work`, `read:jira-user`, `offline_access`.
+3. Authorization → Callback URL: `<APP_URL>/api/tasktracker/oauth/jira/callback`.
+4. Settings → copy Client ID / Secret → set `JIRA_CLIENT_ID` /
+   `JIRA_CLIENT_SECRET`.
+5. Status pulls use Jira's `statusCategory` (new/indeterminate/done) rather
+   than a project's custom status names, so no per-project mapping is
+   needed. If the connecting account has access to more than one Jira Cloud
+   site, only the first one returned is used (v1 simplification) —
+   reconnect with a different account if that's ever the wrong one.
+
+### Asana — needs an Asana OAuth app first
+
+1. [app.asana.com/0/my-apps](https://app.asana.com/0/my-apps) → Create New
+   App → OAuth.
+2. Redirect URL: `<APP_URL>/api/tasktracker/oauth/asana/callback`.
+3. Copy Client ID / Secret → set `ASANA_CLIENT_ID` / `ASANA_CLIENT_SECRET`.
+4. After connecting, pick a workspace then a project. Status uses Asana's
+   universal `completed` boolean. Asana has no built-in priority field
+   without a paid custom field — priority sync is simply omitted, not
+   guessed.
+
+## Part 5 — Scheduling ("Schedule a call")
+
+Reachable from the **Support Center**, not the Integrations screen — this
+is a personal connection, not an org-admin one. Reuses the same
+`ZOOM_CLIENT_ID`/`GOOGLE_WORKSPACE_CLIENT_ID` apps Part 2 registers,
+requesting a different, narrower scope (`meeting:write` /
+`https://www.googleapis.com/auth/calendar.events`) on a separate consent —
+what matters for least-privilege is that the resulting token is minimal and
+distinct, not that a whole separate app was registered. No additional
+`.env` variables needed beyond what Part 2 already set for Zoom/Google.
+
+This is the **first write capability** across every integration in this
+codebase (webhooks receive only, directories/trackers-as-a-read-source read
+only). Deliberately bounded: a human clicks "Schedule," picks a time,
+ShieldAI creates exactly that one meeting — no calendar access, no
+recurring grant beyond the single create call each time.
+
+## Environment variables
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `CREDENTIAL_ENCRYPTION_KEY` | Any directory or Slack connection | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
-| `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_CLIENT_SECRET` | Microsoft 365 | From the Azure app registration above |
-| `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google Workspace | From the Google Cloud OAuth client above |
-| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack | From the Slack app's Basic Information page |
-| `SLACK_SIGNING_SECRET` | Slack | Same page — verifies inbound button-click requests actually came from Slack |
-| `APP_URL` | All OAuth providers | Already used by billing/phishing/training links — must exactly match the redirect URIs registered above |
+| `CREDENTIAL_ENCRYPTION_KEY` | Any connection at all | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+| `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_CLIENT_SECRET` | Microsoft 365 | Azure app registration |
+| `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google Workspace + Google Meet scheduling | Google Cloud OAuth client |
+| `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET` | Zoom directory + Zoom scheduling | Zoom Marketplace app |
+| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack | Slack app's Basic Information page |
+| `SLACK_SIGNING_SECRET` | Slack | Same page — verifies inbound button-click requests |
+| `JIRA_CLIENT_ID` / `JIRA_CLIENT_SECRET` | Jira | Atlassian developer console |
+| `ASANA_CLIENT_ID` / `ASANA_CLIENT_SECRET` | Asana | Asana developer console |
+| `APP_URL` | Every OAuth provider | Already used by billing/phishing/training links — must exactly match every redirect URI registered above |
 
-Set these in Railway → Variables in production, `.env` locally (never
+Teams and Trello need no env vars at all (paste-in credentials, no OAuth
+app). Set these in Railway → Variables in production, `.env` locally (never
 commit real values — see `SECRETS_RUNBOOK.md`). Without
 `CREDENTIAL_ENCRYPTION_KEY`, connecting anything fails with a clear error at
-connect time — the rest of the app keeps running normally (see
-`credentialCrypto.js`'s header comment for why this fails lazily, not at
-boot). Without a provider's client id+secret, that provider's "Connect"
-button returns "isn't configured on this server yet" instead of erroring.
+connect time — the rest of the app keeps running normally. Without a
+provider's client id+secret, that provider's "Connect" button returns
+"isn't configured on this server yet" instead of erroring.
 
 ### Restart and verify
 
@@ -178,118 +257,66 @@ You should see these lines in the server logs:
 ```
 ShieldAI directory integration routes registered.
 ShieldAI productivity integration routes registered.
+ShieldAI task tracker integration routes registered.
+ShieldAI scheduling routes registered.
 ```
 That confirms the routes are mounted regardless of which env vars are set —
 it doesn't mean any provider is actually configured yet.
 
 ## How it flows
 
-- **Okta:** client pastes domain + token → server makes one read-only call
-  to validate it → encrypts and stores it → client clicks "Sync now" any
-  time → server decrypts, calls the Okta API, maps results to findings.
-- **Microsoft 365 / Google Workspace:** client clicks Connect → frontend
-  calls `GET /api/directory/oauth/:provider/start` (authenticated fetch,
-  since a plain browser navigation can't carry the app's Bearer auth header)
-  → gets back the provider's authorize URL → browser navigates there →
-  admin signs in and approves → provider redirects to
-  `GET /api/directory/oauth/:provider/callback` → server exchanges the code
-  for tokens, encrypts the refresh token, stores the connection → redirects
-  the browser back into the app. "Sync now" refreshes an access token from
-  the stored refresh token and calls Graph/Admin SDK.
-- **Every sync:** posture facts → deterministic severity mapping
-  (`directoryAdapters.js`) → medium+ findings deduped and drafted into
-  `db.data.recommendations` (`origin: "ai"`, `status: "suggested"`) via the
-  same Mastermind auto-draft pattern `integrationRoutes.js` and
-  `agentRoutes.js` already use — a human always reviews before a client
-  sees it.
-- **Slack (outbound):** something happens that's client-visible (an analyst
-  forwards/creates a recommendation, a task completes, a phishing campaign
-  sends, a policy is assigned) → the triggering route calls
-  `notify(db, {...})` (`notificationDispatch.js`) → for each active Slack
-  connection with that event enabled, `chat.postMessage` with Block Kit
-  buttons on recommendation events. Recommendation notifications only fire
-  at the moment a recommendation becomes visible to the client (status
-  `"proposed"`), never when the AI first drafts it as `"suggested"` —
-  notifying the client's own Slack about an unreviewed draft would skip the
-  analyst review step entirely.
-- **Slack (inbound — button click):** Slack POSTs the click to
-  `/api/productivity/slack/interactivity`, signed over the raw body →
-  verified via `webhookSignature.js` → the workspace's Slack team id is
-  matched against an active `productivityConnections` row to resolve which
-  ShieldAI account this belongs to (never trusted from the button payload
-  itself) → the same recommendation decision/complete logic the in-app
-  buttons use is applied → Slack's message is updated via `response_url` to
-  confirm.
+- **Read connections (directory/webhooks):** posture facts or findings →
+  deterministic severity mapping → medium+ findings deduped and drafted
+  into `db.data.recommendations` (`origin: "ai"`, `status: "suggested"`) —
+  a human always reviews before a client sees it.
+- **Task trackers:** "Sync to Jira/Asana/Trello" creates a ticket once,
+  storing `task.externalRef`. "Sync status" pulls current
+  status/priority back into that same field — informational only, never
+  auto-completing the ShieldAI task.
+- **Slack/Teams (outbound):** something becomes client-visible (a
+  recommendation is proposed, a task completes, a phishing campaign sends,
+  a policy is assigned) → `notify(db, {...})` (`notificationDispatch.js`) →
+  each active connection with that event enabled gets a message. Slack gets
+  interactive buttons on recommendation events; Teams gets deep-link
+  buttons instead, since a bare webhook URL can't receive replies.
+- **Slack (inbound — button click):** signed POST to
+  `/api/productivity/slack/interactivity` → signature verified → workspace
+  resolved to a ShieldAI account by Slack team id → same recommendation
+  decision/complete logic the in-app buttons use → Slack's message updated
+  via `response_url`.
+- **Teams (inbound — deep link):** the button opens
+  `${APP_URL}/?action=...&refType=...&refId=...` in the browser → a
+  top-level frontend effect detects it, calls
+  `POST /api/productivity/apply-action` (a normal authenticated request,
+  since the browser is the logged-in user) → same decision/complete logic
+  applied → confirmation shown.
+- **Scheduling:** client clicks Schedule → refreshes an access token from
+  the stored personal refresh token → calls Zoom's create-meeting or Google
+  Calendar's create-event-with-Meet-link API → returns the join link.
 
 ## Routes summary
 
-- `GET  /api/directory` / `GET /api/directory/:id` (client) — list/detail
-- `GET  /api/directory/oauth/:provider/start` (client, `m365`|`google_workspace`) — returns `{url}`
-- `GET  /api/directory/oauth/:provider/callback` (provider redirect, no auth header) — completes the connection
-- `POST /api/directory/connect/okta` (client) — `{label, oktaDomain, apiToken}`
-- `POST /api/directory/:id/sync` (client) — pulls posture data on demand
-- `POST /api/directory/:id/revoke` / `DELETE /api/directory/:id` (client)
-- `GET  /api/productivity` / `GET /api/productivity/:id` (client) — list/detail
-- `PATCH /api/productivity/:id` (client) — set channel / toggle notification events
-- `GET  /api/productivity/:id/channels` (client) — channels the Slack bot's been invited to
-- `GET  /api/productivity/oauth/slack/start` (client) — returns `{url}`
-- `GET  /api/productivity/oauth/slack/callback` (Slack redirect, no auth header)
-- `POST /api/productivity/slack/interactivity` (Slack, HMAC-signed, no auth header) — button clicks
-- `POST /api/productivity/:id/revoke` / `DELETE /api/productivity/:id` (client)
+- `GET/POST /api/directory[...]` — list/detail/oauth/sync/revoke/delete (M365, Google Workspace, Okta, Zoom)
+- `GET/POST /api/productivity[...]` — list/detail/oauth/connect/interactivity/apply-action/revoke/delete (Slack, Teams)
+- `GET/POST /api/tasktracker[...]` — list/detail/oauth/connect/picker/sync-task/revoke/delete (Jira, Asana, Trello)
+- `GET/POST /api/scheduling[...]` — list/oauth/create-meeting/revoke/delete (Zoom, Google Meet)
+
+Each family's routes file has its own header comment with the full path
+list and exact request/response shapes — this summary is deliberately
+high-level; read the source for the authoritative contract.
 
 ## Without a provider configured (today's default state)
 
-Everything else keeps working. Okta connects normally, and so does anything
-else that's already configured. The webhook integrations in Part 1 are
-entirely unaffected. Clicking "Connect" on an unconfigured provider
-(Microsoft 365, Google Workspace, or Slack) returns a clear "isn't
-configured on this server yet" error instead of a broken redirect.
+Everything else keeps working. Okta, Teams, and Trello connect normally
+with no env vars at all. The webhook integrations in Part 1 are entirely
+unaffected. Clicking "Connect" on any unconfigured OAuth provider returns a
+clear "isn't configured on this server yet" error instead of a broken
+redirect.
 
 ## Mastermind
 
-`helpManual.js`'s `integrations` section documents all three flows for
-clients, and is included verbatim in Mastermind's chat system prompt
-(`mastermindRoutes.js`) — ask it "how do I connect Okta," "how do I feed my
-Nessus scans into ShieldAI," or "how do I get Slack notifications" and it
-answers from the real, current UI flow rather than guessing.
-
-## Roadmap (not built yet)
-
-Scoped alongside Slack but deferred to follow-up passes, with the key
-architectural decisions already identified:
-
-- **Microsoft Teams** — classic Incoming Webhooks lost actionable-message
-  support in Microsoft's 2024 deprecation; genuine two-way interactivity now
-  needs a real Bot Framework registration (Azure Bot Service, adaptive
-  cards), materially heavier than Slack's model. Recommended simplification:
-  ship Teams as outbound-only with an adaptive-card button that deep-links
-  back into ShieldAI (opens the browser, already authenticated) rather than
-  a full in-Teams round-trip.
-- **Jira / Asana / Trello** — task-tracker sync. Needs a new
-  `task.externalRef` field on `taskRoutes.js`'s task shape (doesn't exist
-  today), per-provider OAuth (Jira: Atlassian OAuth 2.0 3LO; Asana: OAuth2;
-  Trello: API key + token), and a status/priority mapping UI since
-  workflow states are project-configurable, not fixed. Each provider signs
-  inbound webhooks differently (Asana: HMAC-SHA256; Trello: HMAC-SHA1 over
-  body+callback URL; Jira Cloud: not HMAC-signed by default) —
-  `webhookSignature.js` is generic enough to cover the HMAC ones; verify
-  exact current behavior per provider before building, the same "verify
-  against a live tenant" discipline the directory adapters already follow.
-- **Zoom (posture)** — same shape as the M365/Google Workspace directory
-  adapters: OAuth (Zoom's marketplace multi-account app model, to match how
-  M365/Google already support many different customer tenants), pulling
-  admin settings (passcode required, waiting room enabled, cloud-recording
-  encryption) via Zoom's Admin API.
-- **Google Meet (posture)** — likely not a new connection type at all; Meet
-  safety settings live under the same Google Workspace Admin console a
-  client may already have connected. Recommended: extend the existing
-  `google_workspace` adapter/scopes rather than create a redundant second
-  Google connection for the same tenant.
-- **Zoom / Google Meet (scheduling)** — architecturally distinct from the
-  posture-check connection above: creating a meeting needs a *personal
-  user's* calendar/meeting scope, not an org-admin read scope, so it can't
-  reuse the posture connection's consent grant. Also the first WRITE
-  capability across every integration built so far (webhooks = receive
-  only, directory = read only) — a deliberate, bounded exception (a human
-  explicitly requests one meeting, ShieldAI creates exactly that one),
-  worth calling out explicitly when it's built, not silently introduced.
+`helpManual.js`'s `integrations` section documents every flow for clients,
+included verbatim in Mastermind's chat system prompt (`mastermindRoutes.js`)
+— ask it "how do I connect Jira," "how do I get Teams notifications," or
+"how do I schedule a call" and it answers from the real, current UI flow
+rather than guessing.

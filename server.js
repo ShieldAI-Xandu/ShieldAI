@@ -39,6 +39,8 @@ import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerDirectoryRoutes } from "./directoryRoutes.js";
 import { registerProductivityRoutes } from "./productivityRoutes.js";
+import { registerTaskTrackerRoutes } from "./taskTrackerRoutes.js";
+import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
@@ -1741,6 +1743,8 @@ registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extrac
 registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, express });
+registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
+registerSchedulingRoutes(app, { db, requireAuth, gate });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
