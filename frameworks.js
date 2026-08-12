@@ -39,7 +39,7 @@ import { CMMC_META, assessCmmc, suggestCmmcLevel, level1Practices } from "./cmmc
 import { NIST80053_META, assessNist80053, baselineGuidance, NIST80053_BASELINES } from "./nist80053.js";
 import { STATE_PRIVACY_META, assessStatePrivacy, applicabilityPrompt, STATE_ROSTER } from "./statePrivacy.js";
 import { HIPAA_SECURITY_META, assessHipaaSecurity } from "./hipaaSecurityRule.js";
-import { CIS_VERSION } from "./cisControls.js";
+import { CIS_VERSION, assessCis } from "./cisControls.js";
 
 export const DEPTH = {
   CONTROL_MAPPED: "control-mapped",
@@ -88,9 +88,14 @@ export const FRAMEWORKS = [
     fullName: "CIS Critical Security Controls",
     depth: DEPTH.CONTROL_MAPPED,
     hasIG: true,
-    desc: "18 prioritized controls across 153 safeguards, grouped into three Implementation Groups.",
+    // 153 Safeguards exist across CIS's three Implementation Groups, but
+    // only the 18 top-level Controls are enumerated and assessed here — no
+    // safeguard-level breakdown is implemented, so the description says so
+    // rather than implying a granularity this delivers.
+    desc: "18 prioritized Controls, each grounded in your real assessment answers. Grouped into three Implementation Groups (153 individual Safeguards total); this assessment covers the 18 Controls, not a safeguard-by-safeguard breakdown.",
     audience: "Any SMB wanting a prioritized, practical control set.",
     url: "https://www.cisecurity.org/controls",
+    assess: assessCis,
   },
   {
     id: "hipaa-security",
