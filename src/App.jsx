@@ -244,7 +244,7 @@ function brandLogoSvg(px = 30) {
   <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z" fill="url(#sg)"/>
   <path d="M22 28 L32 38 L42 28 M32 38 L32 54" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <circle cx="22" cy="28" r="3.5" fill="#FFFFFF"/><circle cx="42" cy="28" r="3.5" fill="#FFFFFF"/>
-  <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/><circle cx="32" cy="38" r="4.5" fill="#00E5FF"/>
+  <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/><circle cx="32" cy="38" r="4.5" fill="${BRAND.cyan}"/>
   <circle cx="32" cy="38" r="2" fill="#FFFFFF"/>
 </svg>`;
 }
@@ -2093,14 +2093,16 @@ function RemediationSection() {
   const [busyId, setBusyId] = useState(null);
   const [toast, setToast] = useState(null);
   const [tab, setTab] = useState("gaps");       // gaps | tasks
+  const [trackers, setTrackers] = useState([]); // task-tracker connections, if any
 
   async function loadAll() {
     setLoading(true); setError(null);
     try {
-      const [gRes, tRes, hRes] = await Promise.all([
+      const [gRes, tRes, hRes, trRes] = await Promise.all([
         authFetch(`${API_BASE}/api/tasks/gaps`),
         authFetch(`${API_BASE}/api/tasks`),
         authFetch(`${API_BASE}/api/tasks/posture-history`),
+        authFetch(`${API_BASE}/api/tasktracker`),
       ]);
       const g = await gRes.json();
       const t = await tRes.json();
@@ -2109,10 +2111,33 @@ function RemediationSection() {
       setGaps(g);
       setTasks(Array.isArray(t) ? t : []);
       setHistory(Array.isArray(h) ? h : []);
+      // Tier-gated and easy to have none — never blocks the rest of the screen.
+      setTrackers(trRes.ok ? await trRes.json() : []);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
   useEffect(() => { loadAll(); }, []);
+
+  // First ready-to-use tracker connection, if any — "ready" meaning setup
+  // (project/workspace/board+lists) is actually finished, not just connected.
+  const readyTracker = trackers.find(c => c.status === "active" && (
+    (c.provider === "jira" && c.projectKey) ||
+    (c.provider === "asana" && c.workspaceGid && c.projectGid) ||
+    (c.provider === "trello" && c.boardId && c.defaultListId && c.doneListId)
+  ));
+
+  async function syncTask(task) {
+    if (!readyTracker) return;
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${readyTracker.id}/sync-task/${task.id}`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not sync this task.");
+      flash(`Synced to ${readyTracker.label}${d.externalRef?.externalStatus ? ` — ${d.externalRef.externalStatus}` : ""}`);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
 
   function flash(msg, tone = C.green) {
     setToast({ msg, tone });
@@ -2320,11 +2345,21 @@ function RemediationSection() {
                       <span style={{fontSize:11,fontWeight:700,color:tone.color,
                         padding:"2px 9px",borderRadius:20,background:`${tone.color}18`}}>{tone.label}</span>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10,flexWrap:"wrap"}}>
                       <span>{safeText(t.nistFunction)}</span>
                       {t.dueDate && (
                         <span style={{color:overdue?C.red:C.textMut}}>
                           {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
+                        </span>
+                      )}
+                      {t.externalRef && (
+                        <span style={{color:C.accent}}>
+                          {t.externalRef.externalUrl
+                            ? <a href={t.externalRef.externalUrl} target="_blank" rel="noreferrer" style={{color:C.accent}}>
+                                {t.externalRef.provider} {t.externalRef.externalId}
+                              </a>
+                            : `${t.externalRef.provider} ${t.externalRef.externalId}`}
+                          {t.externalRef.externalStatus && ` · ${t.externalRef.externalStatus}`}
                         </span>
                       )}
                     </div>
@@ -2341,8 +2376,14 @@ function RemediationSection() {
                         style={{...miniBtn(C.green,busy),background:C.green,color:"#04121F",border:"none"}}>
                         {busy ? "Working…" : "Complete & Re-score"}
                       </button>
+                      {readyTracker && (
+                        <button onClick={()=>syncTask(t)} disabled={busy}
+                          style={miniBtn(C.purple, busy)}>
+                          {busy ? "Syncing…" : t.externalRef ? "Sync status" : `Sync to ${readyTracker.label}`}
+                        </button>
+                      )}
                       <button onClick={()=>removeTask(t)} disabled={busy}
-                        style={{...miniBtn(C.textMut,busy),marginLeft:"auto"}}>Delete</button>
+                        style={{...miniBtn(C.textMut,busy),marginLeft:readyTracker?0:"auto"}}>Delete</button>
                     </div>
                   </Card>
                 );
@@ -7175,10 +7216,13 @@ function Dashboard({ assessment, results, onReset }) {
 // ─────────────────────────────────────────────────────────────
 //  BRAND  — official ShieldAI logo (shield + neural node) & wordmark
 // ─────────────────────────────────────────────────────────────
-function ShieldLogo({ size = 28, glow = false }) {
-  return (
+// `motion`: "none" (default — every in-app usage) | "tilt" (a slow, subtle
+// 3D tilt used only on marketing surfaces, so the badge catches light like a
+// seal rather than spinning like a loading indicator — see MOTION_CSS below).
+function ShieldLogo({ size = 28, glow = false, motion = "none" }) {
+  const svg = (
     <svg viewBox="0 0 64 80" width={size} height={size * (80/64)}
-      style={{ display:"block", filter: glow ? "drop-shadow(0 0 8px rgba(0,229,255,0.5))" : "none" }}>
+      style={{ display:"block", filter: glow ? "drop-shadow(0 0 8px rgba(0,200,255,0.5))" : "none" }}>
       <defs>
         <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#0EA5E9"/>
@@ -7186,15 +7230,60 @@ function ShieldLogo({ size = 28, glow = false }) {
         </linearGradient>
       </defs>
       <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z" fill="url(#shieldGrad)"/>
-      <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 L32 4 Z" fill="#00E5FF" opacity="0.2"/>
+      <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 L32 4 Z" fill="#00C8FF" opacity="0.2"/>
       <path d="M22 28 L32 38 L42 28 M32 38 L32 54" stroke="#FFFFFF" strokeWidth="2.5"
         strokeLinecap="round" strokeLinejoin="round" fill="none"/>
       <circle cx="22" cy="28" r="3.5" fill="#FFFFFF"/>
       <circle cx="42" cy="28" r="3.5" fill="#FFFFFF"/>
       <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/>
-      <circle cx="32" cy="38" r="4.5" fill="#00E5FF"/>
+      <circle cx="32" cy="38" r="4.5" fill="#00C8FF"/>
       <circle cx="32" cy="38" r="2" fill="#FFFFFF"/>
     </svg>
+  );
+  if (motion === "none") return svg;
+  return (
+    <div style={{ display:"inline-block", perspective:700, animation:"shieldai-tilt 7s ease-in-out infinite" }}>
+      <style>{`@keyframes shieldai-tilt{0%,100%{transform:rotateY(-13deg) rotateX(3deg)}50%{transform:rotateY(13deg) rotateX(-2deg)}}`}</style>
+      {svg}
+    </div>
+  );
+}
+
+// Mastermind's mark — three orbiting nodes in the three real engine colors
+// (Analyst/purple, Intelligence/cyan, Advisory/green — see MASTERMIND_ENGINES)
+// circling a core. Not decorative: it's a literal diagram of the product's
+// actual multi-agent architecture. `animated` slowly orbits the nodes —
+// used on the marketing page only; static elsewhere.
+function MastermindLogo({ size = 48, animated = false }) {
+  const nodes = [
+    { color: C.purple, angle: -90 },
+    { color: C.accent, angle: 30 },
+    { color: C.green,  angle: 150 },
+  ];
+  const r = size * 0.36;
+  const cx = size / 2, cy = size / 2;
+  return (
+    <div style={{ width:size, height:size, position:"relative" }}>
+      {animated && (
+        <style>{`@keyframes shieldai-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      )}
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ display:"block" }}>
+        <circle cx={cx} cy={cy} r={size*0.16} fill={C.card} stroke={C.borderHi} strokeWidth="1.5"/>
+        <text x={cx} y={cy+size*0.055} textAnchor="middle" fontSize={size*0.16}>🧠</text>
+        <g style={animated ? { transformOrigin:`${cx}px ${cy}px`, animation:"shieldai-orbit 16s linear infinite" } : undefined}>
+          {nodes.map((n,i) => {
+            const rad = (n.angle * Math.PI) / 180;
+            const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
+            return (
+              <g key={i}>
+                <line x1={cx} y1={cy} x2={x} y2={y} stroke={n.color} strokeOpacity="0.4" strokeWidth="1.5"/>
+                <circle cx={x} cy={y} r={size*0.08} fill={n.color}/>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+    </div>
   );
 }
 
@@ -7229,6 +7318,35 @@ function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10,
         : <ShieldLogo size={logoSize} glow={glow}/>}
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
+  );
+}
+
+// Rotating trust ticker for the marketing hero — replaces a single static
+// claim with a short, honest rotation of real proof points. Pure CSS fade,
+// no external assets, so it's fast and can't break. `messages` defaults to
+// the hero's original claim plus a few more concrete, verifiable ones.
+function TrustTicker({ messages, color = C.green, interval = 4200 }) {
+  const items = messages || [
+    "Built and running in production today",
+    "Real NVD CVE data — nothing fabricated",
+    "12 compliance frameworks, hundreds of controls",
+    "AI advises, humans act — always",
+  ];
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setI(v => (v + 1) % items.length), interval);
+    return () => clearInterval(id);
+  }, [items.length, interval]);
+  return (
+    <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
+      background:`${color}12`,border:`1px solid ${color}38`,color,
+      fontSize:12,fontWeight:600,letterSpacing:0.2,minHeight:16}}>
+      <LivePulse color={color}/>
+      <span key={i} style={{animation:"shieldai-fadein 0.5s ease"}}>
+        <style>{`@keyframes shieldai-fadein{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}`}</style>
+        {items[i]}
+      </span>
+    </div>
   );
 }
 
@@ -8658,7 +8776,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
       points:["Multiple assessments & full program builder","Up to 6 policies with employee sign-off tracking","Vendor risk registry & compliance calendar","AI-recommended training plan + 1 free phishing test","5 monitored endpoints","Full training delivery available as a $40/mo add-on"],
       cta:"Start free" },
     { name:"Growth", tag:"Most popular", featured:true, price:"$349/mo",
-      points:["Everything in Starter","Real threat intel + AI-answered vendor questionnaires","Employee training delivery included","5 compliance frameworks, evidence & workflows","Up to 10 policies, 25 endpoints","Full downloads & exports"],
+      points:["Everything in Starter","Real threat intel + AI-answered vendor questionnaires","Employee training delivery included","5 compliance frameworks, evidence & workflows","Connect your security tools, directory, and chat apps","Up to 10 policies, 25 endpoints","Full downloads & exports"],
       cta:"Start free" },
     { name:"Guided", tag:"Expert-reviewed", price:"$699/mo",
       points:["Everything in Growth","Periodic engineer review, including flagged vendor answers","10 compliance frameworks & scheduled check-ins","Up to 100 endpoints"],
@@ -8742,21 +8860,28 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         </div>
       </div>
 
-      {/* HERO */}
-      <Section style={{paddingTop:64,paddingBottom:70,textAlign:"center"}}>
-        <div style={{display:"flex",justifyContent:"center",marginBottom:28}}>
-          <ShieldLogo size={64} glow/>
+      {/* HERO — wrapped in a contained, low-opacity mesh-gradient glow. Marketing
+          surface only (per design-token audit, 2026-08): ambient gradients read
+          as "technological sophistication" on hero/pricing sections but are
+          never used inside the logged-in product, where they'd fight contrast. */}
+      <div style={{position:"relative",overflow:"hidden"}}>
+        <div aria-hidden="true" style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:0}}>
+          <div style={{position:"absolute",top:-120,left:"18%",width:420,height:420,borderRadius:"50%",
+            background:C.accent,opacity:0.10,filter:"blur(100px)"}}/>
+          <div style={{position:"absolute",top:-60,right:"14%",width:380,height:380,borderRadius:"50%",
+            background:C.purple,opacity:0.08,filter:"blur(110px)"}}/>
         </div>
-        <div style={{display:"inline-flex",alignItems:"center",gap:9,padding:"6px 15px",borderRadius:20,
-          background:`${C.green}12`,border:`1px solid ${C.green}38`,color:C.green,
-          fontSize:12,fontWeight:600,marginBottom:24,letterSpacing:0.2}}>
-          <LivePulse/>
-          Built and running in production today
-        </div>
-        <h1 className="mkt-hero-h1" style={{fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
-          maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
-          The cybersecurity expert<br/>your business is required to have.
-        </h1>
+        <Section style={{paddingTop:64,paddingBottom:70,textAlign:"center",position:"relative",zIndex:1}}>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:28}}>
+            <ShieldLogo size={64} glow motion="tilt"/>
+          </div>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:24}}>
+            <TrustTicker/>
+          </div>
+          <h1 className="mkt-hero-h1" style={{fontWeight:800,lineHeight:1.08,letterSpacing:-1.5,margin:"0 0 20px",
+            maxWidth:820,marginLeft:"auto",marginRight:"auto"}}>
+            The cybersecurity expert<br/>your business is required to have.
+          </h1>
         <p className="mkt-hero-sub" style={{color:dim,lineHeight:1.6,maxWidth:640,margin:"0 auto 36px"}}>
           A full-time CISO costs $200,000 a year. ShieldAI delivers the same protection —
           real threat intelligence, prioritized remediation, audit-ready evidence, and compliance
@@ -8871,7 +8996,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             Every point traces to a specific control — the evidence insurers and auditors trust.
           </div>
         </div>
-      </Section>
+        </Section>
+      </div>
 
       {/* PROBLEM */}
       <div style={{background:navy,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
@@ -8950,6 +9076,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                 d:"Send a real, safe test phishing email and see who clicks — a free trial test on every plan, full ongoing campaigns with Growth and up." },
               { icon:"🛠️", t:"Prioritized remediation",
                 d:"Gaps ranked by how much each fix moves your NIST posture score. Turn any gap into a tracked task; completing it re-scores you automatically." },
+              { icon:"🧩", t:"Security tool integrations",
+                d:"Feed real findings straight in from the tools you already run — Nessus, Qualys, Rapid7, Microsoft Defender, CrowdStrike, Wazuh, Splunk, or any custom webhook. Inbound only; ShieldAI never calls out to your tools." },
+              { icon:"🗂️", t:"Directory & posture integrations",
+                d:"Pull security posture directly from Microsoft 365, Google Workspace, Okta, or Zoom — MFA coverage, admin accounts, and policy gaps, read-only always." },
+              { icon:"🖥️", t:"Endpoint monitoring",
+                d:"A lightweight, read-only agent checks antivirus, patch status, disk encryption, and more on every device — and cross-checks it against what you told us, flagging disagreements before an auditor does." },
               { icon:"🔗", t:"Vendor risk management",
                 d:"A living registry with automatic reassessment dates by vendor criticality, plus AI that drafts answers to your customers' security questionnaires — grounded in your real program, never guessed." },
               { icon:"✍️", t:"Policies your team actually signs",
@@ -8957,9 +9089,11 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               { icon:"📎", t:"Evidence & audit readiness",
                 d:"Attach proof to completed work and see a live audit-coverage score — the evidence insurers and auditors ask for, ready when they do." },
               { icon:"✅", t:"Compliance tracking",
-                d:"12 real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace, with a compliance calendar surfacing everything coming due in one place." },
+                d:"12 real frameworks with hundreds of controls, mapped to your answers and tracked in a client-facing workspace, with a compliance calendar surfacing everything coming due — and disagreements between your answers and your agents' telemetry flagged for you to resolve, not buried." },
               { icon:"🔔", t:"Notifications & review",
                 d:"When your analyst approves a policy or requests changes, you know immediately — with a direct link to what changed." },
+              { icon:"💬", t:"Slack & Teams notifications",
+                d:"Get pinged the moment there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out. Recommendation alerts include action buttons so you can respond without leaving chat." },
               { icon:"🤝", t:"A human vCISO in the loop",
                 d:"AI drafts and monitors; a dedicated analyst reviews and advises at every stage. AI advises, humans act — by design." },
             ].map((f,i)=>(
@@ -8976,8 +9110,6 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>White-label branding</span>
             <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
               border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Analyst console with client isolation</span>
-            <span style={{padding:"5px 12px",borderRadius:20,background:`${cyan}14`,
-              border:`1px solid ${cyan}44`,color:cyan,fontSize:12,fontWeight:600}}>Read-only endpoint monitoring</span>
           </div>
         </Section>
       </div>
@@ -8995,7 +9127,10 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         <Section>
           <div style={{display:"flex",gap:40,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
             <div style={{flex:"1 1 380px",minWidth:280}}>
-              <Eyebrow>Meet Mastermind</Eyebrow>
+              <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:4}}>
+                <MastermindLogo size={56} animated/>
+                <Eyebrow>Meet Mastermind</Eyebrow>
+              </div>
               <h2 style={{fontSize:26,fontWeight:800,letterSpacing:-0.5,margin:"0 0 12px",maxWidth:460}}>
                 Powered by the world's most trusted AI.
               </h2>
@@ -9015,22 +9150,22 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             </div>
             <div style={{flex:"0 1 380px",minWidth:280,display:"flex",flexDirection:"column",gap:10}}>
               {[
-                { t:"Analyst Agent", v:"Claude · Anthropic",
+                { t:"Analyst Agent", v:"Claude · Anthropic", color:C.purple,
                   d:"Risk scoring, policy drafting, compliance and workflow reasoning." },
-                { t:"Intelligence Agent", v:"Gemini · Google",
+                { t:"Intelligence Agent", v:"Gemini · Google", color:C.accent,
                   d:"Real-time threat research, vendor and industry-threat lookups." },
-                { t:"Advisory Agent", v:"ChatGPT · OpenAI",
+                { t:"Advisory Agent", v:"ChatGPT · OpenAI", color:C.green,
                   d:"Tool recommendations, training content, and executive reporting." },
               ].map((x,i)=>(
                 <div key={i} style={{display:"flex",gap:11,alignItems:"flex-start",padding:"12px 14px",
                   background:C.card,border:`1px solid ${line}`,borderRadius:10}}>
                   <div style={{width:16,height:16,borderRadius:5,flexShrink:0,marginTop:1,
-                    background:`${C.purple}1A`,border:`1px solid ${C.purple}44`,display:"flex",
-                    alignItems:"center",justifyContent:"center",fontSize:9,color:C.purple,fontWeight:800}}>🧠</div>
+                    background:`${x.color}1A`,border:`1px solid ${x.color}44`,display:"flex",
+                    alignItems:"center",justifyContent:"center",fontSize:9,color:x.color,fontWeight:800}}>🧠</div>
                   <div>
                     <div style={{display:"flex",alignItems:"baseline",gap:7,marginBottom:3,flexWrap:"wrap"}}>
                       <div style={{fontSize:13,fontWeight:700}}>{x.t}</div>
-                      <div style={{fontSize:10.5,color:cyan,fontWeight:600}}>{x.v}</div>
+                      <div style={{fontSize:10.5,color:x.color,fontWeight:600}}>{x.v}</div>
                     </div>
                     <div style={{fontSize:12,color:dim,lineHeight:1.5}}>{x.d}</div>
                   </div>
@@ -13036,7 +13171,12 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
 
 const ANALYST_EMAIL = "analyst@xandultd.com";
 
-// SOC palette (dark, data-dense)
+// SOC palette (dark, data-dense) — deliberately darker bg/panel/border than
+// the customer-facing C palette (a "control room" feel for the analyst
+// console), but every semantic/accent color below is a direct reference to
+// C, not a separate hex duplicate — this is what keeps "red" or "cyan"
+// meaning the exact same pixel across the whole product instead of drifting
+// a few points apart the way this table previously had (audited 2026-08).
 const SOC = {
   bg: "#070B14",
   panel: "#0C1322",
@@ -13046,11 +13186,11 @@ const SOC = {
   text: "#E6EEFB",
   textSec: "#8AA0C0",
   textMut: "#56688A",
-  cyan: "#00E5FF",
-  green: "#00E5A0",
-  amber: "#FFB020",
-  red: "#FF4D5E",
-  purple: "#9B7CFF",
+  cyan: C.accent,
+  green: C.green,
+  amber: C.amber,
+  red: C.red,
+  purple: C.purple,
   blue: "#3B82F6",
 };
 
@@ -14617,7 +14757,7 @@ function AnalystMastermindPanel({ mmOpen, setMmOpen, active, mmThread, mmThinkin
                 borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>Send</button>
           </div>
           <div style={{padding:"6px 14px 12px",fontSize:9,color:SOC.textMut,textAlign:"center"}}>
-            Scripted preview · becomes live AI in production
+            Live AI · read-only tool access to your portfolio
           </div>
         </>
       )}
@@ -16444,11 +16584,13 @@ const DIRECTORY_PROVIDER_OPTIONS = [
   { id: "m365", label: "Microsoft 365 / Entra ID", kind: "oauth" },
   { id: "google_workspace", label: "Google Workspace", kind: "oauth" },
   { id: "okta", label: "Okta", kind: "token" },
+  { id: "zoom", label: "Zoom", kind: "oauth" },
 ];
 
 const DIRECTORY_SETUP_NOTES = {
   m365: "You'll be sent to Microsoft to sign in and approve read-only access (directory, policies, and MFA registration reports). You need to be a Global Admin or Privileged Role Admin in your Microsoft 365 tenant — a non-admin sign-in will be blocked by Microsoft, not by ShieldAI.",
   google_workspace: "You'll be sent to Google to sign in and approve read-only access (user directory and 2-Step Verification status). You need to be a super admin in your Google Workspace account.",
+  zoom: "You'll be sent to Zoom to sign in and approve read-only access to your account's meeting security settings (passcodes, waiting rooms, encryption). You need account owner or admin access in Zoom.",
 };
 
 function IntegrationSamplePayload({ webhookUrl, provider }) {
@@ -16981,9 +17123,19 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   );
 }
 
+const PRODUCTIVITY_PROVIDER_OPTIONS = [
+  { id: "slack", label: "Slack", kind: "oauth" },
+  { id: "teams", label: "Microsoft Teams", kind: "webhook" },
+];
+
 function AddProductivityConnectionModal({ onClose }) {
+  const [provider, setProvider] = useState("slack");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState(null);
+  const [label, setLabel] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+
+  const selected = PRODUCTIVITY_PROVIDER_OPTIONS.find(p => p.id === provider);
 
   async function connectSlack() {
     setConnecting(true); setError(null);
@@ -16995,6 +17147,20 @@ function AddProductivityConnectionModal({ onClose }) {
     } catch (e) { setError(e.message); setConnecting(false); }
   }
 
+  async function connectTeams() {
+    if (!webhookUrl.trim()) { setError("Paste the webhook URL Teams gave you."); return; }
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/connect/teams`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim() || "Microsoft Teams", webhookUrl: webhookUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not connect to Teams.");
+      onClose(true);
+    } catch (e) { setError(e.message); } finally { setConnecting(false); }
+  }
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
       display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
@@ -17002,27 +17168,76 @@ function AddProductivityConnectionModal({ onClose }) {
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
         borderRadius:14,maxWidth:520,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect Slack</h2>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect a Chat Tool</h2>
           <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
             fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
         </div>
-        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 12px"}}>
-          Get notified in a Slack channel when there's new security work — a recommendation is
-          ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off.
-          Recommendation alerts include action buttons — you can respond right from Slack.
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
+          Get notified when there's new security work — a recommendation is ready, a task is
+          completed, a phishing simulation goes out, or a policy needs sign-off.
         </p>
-        <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
-          border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
-          You'll be sent to Slack to approve ShieldAI posting messages to a channel of your
-          choosing. ShieldAI never reads your Slack messages or channel history — only posts.
+
+        <div style={{marginBottom:16}}>
+          <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Provider</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {PRODUCTIVITY_PROVIDER_OPTIONS.map(p=>(
+              <button key={p.id} onClick={()=>{ setProvider(p.id); setError(null); }}
+                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:provider===p.id?`${C.accent}22`:C.surface,
+                  border:`1px solid ${provider===p.id?C.accent+"66":C.border}`,
+                  color:provider===p.id?C.accent:C.textSec}}>
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
-        {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
-        <button onClick={connectSlack} disabled={connecting}
-          style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-            color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
-            cursor:connecting?"wait":"pointer"}}>
-          {connecting ? "Redirecting…" : "Connect Slack →"}
-        </button>
+
+        {selected.kind === "oauth" ? (
+          <>
+            <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+              border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+              You'll be sent to Slack to approve ShieldAI posting messages to a channel of your
+              choosing. ShieldAI never reads your Slack messages or channel history — only posts.
+              Recommendation alerts include action buttons you can respond to right from Slack.
+            </div>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectSlack} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Redirecting…" : "Connect Slack →"}
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
+              <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. #security-alerts"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Webhook URL</label>
+              <input value={webhookUrl} onChange={e=>setWebhookUrl(e.target.value)} placeholder="https://...webhook.office.com/... or a Power Automate flow URL"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:"0 0 16px"}}>
+              In the Teams channel you want alerts in: ⋯ → Workflows → "Post to a channel when a
+              webhook request is received" (or, on older setups, Connectors → Incoming Webhook) →
+              copy the URL it gives you and paste it here. Recommendation alerts include buttons
+              that open your browser to apply the action — Teams itself can't post replies back to
+              a bare webhook URL, so this works a little differently than Slack's in-chat buttons.
+            </p>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectTeams} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Connecting…" : "Connect Teams"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -17150,36 +17365,42 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
           <Badge label={statusLabel} color={statusColor}/>
         </div>
         <div style={{color:C.textSec,fontSize:13}}>
-          {c.teamOrWorkspace} · {c.channelName ? `posting to #${c.channelName}` : "no channel set yet"}
+          {c.provider === "teams"
+            ? `${c.teamOrWorkspace} · posts to the channel this webhook was created in`
+            : `${c.teamOrWorkspace} · ${c.channelName ? `posting to #${c.channelName}` : "no channel set yet"}`}
         </div>
       </Card>
 
-      <SectionLabel text="Post to channel"/>
-      <div style={{marginBottom:18}}>
-        {!channels ? (
-          <button onClick={loadChannels} disabled={busy || c.status==="revoked"}
-            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
-              borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
-            {busy ? "Loading channels…" : "Choose a channel"}
-          </button>
-        ) : channels.length === 0 ? (
-          <div style={{color:C.textMut,fontSize:13}}>
-            No channels found — invite the ShieldAI Slack app to a channel first, then reload.
-          </div>
-        ) : (
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {channels.map(ch => (
-              <button key={ch.id} onClick={()=>setChannel(ch)} disabled={busy}
-                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
-                  background:c.channelId===ch.id?`${C.accent}22`:C.surface,
-                  border:`1px solid ${c.channelId===ch.id?C.accent+"66":C.border}`,
-                  color:c.channelId===ch.id?C.accent:C.textSec}}>
-                #{ch.name}
+      {c.provider === "slack" && (
+        <>
+          <SectionLabel text="Post to channel"/>
+          <div style={{marginBottom:18}}>
+            {!channels ? (
+              <button onClick={loadChannels} disabled={busy || c.status==="revoked"}
+                style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                {busy ? "Loading channels…" : "Choose a channel"}
               </button>
-            ))}
+            ) : channels.length === 0 ? (
+              <div style={{color:C.textMut,fontSize:13}}>
+                No channels found — invite the ShieldAI Slack app to a channel first, then reload.
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {channels.map(ch => (
+                  <button key={ch.id} onClick={()=>setChannel(ch)} disabled={busy}
+                    style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                      background:c.channelId===ch.id?`${C.accent}22`:C.surface,
+                      border:`1px solid ${c.channelId===ch.id?C.accent+"66":C.border}`,
+                      color:c.channelId===ch.id?C.accent:C.textSec}}>
+                    #{ch.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       <SectionLabel text="Notify on"/>
       <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
@@ -17196,10 +17417,297 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
           );
         })}
       </div>
-      {!c.channelId && (
+      {c.provider === "slack" && !c.channelId && (
         <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:0}}>
           Choose a channel above before enabling notifications — without one, ShieldAI has nowhere to post.
         </p>
+      )}
+    </div>
+  );
+}
+
+const TASK_TRACKER_PROVIDER_OPTIONS = [
+  { id: "jira", label: "Jira", kind: "oauth" },
+  { id: "asana", label: "Asana", kind: "oauth" },
+  { id: "trello", label: "Trello", kind: "token" },
+];
+
+function AddTaskTrackerConnectionModal({ onClose }) {
+  const [provider, setProvider] = useState("jira");
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+  const [label, setLabel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [token, setToken] = useState("");
+
+  const selected = TASK_TRACKER_PROVIDER_OPTIONS.find(p => p.id === provider);
+
+  async function connectOAuth() {
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/oauth/${provider}/start`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not start the connection.");
+      window.location.href = data.url;
+    } catch (e) { setError(e.message); setConnecting(false); }
+  }
+
+  async function connectTrello() {
+    if (!apiKey.trim() || !token.trim()) { setError("API key and token are both required."); return; }
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/connect/trello`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim() || "Trello", apiKey: apiKey.trim(), token: token.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not connect to Trello.");
+      onClose(true);
+    } catch (e) { setError(e.message); } finally { setConnecting(false); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={()=>onClose(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:560,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect a Task Tracker</h2>
+          <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px"}}>
+          Sync a remediation task to Jira, Asana, or Trello, and pull its status back on demand.
+          ShieldAI only ever creates the ticket you send — it never reads or changes anything else
+          in your tracker.
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Provider</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {TASK_TRACKER_PROVIDER_OPTIONS.map(p=>(
+              <button key={p.id} onClick={()=>{ setProvider(p.id); setError(null); }}
+                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:provider===p.id?`${C.accent}22`:C.surface,
+                  border:`1px solid ${provider===p.id?C.accent+"66":C.border}`,
+                  color:provider===p.id?C.accent:C.textSec}}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {selected.kind === "oauth" ? (
+          <>
+            <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+              border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+              You'll be sent to {selected.label} to sign in and approve access. ShieldAI only ever
+              creates tickets you explicitly sync — it never reads or changes anything else.
+            </div>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectOAuth} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Redirecting…" : `Connect ${selected.label} →`}
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
+              <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Trello"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>API key</label>
+              <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="From trello.com/power-ups/admin"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Token</label>
+              <input value={token} onChange={e=>setToken(e.target.value)} placeholder="Generated alongside your API key"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:"0 0 16px"}}>
+              Trello uses a paste-in API key and token instead of a sign-in redirect — generate
+              both from trello.com/power-ups/admin under your account.
+            </p>
+            {error && <div style={{marginBottom:12,color:C.red,fontSize:13}}>{error}</div>}
+            <button onClick={connectTrello} disabled={connecting}
+              style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:C.bg,border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+                cursor:connecting?"wait":"pointer"}}>
+              {connecting ? "Connecting…" : "Connect Trello"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TaskTrackerConnectionDetail({ connectionId, onBack }) {
+  const [connection, setConnection] = useState(null);
+  const [picker, setPicker] = useState(null); // { step, options, workspaceGid?, boardId? }
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}`);
+      if (!res.ok) throw new Error("Could not load this connection.");
+      setConnection(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); setPicker(null); }, [connectionId]);
+
+  function flash(msg, tone = C.green) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function loadPicker(query = "") {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}/picker${query}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load options.");
+      setPicker(data);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function selectOption(fields) {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that selection.");
+      flash("Saved.");
+      setPicker(null);
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function revoke() {
+    if (!window.confirm("Revoke this connection? ShieldAI will stop syncing tasks to it.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !connection) return <div style={{padding:24,color:C.red}}>{error}</div>;
+
+  const c = connection;
+  const statusColor = c.status === "active" ? C.green : C.textMut;
+  const statusLabel = c.status === "active" ? "Connected" : "Revoked";
+
+  // What's already configured, in plain language, per provider.
+  let setupSummary = null;
+  if (c.provider === "jira") setupSummary = c.projectKey ? `Syncing to project ${c.projectName || c.projectKey}` : "No Jira project chosen yet";
+  else if (c.provider === "asana") setupSummary = c.projectGid ? `Syncing to project ${c.projectName || c.projectGid}` : "No Asana workspace/project chosen yet";
+  else if (c.provider === "trello") setupSummary = c.doneListId ? `Board ${c.boardName || c.boardId} — default "${c.defaultListName}", done "${c.doneListName}"` : "No Trello board/lists chosen yet";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status === "active" && (
+            <button onClick={revoke} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amber,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={removeConnection} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.red,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+          <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+          <Badge label={statusLabel} color={statusColor}/>
+        </div>
+        <div style={{color:C.textSec,fontSize:13}}>{setupSummary}</div>
+      </Card>
+
+      {c.status === "active" && (
+        <>
+          <SectionLabel text={picker ? "Choose" : "Setup"}/>
+          <div style={{marginBottom:18}}>
+            {!picker ? (
+              <button onClick={()=>loadPicker("")} disabled={busy}
+                style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                {busy ? "Loading…" : setupSummary?.startsWith("No") ? "Choose where tickets go" : "Change selection"}
+              </button>
+            ) : (
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {picker.options.map(opt => (
+                  <button key={opt.id} disabled={busy} onClick={()=>{
+                    if (c.provider === "jira") return selectOption({ projectKey: opt.key, projectName: opt.name });
+                    if (c.provider === "asana") {
+                      if (picker.step === "workspace") return loadPicker(`?workspaceGid=${opt.id}`);
+                      return selectOption({ workspaceGid: picker.workspaceGid, projectGid: opt.id, projectName: opt.name });
+                    }
+                    if (c.provider === "trello") {
+                      if (picker.step === "board") return loadPicker(`?boardId=${opt.id}`);
+                      // Trello list step: first pick sets "default", second sets "done".
+                      if (!c.defaultListId) return selectOption({ boardId: picker.boardId, boardName: picker.boardName, defaultListId: opt.id, defaultListName: opt.name });
+                      return selectOption({ doneListId: opt.id, doneListName: opt.name });
+                    }
+                  }} style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                    background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+                    {opt.name || opt.key}
+                  </button>
+                ))}
+              </div>
+            )}
+            {c.provider === "trello" && picker?.step === "list" && (
+              <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,marginTop:8}}>
+                {!c.defaultListId ? "Pick the list new cards should start in." : "Now pick the list that means \"done.\""}
+              </p>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -17209,38 +17717,44 @@ function IntegrationsScreen({ onBack }) {
   const [integrations, setIntegrations] = useState([]);
   const [directoryConnections, setDirectoryConnections] = useState([]);
   const [productivityConnections, setProductivityConnections] = useState([]);
+  const [taskTrackerConnections, setTaskTrackerConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showAddDirectory, setShowAddDirectory] = useState(false);
   const [showAddProductivity, setShowAddProductivity] = useState(false);
-  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity", id }
+  const [showAddTaskTracker, setShowAddTaskTracker] = useState(false);
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker", id }
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [wRes, dRes, pRes] = await Promise.all([
+      const [wRes, dRes, pRes, tRes] = await Promise.all([
         authFetch(`${API_BASE}/api/integrations`),
         authFetch(`${API_BASE}/api/directory`),
         authFetch(`${API_BASE}/api/productivity`),
+        authFetch(`${API_BASE}/api/tasktracker`),
       ]);
       if (!wRes.ok) throw new Error("Could not load integrations.");
       setIntegrations(await wRes.json());
-      // Directory/productivity connections are newer, tier-gated endpoints —
-      // don't let a 402/404 on either block the webhook list from rendering.
+      // Directory/productivity/task-tracker connections are newer, tier-gated
+      // endpoints — don't let a 402/404 on any of them block the webhook list
+      // from rendering.
       setDirectoryConnections(dRes.ok ? await dRes.json() : []);
       setProductivityConnections(pRes.ok ? await pRes.json() : []);
+      setTaskTrackerConnections(tRes.ok ? await tRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
 
   // Land back here after an OAuth redirect round-trip (see
-  // directoryRoutes.js's and productivityRoutes.js's /oauth/.../callback).
+  // directoryRoutes.js's, productivityRoutes.js's, and taskTrackerRoutes.js's
+  // /oauth/.../callback).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const connected = params.get("directoryConnected") || params.get("productivityConnected");
-    const failed = params.get("directoryError") || params.get("productivityError");
+    const connected = params.get("directoryConnected") || params.get("productivityConnected") || params.get("tasktrackerConnected");
+    const failed = params.get("directoryError") || params.get("productivityError") || params.get("tasktrackerError");
     if (connected) {
       setNotice({ msg: `Connected.`, tone: C.green });
       load();
@@ -17249,7 +17763,8 @@ function IntegrationsScreen({ onBack }) {
     }
     if (connected || failed) {
       params.delete("directoryConnected"); params.delete("directoryError");
-      params.delete("productivityConnected"); params.delete("productivityError"); params.delete("provider"); params.delete("id");
+      params.delete("productivityConnected"); params.delete("productivityError");
+      params.delete("tasktrackerConnected"); params.delete("tasktrackerError"); params.delete("provider"); params.delete("id");
       const qs = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
     }
@@ -17269,6 +17784,13 @@ function IntegrationsScreen({ onBack }) {
       </div>
     );
   }
+  if (selected?.kind === "tasktracker") {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <TaskTrackerConnectionDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
   if (selected?.kind === "webhook") {
     return (
       <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
@@ -17281,6 +17803,7 @@ function IntegrationsScreen({ onBack }) {
     ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
     ...directoryConnections.map(c => ({ kind: "directory", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
     ...productivityConnections.map(c => ({ kind: "productivity", id: c.id, sortAt: c.lastNotifiedAt || c.connectedAt })),
+    ...taskTrackerConnections.map(c => ({ kind: "tasktracker", id: c.id, sortAt: c.connectedAt })),
   ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
 
   return (
@@ -17288,6 +17811,7 @@ function IntegrationsScreen({ onBack }) {
       {showAdd && <AddIntegrationModal onClose={()=>{ setShowAdd(false); load(); }}/>}
       {showAddDirectory && <AddDirectoryConnectionModal onClose={(didConnect)=>{ setShowAddDirectory(false); if (didConnect) load(); }}/>}
       {showAddProductivity && <AddProductivityConnectionModal onClose={(didConnect)=>{ setShowAddProductivity(false); if (didConnect) load(); }}/>}
+      {showAddTaskTracker && <AddTaskTrackerConnectionModal onClose={(didConnect)=>{ setShowAddTaskTracker(false); if (didConnect) load(); }}/>}
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
         <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
@@ -17295,12 +17819,17 @@ function IntegrationsScreen({ onBack }) {
           <button onClick={()=>setShowAddProductivity(true)}
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-            + Connect Slack
+            + Connect Chat Tool
           </button>
           <button onClick={()=>setShowAddDirectory(true)}
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
             + Connect Directory
+          </button>
+          <button onClick={()=>setShowAddTaskTracker(true)}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Connect Task Tracker
           </button>
           <button onClick={()=>setShowAdd(true)}
             style={{padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -17311,9 +17840,11 @@ function IntegrationsScreen({ onBack }) {
       </div>
       <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
         Connect a vulnerability scanner/EDR/SIEM's outbound webhook, a directory (Microsoft 365,
-        Google Workspace, Okta), or Slack to feed real findings into ShieldAI and get notified
-        about new security work. Read-only where it matters — ShieldAI never changes anything on
-        your systems or in your directory, and only ever posts messages to Slack, never reads them.
+        Google Workspace, Okta, Zoom), a chat tool (Slack, Teams), or a task tracker (Jira, Asana,
+        Trello) to feed real findings into ShieldAI, get notified about new security work, and sync
+        remediation tasks. Read-only where it matters — ShieldAI never changes anything on your
+        systems or in your directory, only ever posts messages to your chat tool, and only ever
+        creates the exact tickets you send to your tracker.
       </p>
 
       {notice && (
@@ -17329,18 +17860,23 @@ function IntegrationsScreen({ onBack }) {
           <div style={{fontSize:32,marginBottom:10}}>🔌</div>
           <div style={{color:C.text,fontWeight:600,fontSize:16,marginBottom:6}}>No integrations yet</div>
           <p style={{color:C.textSec,fontSize:13,margin:"0 auto 18px",maxWidth:420,lineHeight:1.6}}>
-            Connect your first security tool, directory, or Slack to get started.
+            Connect your first security tool, directory, chat tool, or task tracker to get started.
           </p>
           <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
             <button onClick={()=>setShowAddProductivity(true)}
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-              + Connect Slack
+              + Connect Chat Tool
             </button>
             <button onClick={()=>setShowAddDirectory(true)}
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
               + Connect Directory
+            </button>
+            <button onClick={()=>setShowAddTaskTracker(true)}
+              style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Connect Task Tracker
             </button>
             <button onClick={()=>setShowAdd(true)}
               style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -17389,6 +17925,29 @@ function IntegrationsScreen({ onBack }) {
                       </div>
                       <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
                         {c.teamOrWorkspace} · {c.channelName ? `#${c.channelName}` : "no channel set"} · last notified {c.lastNotifiedAt ? timeAgo(c.lastNotifiedAt) : "never"}
+                      </div>
+                    </div>
+                    <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
+                  </div>
+                </Card>
+              );
+            }
+            if (item.kind === "tasktracker") {
+              const c = taskTrackerConnections.find(x => x.id === item.id);
+              const providerLabel = TASK_TRACKER_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+              const statusColor = c.status === "active" ? C.green : C.textMut;
+              const statusLabel = c.status === "active" ? "Connected" : "Revoked";
+              return (
+                <Card key={`t:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"tasktracker", id:c.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>🗒️</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                        <Badge label={statusLabel} color={statusColor}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {providerLabel} · connected {timeAgo(c.connectedAt)}
                       </div>
                     </div>
                     <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
@@ -18290,6 +18849,106 @@ function ClientAnalystChat({ onClose }) {
 //  request is a discrete ticket any analyst/admin can pick up and answer,
 //  reachable whether or not the client has an assigned analyst yet.
 // ─────────────────────────────────────────────────────────────
+// "Schedule a call" — the one WRITE action across every integration in this
+// codebase (see schedulingRoutes.js's header for why that's a deliberate,
+// bounded exception). A human explicitly requests one meeting; this creates
+// exactly that meeting, nothing else.
+function ScheduleCallCard() {
+  const [connections, setConnections] = useState(null); // null = loading
+  const [connecting, setConnecting] = useState(null); // provider id or null
+  const [topic, setTopic] = useState("");
+  const [when, setWhen] = useState("");
+  const [duration, setDuration] = useState(30);
+  const [scheduling, setScheduling] = useState(false);
+  const [result, setResult] = useState(null); // { joinUrl, startTime }
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/scheduling`).then(r => r.ok ? r.json() : []).then(d => setConnections(Array.isArray(d) ? d : [])).catch(() => setConnections([]));
+  }, []);
+
+  const active = (connections || []).find(c => c.status === "active");
+
+  async function connect(provider) {
+    setConnecting(provider); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/scheduling/oauth/${provider}/start`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not start the connection.");
+      window.location.href = data.url;
+    } catch (e) { setError(e.message); setConnecting(null); }
+  }
+
+  async function schedule() {
+    if (!when) { setError("Pick a date and time."); return; }
+    setScheduling(true); setError(null); setResult(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/scheduling/${active.id}/create-meeting`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: topic.trim() || "ShieldAI call", startTime: new Date(when).toISOString(), durationMinutes: Number(duration) || 30 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not schedule the call.");
+      setResult(data.meeting);
+    } catch (e) { setError(e.message); } finally { setScheduling(false); }
+  }
+
+  if (connections === null) return null;
+
+  return (
+    <Card style={{marginBottom:20}}>
+      <div style={{fontWeight:700,fontSize:15,marginBottom:2}}>📅 Schedule a call</div>
+      <div style={{color:C.textSec,fontSize:13,marginBottom:12}}>
+        {active ? `Create a ${active.label} meeting link for an advisor check-in or incident call.` : "Connect Zoom or Google Meet to schedule a call from here."}
+      </div>
+      {!active ? (
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>connect("zoom")} disabled={connecting==="zoom"}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            {connecting==="zoom" ? "Redirecting…" : "Connect Zoom"}
+          </button>
+          <button onClick={()=>connect("google_meet")} disabled={connecting==="google_meet"}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            {connecting==="google_meet" ? "Redirecting…" : "Connect Google Meet"}
+          </button>
+        </div>
+      ) : result ? (
+        <div style={{padding:"10px 12px",background:`${C.green}12`,border:`1px solid ${C.green}33`,borderRadius:8}}>
+          <div style={{color:C.green,fontSize:13,fontWeight:600,marginBottom:4}}>Meeting created</div>
+          {result.joinUrl
+            ? <a href={result.joinUrl} target="_blank" rel="noreferrer" style={{color:C.accent,fontSize:12.5,wordBreak:"break-all"}}>{result.joinUrl}</a>
+            : <span style={{color:C.textSec,fontSize:12.5}}>Created, but no join link was returned.</span>}
+        </div>
+      ) : (
+        <>
+          <input placeholder="Topic (optional)" value={topic} onChange={e=>setTopic(e.target.value)}
+            style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box",marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+            <input type="datetime-local" value={when} onChange={e=>setWhen(e.target.value)}
+              style={{flex:"1 1 200px",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            <select value={duration} onChange={e=>setDuration(e.target.value)}
+              style={{padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.text,fontSize:13}}>
+              {[15,30,45,60].map(m => <option key={m} value={m}>{m} min</option>)}
+            </select>
+          </div>
+          {error && <div style={{color:C.red,fontSize:13,marginBottom:8}}>{error}</div>}
+          <button onClick={schedule} disabled={scheduling}
+            style={{padding:"10px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:C.bg,border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:scheduling?"wait":"pointer"}}>
+            {scheduling ? "Scheduling…" : "Schedule"}
+          </button>
+        </>
+      )}
+      {error && !active && <div style={{color:C.red,fontSize:13,marginTop:8}}>{error}</div>}
+    </Card>
+  );
+}
+
 function SupportCenter({ onClose, onOpenMastermind }) {
   const [tickets, setTickets] = useState(null); // null = loading
   const [error, setError] = useState(null);
@@ -18364,6 +19023,8 @@ function SupportCenter({ onClose, onOpenMastermind }) {
             Chat with Mastermind →
           </button>
         </Card>
+
+        <ScheduleCallCard/>
 
         <SectionLabel text="Submit a support request"/>
         <Card style={{marginBottom:24}}>
@@ -18779,6 +19440,35 @@ export default function ShieldAI() {
   // Resolve the white-label brand for the logged-in user (their MSP's brand,
   // platform default, or ShieldAI). Re-runs on login/logout and role change.
   useEffect(() => { refreshBrandForUser(user); }, [user?.id]);
+
+  // Teams recommendation-action deep link (see productivityRoutes.js's
+  // POST /api/productivity/apply-action — Teams can't receive button clicks
+  // the way Slack's interactivity payload can, so its Adaptive Card buttons
+  // are Action.OpenUrl links back here with ?action=&refType=&refId= instead
+  // of a background POST). Runs once a real session exists.
+  useEffect(() => {
+    if (restoringSession || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    const action = params.get("action"), refType = params.get("refType"), refId = params.get("refId");
+    if (!action || !refType || !refId) return;
+    params.delete("action"); params.delete("refType"); params.delete("refId");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/api/productivity/apply-action`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refType, refId, action }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not apply that action.");
+        window.alert(`Done — "${data.title}" marked ${data.status}.`);
+      } catch (e) {
+        window.alert(`Couldn't apply that action: ${e.message}`);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, restoringSession]);
 
   // Capability helper for gating UI (mirrors backend; backend remains the real gate).
   const can = (cap) => {
@@ -19200,10 +19890,15 @@ export default function ShieldAI() {
           {can("integrations") ? (
             <IntegrationsScreen onBack={() => setShowIntegrations(false)}/>
           ) : (
-            <LockedFeature icon="🔌" title="Security Tool Integrations"
-              blurb="Connect your vulnerability scanner, EDR, or SIEM's outbound webhook to feed real findings into ShieldAI."
+            <LockedFeature icon="🔌" title="Integrations"
+              blurb="Connect the tools you already run — scanners, your directory, chat, and your task tracker — to feed real findings into ShieldAI, get notified, and sync remediation work."
               capability="integrations"
-              points={["Inbound webhook ingestion — ShieldAI never calls out to your tool", "Nessus, Qualys, CrowdStrike, Wazuh, Splunk, or any custom webhook", "A human always triages what comes in"]}/>
+              points={[
+                "Security tools: Nessus, Qualys, Rapid7, Microsoft Defender, CrowdStrike, Wazuh, Splunk, or any custom webhook — inbound only, ShieldAI never calls out to your tool",
+                "Directories: Microsoft 365, Google Workspace, Okta, Zoom — read-only posture, never a change to your account",
+                "Chat & tasks: Slack, Microsoft Teams notifications with in-chat actions; Jira, Asana, Trello ticket sync",
+                "A human always triages what comes in",
+              ]}/>
           )}
         </div>
       </div>
