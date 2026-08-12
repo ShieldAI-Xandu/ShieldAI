@@ -121,6 +121,15 @@ export async function loginUser({ email, password }) {
     throw err;
   }
 
+  // Suspended accounts must not be able to mint a fresh session by simply
+  // logging in again — requireAuth also re-checks this on every request for
+  // an already-issued token, but that's moot if a new one can always be had.
+  if (user.suspended) {
+    const err = new Error("This account has been suspended. Contact your administrator.");
+    err.code = "ACCOUNT_SUSPENDED";
+    throw err;
+  }
+
   // Promote to admin if their email matches ADMIN_EMAIL but flag isn't set yet
   // (handles the case where ADMIN_EMAIL was added after the account existed)
   if (isAdminEmail(normalizedEmail) && !user.isAdmin) {
@@ -239,10 +248,29 @@ export async function requireAuth(req, res, next) {
     if (payload.store) {
       return res.status(401).json({ error: "Invalid session." });
     }
+
+    // Re-verify against the live account record rather than trusting only
+    // the claims baked in at login/impersonation time. TOKEN_EXPIRY is 7
+    // days — without this, a token issued before an admin demoted a staff
+    // member, suspended a client, or deleted an account entirely keeps
+    // working exactly as before for up to 7 more days, because nothing
+    // downstream ever re-checks the database. (Impersonation tokens carry
+    // userId = the CLIENT being viewed, so this re-check applies to them
+    // too — correctly, since a suspended client shouldn't be viewable
+    // either — and isAdmin/isAnalyst below come out false either way
+    // because a client account is never staff.)
+    const liveUser = (db.data.users || []).find(u => u.id === payload.userId);
+    if (!liveUser) {
+      return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
+    }
+    if (liveUser.suspended) {
+      return res.status(403).json({ error: "This account has been suspended." });
+    }
+
     req.userId = payload.userId;
     req.userEmail = payload.email;
-    req.isAdmin = !!payload.isAdmin;
-    req.isAnalyst = !!payload.isAnalyst;
+    req.isAdmin = !!liveUser.isAdmin;
+    req.isAnalyst = !!liveUser.isAnalyst;
     req.isDemo = false;
 
     // Impersonation ("View as Client"): req.userId already resolves to the
