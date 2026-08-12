@@ -62,20 +62,41 @@ export async function demoCveExposure(companyName) {
 // never claim these specific accounts were breached — the demo company
 // doesn't exist.
 //
-// Keyed by the demo user's companyName, same as DEMO_STACKS in cveService.js
-// (single demo account, so a single snapshot). Reflects Lakeside Financial
-// Advisors: a well-resourced, security-conscious firm — so a small, modest
-// exposure is the credible story, not zero (a flawless "no intel" reading
-// looks fabricated) and not the dramatic "high alert" reading a weaker
-// company would show.
+// Keyed by each demo company's own companyName, same as DEMO_STACKS in
+// cveService.js — one seeded client account per company, so each gets its
+// own snapshot consistent with its own posture story rather than all three
+// sharing one. Domains match the fictional employee email domains already
+// used for that company's seeded training learners.
 const DEMO_BREACHES = {
-  "ShieldAI Demo Workspace": {
+  // Modest IT maturity — a small, credible exposure, not zero.
+  "Meridian Dental Group": {
+    domain: "meridiandental.example",
+    statusLevel: "Moderate risk",
+    breachedAccounts: 5,
+    distinctBreaches: 3,
+    breaches: ["LinkedIn", "Dropbox", "Canva"],
+    sampleAccounts: ["front.desk", "billing"],
+  },
+  // Well-resourced, security-conscious firm — a small, modest exposure is the
+  // credible story, not zero (a flawless "no intel" reading looks fabricated)
+  // and not the dramatic "high alert" reading a weaker company would show.
+  "Lakeside Financial Advisors": {
     domain: "lakesidefinancial.example",
     statusLevel: "Low risk",
     breachedAccounts: 2,
     distinctBreaches: 2,
     breaches: ["LinkedIn", "Adobe"],
     sampleAccounts: ["m.ortiz", "reception"],
+  },
+  // Weakest posture — the "real gaps" company: a larger, more elevated
+  // exposure consistent with its weaker overall security story.
+  "Apex Manufacturing": {
+    domain: "apexmfg.example",
+    statusLevel: "Elevated risk",
+    breachedAccounts: 9,
+    distinctBreaches: 4,
+    breaches: ["LinkedIn", "Adobe", "Canva", "MyFitnessPal"],
+    sampleAccounts: ["d.holt", "operations"],
   },
 };
 

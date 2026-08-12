@@ -30,8 +30,26 @@ export const DEMO_PATH_PREFIX = "/api/demo";
 
 // Personas the public gateway can hand out. These emails exist ONLY in
 // demo-db.json — they are seeded by seedDemo.js and have no production twin.
+//
+// Three separate client logins, one per seeded company — NOT one shared
+// account holding three assessments. `latestAssessmentFor()`/
+// `agentReportsFor()` (used by nearly every compliance/agent route) scope by
+// a single userId, so a shared account can only ever surface one company's
+// data at a time, and mixes every company's agent reports together for
+// corroboration. Giving each company its own user makes "latest assessment"
+// and "this client's agents" trivially correct — same as any real client.
+export const DEMO_COMPANY_KEYS = ["meridian", "lakeside", "apex"];
+
 export const DEMO_PERSONAS = {
-  client: { email: "demo-client@shieldai.demo", label: "Client view" },
+  // Back-compat default: the client persona used when no company is
+  // specified (e.g. a "client" access code minted without a company choice,
+  // or older code/tests referencing DEMO_PERSONAS.client directly).
+  client: { email: "demo-client@shieldai.demo", label: "Client view", company: "Meridian Dental Group" },
+  clientsByCompany: {
+    meridian: { email: "demo-client@shieldai.demo", label: "Client view — Meridian Dental Group", company: "Meridian Dental Group" },
+    lakeside: { email: "demo-client-lakeside@shieldai.demo", label: "Client view — Lakeside Financial Advisors", company: "Lakeside Financial Advisors" },
+    apex: { email: "demo-client-apex@shieldai.demo", label: "Client view — Apex Manufacturing", company: "Apex Manufacturing" },
+  },
   analyst: { email: "demo-analyst@shieldai.demo", label: "Analyst console" },
 };
 
@@ -178,11 +196,15 @@ function generateAccessCode() {
 
 function prodDb() { return getStore(PROD_STORE); }
 
-// Mint and persist a new access code (admin, production store).
-export async function createAccessCode(db, { type, leadId = null, note = "", createdBy = null }) {
+// Mint and persist a new access code (admin, production store). `company`
+// (optional, one of DEMO_COMPANY_KEYS) picks which seeded company a "client"
+// code lands the visitor on; ignored for "investor" codes, which always get
+// the analyst console and its full portfolio of all seeded clients.
+export async function createAccessCode(db, { type, leadId = null, note = "", createdBy = null, company = null }) {
   if (!ACCESS_CODE_TYPES.includes(type)) {
     throw Object.assign(new Error("type must be 'investor' or 'client'."), { code: "BAD_TYPE" });
   }
+  const companyKey = type === "client" && DEMO_COMPANY_KEYS.includes(company) ? company : null;
   db.data.accessCodes ||= [];
   let code;
   do { code = generateAccessCode(); } while (db.data.accessCodes.some(c => c.code === code));
@@ -196,6 +218,7 @@ export async function createAccessCode(db, { type, leadId = null, note = "", cre
     leadId,
     note: String(note || "").slice(0, 300),
     createdBy,
+    company: companyKey, // null → redeem-code falls back to the default company
     active: true,
     redeemedCount: 0,
     lastRedeemedAt: null,
@@ -243,10 +266,15 @@ export function registerDemoRoutes(app, db, { redeemLimiter } = {}) {
         });
       }
 
-      // investor → analyst persona (can see the analyst console); the frontend
-      // additionally grants the client views. client → client persona only.
+      // investor → analyst persona (can see the analyst console, whose
+      // portfolio holds all seeded clients); the frontend additionally grants
+      // the client views. client → one specific seeded company's client
+      // persona, chosen at mint time (falls back to the default company if
+      // the code wasn't minted with one).
       const personaKey = record.type === "investor" ? "analyst" : "client";
-      const persona = DEMO_PERSONAS[personaKey];
+      const persona = record.type === "investor"
+        ? DEMO_PERSONAS.analyst
+        : DEMO_PERSONAS.clientsByCompany[record.company] || DEMO_PERSONAS.client;
       const user = (db.data.users || []).find(u => u.email === persona.email);
       if (!user) {
         return res.status(503).json({ error: "The demo environment isn't seeded yet. Run: node seedDemo.js", code: "DEMO_NOT_SEEDED" });

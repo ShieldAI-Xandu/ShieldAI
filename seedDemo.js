@@ -40,16 +40,30 @@ import { refreshClientExposure } from "./cveService.js";
 import { refreshClientDarkweb } from "./darkwebService.js";
 import { pushNotification } from "./portfolioRoutes.js";
 import { callAI } from "./aiProviders.js";
+import { normalizeIncomingFindings } from "./integrationAdapters.js";
+import { mapM365PostureToFindings, M365_SCOPES } from "./directoryAdapters.js";
+import { encryptSecret } from "./credentialCrypto.js";
 
 // Demo identities live ONLY in demo-db.json. The @shieldai.demo domain is
 // reserved for the sandbox so a demo account can never be mistaken for — or
 // collide with — a real one.
-const DEMO_EMAIL = DEMO_PERSONAS.client.email;      // demo-client@shieldai.demo
+//
+// Three separate client accounts, one per seeded company — NOT one shared
+// account holding three assessments. See the comment on DEMO_PERSONAS in
+// demoGateway.js for why: a shared account can only ever surface one
+// company's "latest assessment," and mixes every company's agent reports
+// together for corroboration.
 const DEMO_ANALYST_EMAIL = DEMO_PERSONAS.analyst.email; // demo-analyst@shieldai.demo
 // Passwords exist only so the records are well-formed; the public gateway
 // hands out sessions with no credentials, and the sandbox is read-only.
 const DEMO_PASSWORD = "ShieldDemo2026";
-const DEMO_COMPANY = "ShieldAI Demo Workspace";
+// company name (matches COMPANIES[].company.name below) -> persona slug in
+// DEMO_PERSONAS.clientsByCompany.
+const COMPANY_SLUG = {
+  "Meridian Dental Group": "meridian",
+  "Lakeside Financial Advisors": "lakeside",
+  "Apex Manufacturing": "apex",
+};
 
 // ── Claude helpers (self-contained so the script doesn't depend on server.js) ──
 async function callClaudeText({ system, messages, max_tokens }) {
@@ -560,62 +574,79 @@ async function main() {
     console.log(`Created demo analyst: ${DEMO_ANALYST_EMAIL}`);
   }
 
-  // Find or create the demo user
-  let user = db.data.users.find(u => u.email === DEMO_EMAIL);
-  if (user) {
-    console.log("Removing previous demo data…");
-    db.data.assessments = db.data.assessments.filter(a => a.userId !== user.id);
-    db.data.programs = db.data.programs.filter(p => p.userId !== user.id);
-    db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== user.id);
-    // Everything added since this script last grew: purge for the demo client
-    // (and, where the collection is analyst-owned, the demo analyst) so
-    // re-running stays safe/idempotent rather than accumulating duplicates.
-    db.data.agents = (db.data.agents || []).filter(a => a.ownerUserId !== user.id);
-    db.data.enrollTokens = (db.data.enrollTokens || []).filter(t => t.ownerUserId !== user.id);
-    db.data.agentReports = (db.data.agentReports || []).filter(r => r.ownerUserId !== user.id);
-    db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.ownerUserId !== user.id);
-    db.data.recommendations = (db.data.recommendations || []).filter(r => r.ownerUserId !== user.id);
-    db.data.tasks = (db.data.tasks || []).filter(t => t.ownerUserId !== user.id);
-    db.data.evidence = (db.data.evidence || []).filter(e => e.ownerUserId !== user.id);
-    db.data.postureHistory = (db.data.postureHistory || []).filter(h => h.userId !== user.id);
-    db.data.vendors = (db.data.vendors || []).filter(v => v.userId !== user.id);
-    db.data.vendorQuestionnaires = (db.data.vendorQuestionnaires || []).filter(q => q.userId !== user.id);
-    db.data.learners = (db.data.learners || []).filter(l => l.clientUserId !== user.id);
-    db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(a => a.clientUserId !== user.id);
-    db.data.trainingQuarters = (db.data.trainingQuarters || []).filter(q => q.clientUserId !== user.id);
-    db.data.moduleContent = (db.data.moduleContent || []).filter(m => m.clientUserId !== user.id);
-    db.data.phishingCampaigns = (db.data.phishingCampaigns || []).filter(c => c.clientUserId !== user.id);
-    db.data.phishingResults = (db.data.phishingResults || []).filter(r => {
-      const stillReferenced = (db.data.phishingCampaigns || []).some(c => c.id === r.campaignId);
-      return stillReferenced;
-    });
-    db.data.policyAcknowledgments = (db.data.policyAcknowledgments || []).filter(a => a.clientUserId !== user.id);
-    db.data.complianceCalendarEntries = (db.data.complianceCalendarEntries || []).filter(e => e.userId !== user.id);
-    db.data.notifications = (db.data.notifications || []).filter(n => n.userId !== user.id);
-    db.data.clientMessages = (db.data.clientMessages || []).filter(m => m.clientUserId !== user.id);
-    db.data.postureSnapshots = (db.data.postureSnapshots || []).filter(s => s.userId !== user.id);
-    if (db.data.cveExposure) delete db.data.cveExposure[user.id];
-    if (db.data.darkwebExposure) delete db.data.darkwebExposure[user.id];
-    db.data.branding = (db.data.branding || []).filter(b => b.ownerUserId !== analyst.id);
-  } else {
-    user = {
-      id: randomUUID(), email: DEMO_EMAIL, companyName: DEMO_COMPANY,
-      passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
-      isAdmin: false, isAnalyst: false, isDemo: true, tier: "managed",
-      createdAt: new Date().toISOString(),
-    };
-    db.data.users.push(user);
-    console.log(`Created demo client: ${DEMO_EMAIL}`);
+  // Find or create the 3 demo client users — one per company.
+  const usersByCompany = {}; // companyName -> user record
+  for (const co of COMPANIES) {
+    const slug = COMPANY_SLUG[co.company.name];
+    const persona = DEMO_PERSONAS.clientsByCompany[slug];
+    let cUser = db.data.users.find(u => u.email === persona.email);
+    if (cUser) {
+      console.log(`Removing previous demo data for ${co.company.name}…`);
+      db.data.assessments = db.data.assessments.filter(a => a.userId !== cUser.id);
+      db.data.programs = db.data.programs.filter(p => p.userId !== cUser.id);
+      db.data.policyDocs = db.data.policyDocs.filter(p => p.userId !== cUser.id);
+      // Everything added since this script last grew: purge per demo client
+      // so re-running stays safe/idempotent rather than accumulating
+      // duplicates.
+      db.data.agents = (db.data.agents || []).filter(a => a.ownerUserId !== cUser.id);
+      db.data.enrollTokens = (db.data.enrollTokens || []).filter(t => t.ownerUserId !== cUser.id);
+      db.data.agentReports = (db.data.agentReports || []).filter(r => r.ownerUserId !== cUser.id);
+      db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.ownerUserId !== cUser.id);
+      db.data.recommendations = (db.data.recommendations || []).filter(r => r.ownerUserId !== cUser.id);
+      db.data.tasks = (db.data.tasks || []).filter(t => t.ownerUserId !== cUser.id);
+      db.data.evidence = (db.data.evidence || []).filter(e => e.ownerUserId !== cUser.id);
+      db.data.postureHistory = (db.data.postureHistory || []).filter(h => h.userId !== cUser.id);
+      db.data.vendors = (db.data.vendors || []).filter(v => v.userId !== cUser.id);
+      db.data.vendorQuestionnaires = (db.data.vendorQuestionnaires || []).filter(q => q.userId !== cUser.id);
+      db.data.learners = (db.data.learners || []).filter(l => l.clientUserId !== cUser.id);
+      db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(a => a.clientUserId !== cUser.id);
+      db.data.trainingQuarters = (db.data.trainingQuarters || []).filter(q => q.clientUserId !== cUser.id);
+      db.data.moduleContent = (db.data.moduleContent || []).filter(m => m.clientUserId !== cUser.id);
+      db.data.phishingCampaigns = (db.data.phishingCampaigns || []).filter(c => c.clientUserId !== cUser.id);
+      db.data.phishingResults = (db.data.phishingResults || []).filter(r => {
+        const stillReferenced = (db.data.phishingCampaigns || []).some(c => c.id === r.campaignId);
+        return stillReferenced;
+      });
+      db.data.policyAcknowledgments = (db.data.policyAcknowledgments || []).filter(a => a.clientUserId !== cUser.id);
+      db.data.complianceCalendarEntries = (db.data.complianceCalendarEntries || []).filter(e => e.userId !== cUser.id);
+      db.data.notifications = (db.data.notifications || []).filter(n => n.userId !== cUser.id);
+      db.data.clientMessages = (db.data.clientMessages || []).filter(m => m.clientUserId !== cUser.id);
+      db.data.postureSnapshots = (db.data.postureSnapshots || []).filter(s => s.userId !== cUser.id);
+      db.data.clientDomains = (db.data.clientDomains || []).filter(d => d.userId !== cUser.id);
+      db.data.integrations = (db.data.integrations || []).filter(i => i.ownerUserId !== cUser.id);
+      db.data.integrationFindings = (db.data.integrationFindings || []).filter(f => f.ownerUserId !== cUser.id);
+      db.data.directoryConnections = (db.data.directoryConnections || []).filter(c => c.ownerUserId !== cUser.id);
+      db.data.productivityConnections = (db.data.productivityConnections || []).filter(c => c.ownerUserId !== cUser.id);
+      db.data.taskTrackerConnections = (db.data.taskTrackerConnections || []).filter(c => c.ownerUserId !== cUser.id);
+      db.data.schedulingConnections = (db.data.schedulingConnections || []).filter(c => c.ownerUserId !== cUser.id);
+      if (db.data.cveExposure) delete db.data.cveExposure[cUser.id];
+      if (db.data.darkwebExposure) delete db.data.darkwebExposure[cUser.id];
+    } else {
+      cUser = {
+        id: randomUUID(), email: persona.email, companyName: co.company.name,
+        passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
+        isAdmin: false, isAnalyst: false, isDemo: true, tier: "managed",
+        createdAt: new Date().toISOString(),
+      };
+      db.data.users.push(cUser);
+      console.log(`Created demo client: ${persona.email} (${co.company.name})`);
+    }
+    cUser.isDemo = true;
+    cUser.companyName = co.company.name; // keep in sync even on re-seed of a pre-existing user
+    usersByCompany[co.company.name] = cUser;
   }
-  user.isDemo = true;
+  db.data.branding = (db.data.branding || []).filter(b => b.ownerUserId !== analyst.id);
 
-  // Assign the demo client to the demo analyst so the analyst console has
-  // scoped data — same isolation rules as production, just sandboxed.
+  // Assign all 3 demo clients to the demo analyst so the analyst console has
+  // a real multi-client portfolio — same isolation rules as production, just
+  // sandboxed.
   db.data.assignments = db.data.assignments.filter(a => a.analystUserId !== analyst.id);
-  db.data.assignments.push({
-    id: randomUUID(), analystUserId: analyst.id, clientUserId: user.id,
-    assignedBy: analyst.id, assignedAt: new Date().toISOString(),
-  });
+  for (const cUser of Object.values(usersByCompany)) {
+    db.data.assignments.push({
+      id: randomUUID(), analystUserId: analyst.id, clientUserId: cUser.id,
+      assignedBy: analyst.id, assignedAt: new Date().toISOString(),
+    });
+  }
 
   // Per-company references captured for the feature-area seeding below —
   // evidence/vendors/policy-acknowledgment/etc. all need to point at a real
@@ -624,42 +655,44 @@ async function main() {
 
   for (const co of COMPANIES) {
     console.log(`\n▶ ${co.company.name} (${co.company.industry})`);
+    const cUser = usersByCompany[co.company.name];
     const assessment = {
-      id: randomUUID(), userId: user.id, createdAt: new Date().toISOString(),
+      id: randomUUID(), userId: cUser.id, createdAt: new Date().toISOString(),
       data: { company: co.company, compliance: co.compliance, summary: co.summary, checklist: co.checklist },
     };
     db.data.assessments.push(assessment);
 
-    const program = await generateProgram(user.id, assessment.id, assessment.data);
+    const program = await generateProgram(cUser.id, assessment.id, assessment.data);
     const policies = [];
     for (const pid of (co.policies || [])) {
-      const rec = await generatePolicy(user.id, pid, assessment.data);
+      const rec = await generatePolicy(cUser.id, pid, assessment.data);
       if (rec) policies.push(rec);
     }
-    byCompany[co.company.name] = { assessment, program, policies };
+    byCompany[co.company.name] = { assessment, program, policies, user: cUser };
     await db.write(); // save progress after each company
   }
 
-  // Give the demo client a fully-verified domain record so the breach-monitoring
-  // card shows the finished state rather than an empty form. The workflow itself
-  // stays fully clickable inside each visitor's sandbox.
-  // Keyed by DEMO_COMPANY (the account's own companyName), matching the single
-  // DEMO_BREACHES entry in demoIntel.js — there's one demo account, not three,
-  // so the domain/breach story reflects one company (Lakeside Financial
-  // Advisors) rather than falling back to the generic example.example default.
+  // Give each demo client a fully-verified domain record so the
+  // breach-monitoring card shows the finished state rather than an empty
+  // form. The workflow itself stays fully clickable inside each visitor's
+  // sandbox. Keyed by each company's own companyName, matching the
+  // per-company DEMO_BREACHES entries in demoIntel.js.
   db.data.clientDomains ||= [];
-  db.data.clientDomains = db.data.clientDomains.filter(d => d.userId !== user.id);
-  db.data.clientDomains.push(demoDomainRecord(user.id, DEMO_COMPANY));
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    db.data.clientDomains.push(demoDomainRecord(cUser.id, co.company.name));
+  }
 
   // ── Endpoint monitoring fleet ──────────────────────────────────
   console.log("\n▶ Endpoint monitoring fleet");
   const agentsByCompany = {};
   const reportsByAgent = {};
   for (const [companyName, fleet] of Object.entries(AGENT_FLEET)) {
+    const cUser = usersByCompany[companyName];
     const agentList = [];
     for (const host of fleet.hosts) {
       const agent = {
-        id: randomUUID(), ownerUserId: user.id, hostname: host.hostname, os: host.os,
+        id: randomUUID(), ownerUserId: cUser.id, hostname: host.hostname, os: host.os,
         tokenHash: sha256hex(randomUUID()), status: "active",
         createdAt: daysAgo(120), lastSeen: daysAgo(0), revokedAt: null, agentVersion: "1.1.0",
       };
@@ -673,7 +706,7 @@ async function main() {
         agentVersion: "1.1.0",
       };
       const summary = summarizeReport(reportBody);
-      const report = { id: randomUUID(), agentId: agent.id, ownerUserId: user.id, receivedAt: daysAgo(0), report: reportBody };
+      const report = { id: randomUUID(), agentId: agent.id, ownerUserId: cUser.id, receivedAt: daysAgo(0), report: reportBody };
       db.data.agentReports.push(report);
       reportsByAgent[agent.id] = report;
       console.log(`    · ${host.hostname}: ${summary.posture} (${summary.failCount} fail / ${summary.warnCount} warn)`);
@@ -682,7 +715,7 @@ async function main() {
 
     fleet.events.forEach((e, i) => {
       db.data.agentEvents.push({
-        id: randomUUID(), agentId: agentList[0].id, ownerUserId: user.id, ts: daysAgo(i + 1),
+        id: randomUUID(), agentId: agentList[0].id, ownerUserId: cUser.id, ts: daysAgo(i + 1),
         source: "agent", severity: e.severity, type: e.type, message: e.message, raw: null, ack: false,
       });
     });
@@ -715,8 +748,9 @@ async function main() {
   // queue shows every real stage at once, not just "everything is done".
   const LIFECYCLE_STAGES = ["suggested", "suggested", "proposed", "proposed", "permitted", "client_performing", "declined", "completed", "completed"];
   chosenDrafts.forEach((d, i) => {
+    const cUser = usersByCompany[d.companyName];
     const rec = {
-      id: randomUUID(), ownerUserId: user.id, agentId: d.agentId, dedupeKey: d.dedupeKey, checkId: d.checkId,
+      id: randomUUID(), ownerUserId: cUser.id, agentId: d.agentId, dedupeKey: d.dedupeKey, checkId: d.checkId,
       origin: "ai", aiAuthored: true, title: d.title, detail: d.detail, severity: d.severity,
       priority: Math.max(1, 5 - (SEV_RANK[d.severity] ?? 0)),
       rationale: `Flagged from ${d.companyName}'s latest endpoint report.`,
@@ -728,11 +762,11 @@ async function main() {
     if (target !== "suggested") {
       pushHist(rec, "analyst", analyst.id, "proposed", "Forwarded to client.", daysAgo(8));
       if (target === "permitted" || target === "completed") {
-        pushHist(rec, "client_admin", user.id, "permitted", "Go ahead and take care of this.", daysAgo(6));
+        pushHist(rec, "client_admin", cUser.id, "permitted", "Go ahead and take care of this.", daysAgo(6));
       } else if (target === "client_performing") {
-        pushHist(rec, "client_admin", user.id, "client_performing", "We'll handle this ourselves.", daysAgo(6));
+        pushHist(rec, "client_admin", cUser.id, "client_performing", "We'll handle this ourselves.", daysAgo(6));
       } else if (target === "declined") {
-        pushHist(rec, "client_admin", user.id, "declined", "Deferring for now — next budget cycle.", daysAgo(6));
+        pushHist(rec, "client_admin", cUser.id, "declined", "Deferring for now — next budget cycle.", daysAgo(6));
       }
       if (target === "completed") {
         pushHist(rec, "analyst", analyst.id, "completed", "Resolved during the last maintenance window.", daysAgo(2));
@@ -743,13 +777,13 @@ async function main() {
   console.log(`   ${chosenDrafts.length} recommendations spanning the full lifecycle`);
 
   // ── Remediation tasks ────────────────────────────────────────────
-  // Tasks are user-level, not per-assessment — taskRoutes.js's
-  // latestAssessmentFor() always resolves to whichever assessment was
-  // created/updated most recently, which is Apex Manufacturing's (seeded
-  // last, and also the weakest posture — the most genuine gaps to open
-  // tasks against).
+  // Tasks are user-level, not per-assessment, but each of the 3 demo clients
+  // now has exactly one assessment, so taskRoutes.js's latestAssessmentFor()
+  // resolves unambiguously per company — no more cross-company "keep this
+  // one latest" workaround needed. Every company gets the same task plan
+  // applied to its own checklist, so each has a real, distinct remediation
+  // queue.
   console.log("\n▶ Remediation tasks");
-  const apexAssessment = byCompany["Apex Manufacturing"].assessment;
   const bestOptionFor = (control) => [...control.options].sort((a, b) => b.score - a.score)[0];
   const TASK_PLAN = [
     { controlId: "mfa", priority: "critical", status: "open", dueDays: 14 },
@@ -760,48 +794,52 @@ async function main() {
     { controlId: "priorAudit", priority: "medium", status: "done" },
   ];
   const seededTasks = [];
-  for (const spec of TASK_PLAN) {
-    const control = getControl(spec.controlId);
-    if (!control) continue;
-    const best = bestOptionFor(control);
-    const sim = simulateControlChange(db, user.id, spec.controlId, best.label);
-    const task = {
-      id: randomUUID(), ownerUserId: user.id, controlId: spec.controlId, targetLabel: best.label,
-      title: `Improve: ${control.question}`, detail: "", nistFunction: control.nistFunction,
-      status: "open", priority: spec.priority, effort: null,
-      dueDate: spec.dueDays != null ? daysFromNow(spec.dueDays) : null,
-      assigneeUserId: null, createdBy: analyst.id,
-      createdAt: daysAgo(20), updatedAt: daysAgo(20), completedAt: null,
-      projectedGain: sim ? sim.delta : null, scoreAtCreate: sim ? sim.current : null,
-      evidence: [], history: [],
-    };
-    task.history.push({ at: daysAgo(20), actorType: "analyst", actorId: analyst.id, action: "created",
-      note: sim ? `Projected +${sim.delta} posture.` : "" });
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    const assessment = byCompany[co.company.name].assessment;
+    for (const spec of TASK_PLAN) {
+      const control = getControl(spec.controlId);
+      if (!control) continue;
+      const best = bestOptionFor(control);
+      const sim = simulateControlChange(db, cUser.id, spec.controlId, best.label);
+      const task = {
+        id: randomUUID(), ownerUserId: cUser.id, controlId: spec.controlId, targetLabel: best.label,
+        title: `Improve: ${control.question}`, detail: "", nistFunction: control.nistFunction,
+        status: "open", priority: spec.priority, effort: null,
+        dueDate: spec.dueDays != null ? daysFromNow(spec.dueDays) : null,
+        assigneeUserId: null, createdBy: analyst.id,
+        createdAt: daysAgo(20), updatedAt: daysAgo(20), completedAt: null,
+        projectedGain: sim ? sim.delta : null, scoreAtCreate: sim ? sim.current : null,
+        evidence: [], history: [],
+      };
+      task.history.push({ at: daysAgo(20), actorType: "analyst", actorId: analyst.id, action: "created",
+        note: sim ? `Projected +${sim.delta} posture.` : "" });
 
-    if (spec.status === "in_progress") {
-      task.status = "in_progress";
-      task.updatedAt = daysAgo(10);
-      task.history.push({ at: daysAgo(10), actorType: "client", actorId: user.id, action: "status", note: "open → in_progress" });
-    } else if (spec.status === "done") {
-      // Mirror the REAL completion path (taskRoutes.js's /complete): write the
-      // target label into the assessment checklist and record a real
-      // postureHistory point, so the task and the assessment never disagree.
-      const before = computePostureScore(apexAssessment.data);
-      apexAssessment.data.checklist = { ...apexAssessment.data.checklist, [spec.controlId]: best.label };
-      apexAssessment.updatedAt = new Date().toISOString(); // keeps Apex "latest" for latestAssessmentFor()
-      const after = computePostureScore(apexAssessment.data);
-      task.status = "done";
-      task.completedAt = daysAgo(3);
-      task.updatedAt = daysAgo(3);
-      task.actualGain = after.postureScore - before.postureScore;
-      task.scoreAtComplete = after.postureScore;
-      task.history.push({ at: daysAgo(3), actorType: "client", actorId: user.id, action: "completed",
-        note: `Posture ${before.postureScore} → ${after.postureScore} (${task.actualGain >= 0 ? "+" : ""}${task.actualGain}).` });
-      db.data.postureHistory ||= [];
-      db.data.postureHistory.push({ id: randomUUID(), userId: user.id, at: daysAgo(3), score: after.postureScore, level: after.postureLevel, reason: `task:${task.id}` });
+      if (spec.status === "in_progress") {
+        task.status = "in_progress";
+        task.updatedAt = daysAgo(10);
+        task.history.push({ at: daysAgo(10), actorType: "client", actorId: cUser.id, action: "status", note: "open → in_progress" });
+      } else if (spec.status === "done") {
+        // Mirror the REAL completion path (taskRoutes.js's /complete): write the
+        // target label into the assessment checklist and record a real
+        // postureHistory point, so the task and the assessment never disagree.
+        const before = computePostureScore(assessment.data);
+        assessment.data.checklist = { ...assessment.data.checklist, [spec.controlId]: best.label };
+        assessment.updatedAt = new Date().toISOString();
+        const after = computePostureScore(assessment.data);
+        task.status = "done";
+        task.completedAt = daysAgo(3);
+        task.updatedAt = daysAgo(3);
+        task.actualGain = after.postureScore - before.postureScore;
+        task.scoreAtComplete = after.postureScore;
+        task.history.push({ at: daysAgo(3), actorType: "client", actorId: cUser.id, action: "completed",
+          note: `Posture ${before.postureScore} → ${after.postureScore} (${task.actualGain >= 0 ? "+" : ""}${task.actualGain}).` });
+        db.data.postureHistory ||= [];
+        db.data.postureHistory.push({ id: randomUUID(), userId: cUser.id, at: daysAgo(3), score: after.postureScore, level: after.postureLevel, reason: `task:${task.id}` });
+      }
+      db.data.tasks.push(task);
+      seededTasks.push(task);
     }
-    db.data.tasks.push(task);
-    seededTasks.push(task);
   }
   console.log(`   ${seededTasks.length} tasks (${seededTasks.filter(t => t.status === "done").length} completed)`);
 
@@ -810,7 +848,7 @@ async function main() {
   let evidenceCount = 0;
   for (const t of seededTasks.filter(t => t.status === "done")) {
     const ev = {
-      id: randomUUID(), ownerUserId: user.id, kind: "task", refId: t.id,
+      id: randomUUID(), ownerUserId: t.ownerUserId, kind: "task", refId: t.id,
       title: `Confirmation — ${t.title.replace(/^Improve:\s*/, "")}`,
       note: "Verified complete during the scheduled remediation review; no supporting file attached.",
       filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
@@ -820,19 +858,23 @@ async function main() {
     t.evidence.push({ id: ev.id, title: ev.title, filename: null, at: ev.uploadedAt });
     evidenceCount++;
   }
-  db.data.evidence.push(
-    { id: randomUUID(), ownerUserId: user.id, kind: "general", refId: null,
-      title: "Cyber liability insurance policy — 2026 renewal",
-      note: "Confirmed active with underwriter; policy document held by leadership, not uploaded here.",
-      filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
-      uploadedBy: user.id, uploadedAt: daysAgo(30) },
-    { id: randomUUID(), ownerUserId: user.id, kind: "assessment", refId: apexAssessment.id,
-      title: "Signed management attestation — security questionnaire",
-      note: "Leadership reviewed and signed off on the submitted assessment answers.",
-      filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
-      uploadedBy: user.id, uploadedAt: daysAgo(15) },
-  );
-  evidenceCount += 2;
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    const assessment = byCompany[co.company.name].assessment;
+    db.data.evidence.push(
+      { id: randomUUID(), ownerUserId: cUser.id, kind: "general", refId: null,
+        title: "Cyber liability insurance policy — 2026 renewal",
+        note: "Confirmed active with underwriter; policy document held by leadership, not uploaded here.",
+        filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+        uploadedBy: cUser.id, uploadedAt: daysAgo(30) },
+      { id: randomUUID(), ownerUserId: cUser.id, kind: "assessment", refId: assessment.id,
+        title: "Signed management attestation — security questionnaire",
+        note: "Leadership reviewed and signed off on the submitted assessment answers.",
+        filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+        uploadedBy: cUser.id, uploadedAt: daysAgo(15) },
+    );
+    evidenceCount += 2;
+  }
   console.log(`   ${evidenceCount} evidence records`);
 
   // ── Vendor risk registry ─────────────────────────────────────────
@@ -847,108 +889,135 @@ async function main() {
     { name: "Gusto", category: "Payroll/HR", criticality: "high", dataAccessLevel: "extensive",
       contactEmail: "privacy@gusto.example", hasDataAgreement: true, securityCertification: "SOC 2 Type II",
       lastAssessedAt: daysAgo(350) }, // due_soon (12mo cadence)
-    { name: "Meridian IT Partners", category: "IT Support/MSP", criticality: "high", dataAccessLevel: "extensive",
-      contactEmail: "contracts@meridianitpartners.example", hasDataAgreement: true, securityCertification: "",
+    { name: "Crestline IT Partners", category: "IT Support/MSP", criticality: "high", dataAccessLevel: "extensive",
+      contactEmail: "contracts@crestlineitpartners.example", hasDataAgreement: true, securityCertification: "",
       lastAssessedAt: daysAgo(90) }, // current
     { name: "BrightBooks Accounting", category: "SaaS/Software", criticality: "medium", dataAccessLevel: "limited",
       contactEmail: "support@brightbooks.example", hasDataAgreement: false, securityCertification: "",
       contractStartDate: daysAgo(455) }, // overdue, never formally reassessed
   ];
-  for (const v of VENDOR_PLAN) createVendor(db, user.id, { ...v, createdByStaff: null });
-  console.log(`   ${VENDOR_PLAN.length} vendors`);
+  let vendorCount = 0;
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    for (const v of VENDOR_PLAN) createVendor(db, cUser.id, { ...v, createdByStaff: null });
+    vendorCount += VENDOR_PLAN.length;
+  }
+  console.log(`   ${vendorCount} vendors across ${COMPANIES.length} companies`);
 
   // ── Training delivery (learners, quarters, assignments) ──────────
+  // Per company, not one shared roster — each company's learners, quarters,
+  // and assignments are scoped by that company's own clientUserId, same as
+  // every other feature area in this script.
   console.log("\n▶ Training delivery");
-  const LEARNER_PLAN = [
-    { name: "Sarah Reyes", email: "sarah.reyes@meridiandental.example", department: "Front Office" },
-    { name: "James Okafor", email: "james.okafor@meridiandental.example", department: "Clinical Support" },
-    { name: "Priya Nandan", email: "priya.nandan@lakesidefinancial.example", department: "Wealth Management" },
-    { name: "Marcus Chen", email: "marcus.chen@lakesidefinancial.example", department: "Compliance" },
-    { name: "Derek Holt", email: "derek.holt@apexmfg.example", department: "Production" },
-    { name: "Angela Brooks", email: "angela.brooks@apexmfg.example", department: "Operations" },
-  ];
-  const learners = LEARNER_PLAN.map(l => ({
-    id: randomUUID(), clientUserId: user.id, name: l.name, email: l.email, department: l.department,
-    token: newLearnerToken(), status: "active", createdAt: daysAgo(150),
-  }));
-  db.data.learners.push(...learners);
-
-  const q1Topics = DEFAULT_SCHEDULE[0].topicIds; // Month 1: phishing, passwords-mfa, device-security, incident-reporting
-  const q1Modules = modulesFromTopics(q1Topics);
-  const q1 = {
-    id: randomUUID(), clientUserId: user.id, label: "Q1 2026 Training", year: 2026, quarter: 1,
-    topicIds: q1Topics, dueDate: daysAgo(30), createdBy: analyst.id, createdAt: daysAgo(90), learnerCount: learners.length,
+  const LEARNER_PLAN_BY_COMPANY = {
+    "Meridian Dental Group": [
+      { name: "Sarah Reyes", email: "sarah.reyes@meridiandental.example", department: "Front Office" },
+      { name: "James Okafor", email: "james.okafor@meridiandental.example", department: "Clinical Support" },
+    ],
+    "Lakeside Financial Advisors": [
+      { name: "Priya Nandan", email: "priya.nandan@lakesidefinancial.example", department: "Wealth Management" },
+      { name: "Marcus Chen", email: "marcus.chen@lakesidefinancial.example", department: "Compliance" },
+    ],
+    "Apex Manufacturing": [
+      { name: "Derek Holt", email: "derek.holt@apexmfg.example", department: "Production" },
+      { name: "Angela Brooks", email: "angela.brooks@apexmfg.example", department: "Operations" },
+    ],
   };
-  db.data.trainingQuarters.push(q1);
+  const learnersByCompany = {};
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    const learners = LEARNER_PLAN_BY_COMPANY[co.company.name].map(l => ({
+      id: randomUUID(), clientUserId: cUser.id, name: l.name, email: l.email, department: l.department,
+      token: newLearnerToken(), status: "active", createdAt: daysAgo(150),
+    }));
+    db.data.learners.push(...learners);
+    learnersByCompany[co.company.name] = learners;
 
-  const q2Topics = DEFAULT_SCHEDULE[1].topicIds; // Month 2: bec, payments, data-privacy, acceptable-use
-  const q2Modules = modulesFromTopics(q2Topics);
-  const q2 = {
-    id: randomUUID(), clientUserId: user.id, label: "Q2 2026 Training", year: 2026, quarter: 2,
-    topicIds: q2Topics, dueDate: daysFromNow(45), createdBy: analyst.id, createdAt: daysAgo(5), learnerCount: learners.length,
-  };
-  db.data.trainingQuarters.push(q2);
-
-  // Q1 is past its due date: 4 learners completed everything, 1 is partway
-  // (shows as overdue, matching real rollup() behavior for a past-due
-  // incomplete assignment), 1 never started (also overdue).
-  learners.forEach((learner, i) => {
-    const a = {
-      id: randomUUID(), clientUserId: user.id, learnerId: learner.id,
-      source: "quarterly", quarterId: q1.id, title: q1.label,
-      modules: q1Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
-      dueDate: q1.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
-      assignedAt: daysAgo(90), startedAt: i < 5 ? daysAgo(85) : null, completedAt: null,
+    const q1Topics = DEFAULT_SCHEDULE[0].topicIds; // Month 1: phishing, passwords-mfa, device-security, incident-reporting
+    const q1Modules = modulesFromTopics(q1Topics);
+    const q1 = {
+      id: randomUUID(), clientUserId: cUser.id, label: "Q1 2026 Training", year: 2026, quarter: 1,
+      topicIds: q1Topics, dueDate: daysAgo(30), createdBy: analyst.id, createdAt: daysAgo(90), learnerCount: learners.length,
     };
-    if (i < 4) {
-      q1Modules.forEach((m, mi) => {
-        a.moduleState[m.topicId] = { completed: true, score: 80 + ((i * 7 + mi * 3) % 20), completedAt: daysAgo(75 - i) };
-      });
-    } else if (i === 4) {
-      q1Modules.slice(0, 2).forEach(m => { a.moduleState[m.topicId] = { completed: true, score: 88, completedAt: daysAgo(60) }; });
-    }
-    rollup(a);
-    if (a.status === "completed") a.completedAt = daysAgo(70 - i);
-    db.data.trainingAssignments.push(a);
-  });
+    db.data.trainingQuarters.push(q1);
 
-  // Q2 isn't due yet — a realistic "just getting started" state.
-  learners.forEach((learner, i) => {
-    const a = {
-      id: randomUUID(), clientUserId: user.id, learnerId: learner.id,
-      source: "quarterly", quarterId: q2.id, title: q2.label,
-      modules: q2Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
-      dueDate: q2.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
-      assignedAt: daysAgo(5), startedAt: null, completedAt: null,
+    const q2Topics = DEFAULT_SCHEDULE[1].topicIds; // Month 2: bec, payments, data-privacy, acceptable-use
+    const q2Modules = modulesFromTopics(q2Topics);
+    const q2 = {
+      id: randomUUID(), clientUserId: cUser.id, label: "Q2 2026 Training", year: 2026, quarter: 2,
+      topicIds: q2Topics, dueDate: daysFromNow(45), createdBy: analyst.id, createdAt: daysAgo(5), learnerCount: learners.length,
     };
-    if (i < 2) {
-      a.startedAt = daysAgo(2);
-      a.moduleState[q2Modules[0].topicId] = { completed: true, score: 92, completedAt: daysAgo(1) };
-    }
-    rollup(a);
-    db.data.trainingAssignments.push(a);
-  });
+    db.data.trainingQuarters.push(q2);
 
-  // Pre-generate real slide+quiz content for a few modules (the training-depth
-  // decision) via the exact same AI path a learner's first click would hit —
-  // so at least one module per company opens to real material immediately.
-  console.log("   Pre-generating real lesson content for 3 modules…");
-  for (const topicId of ["phishing", "passwords-mfa", "bec"]) {
-    try {
-      await getOrGenerateModuleContent(db, { clientUserId: user.id, topicId, callAI, extractJson });
-      console.log(`    · module content: ${topicId}`);
-    } catch (err) {
-      console.log(`    · module content: ${topicId} — skipped (${err.message.slice(0, 60)})`);
+    // Q1 is past its due date: with 2 learners per company, one completed
+    // everything, one is partway (shows as overdue, matching real rollup()
+    // behavior for a past-due incomplete assignment).
+    learners.forEach((learner, i) => {
+      const a = {
+        id: randomUUID(), clientUserId: cUser.id, learnerId: learner.id,
+        source: "quarterly", quarterId: q1.id, title: q1.label,
+        modules: q1Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
+        dueDate: q1.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
+        assignedAt: daysAgo(90), startedAt: daysAgo(85), completedAt: null,
+      };
+      if (i === 0) {
+        q1Modules.forEach((m, mi) => {
+          a.moduleState[m.topicId] = { completed: true, score: 80 + (mi * 5) % 20, completedAt: daysAgo(75) };
+        });
+      } else {
+        q1Modules.slice(0, 2).forEach(m => { a.moduleState[m.topicId] = { completed: true, score: 88, completedAt: daysAgo(60) }; });
+      }
+      rollup(a);
+      if (a.status === "completed") a.completedAt = daysAgo(70);
+      db.data.trainingAssignments.push(a);
+    });
+
+    // Q2 isn't due yet — a realistic "just getting started" state.
+    learners.forEach((learner, i) => {
+      const a = {
+        id: randomUUID(), clientUserId: cUser.id, learnerId: learner.id,
+        source: "quarterly", quarterId: q2.id, title: q2.label,
+        modules: q2Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
+        dueDate: q2.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
+        assignedAt: daysAgo(5), startedAt: null, completedAt: null,
+      };
+      if (i === 0) {
+        a.startedAt = daysAgo(2);
+        a.moduleState[q2Modules[0].topicId] = { completed: true, score: 92, completedAt: daysAgo(1) };
+      }
+      rollup(a);
+      db.data.trainingAssignments.push(a);
+    });
+  }
+
+  // Pre-generate real slide+quiz content for a few modules per company (the
+  // training-depth decision) via the exact same AI path a learner's first
+  // click would hit — so at least one module per company opens to real
+  // material immediately.
+  console.log("   Pre-generating real lesson content for 3 modules per company…");
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    for (const topicId of ["phishing", "passwords-mfa", "bec"]) {
+      try {
+        await getOrGenerateModuleContent(db, { clientUserId: cUser.id, topicId, callAI, extractJson });
+        console.log(`    · ${co.company.name} module content: ${topicId}`);
+      } catch (err) {
+        console.log(`    · ${co.company.name} module content: ${topicId} — skipped (${err.message.slice(0, 60)})`);
+      }
     }
   }
-  console.log(`   ${learners.length} learners, 2 quarters, ${learners.length * 2} assignments`);
+  const totalLearners = Object.values(learnersByCompany).flat().length;
+  console.log(`   ${totalLearners} learners across ${COMPANIES.length} companies, 2 quarters each`);
 
   // ── Phishing simulation ──────────────────────────────────────────
+  // Per company, click rates tracking each company's own posture story:
+  // Apex (weakest) clicks the most and improves least; Lakeside (strongest)
+  // never clicks; Meridian sits in between and improves between rounds.
   console.log("\n▶ Phishing simulation");
-  function buildPhishingCampaign({ name, scenarioId, sentDaysAgo, clickedIndexes }) {
+  function buildPhishingCampaign({ clientUserId, learners, name, scenarioId, sentDaysAgo, clickedIndexes }) {
     if (!getScenario(scenarioId)) throw new Error(`Unknown phishing scenario: ${scenarioId}`);
     const campaign = {
-      id: randomUUID(), clientUserId: user.id, name, scenarioId,
+      id: randomUUID(), clientUserId, name, scenarioId,
       learnerIds: learners.map(l => l.id), adHocRecipients: [], isTrial: false,
       status: "sent", createdBy: "analyst", createdAt: daysAgo(sentDaysAgo + 1), sentAt: daysAgo(sentDaysAgo),
     };
@@ -964,25 +1033,33 @@ async function main() {
     });
     return campaign;
   }
-  buildPhishingCampaign({ name: "Q1 Simulation — Password Expiry Notice", scenarioId: "password-expiry", sentDaysAgo: 75, clickedIndexes: [1, 4, 5] });
-  buildPhishingCampaign({ name: "Q2 Simulation — Vendor Invoice Overdue", scenarioId: "invoice-overdue", sentDaysAgo: 20, clickedIndexes: [5] });
-  console.log("   2 campaigns sent — click rate improved between rounds");
+  const PHISHING_CLICKS_BY_COMPANY = {
+    "Meridian Dental Group": { round1: [1], round2: [] },
+    "Lakeside Financial Advisors": { round1: [], round2: [] },
+    "Apex Manufacturing": { round1: [0, 1], round2: [1] },
+  };
+  let campaignCount = 0;
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    const learners = learnersByCompany[co.company.name];
+    const clicks = PHISHING_CLICKS_BY_COMPANY[co.company.name];
+    buildPhishingCampaign({ clientUserId: cUser.id, learners, name: "Q1 Simulation — Password Expiry Notice", scenarioId: "password-expiry", sentDaysAgo: 75, clickedIndexes: clicks.round1 });
+    buildPhishingCampaign({ clientUserId: cUser.id, learners, name: "Q2 Simulation — Vendor Invoice Overdue", scenarioId: "invoice-overdue", sentDaysAgo: 20, clickedIndexes: clicks.round2 });
+    campaignCount += 2;
+  }
+  console.log(`   ${campaignCount} campaigns sent across ${COMPANIES.length} companies — click rate improved between rounds`);
 
-  // ── Policy acknowledgment (reuses the same learner roster) ──────
+  // ── Policy acknowledgment (reuses each company's own learner roster) ──
   console.log("\n▶ Policy acknowledgment");
-  const companyLearnerPairs = [
-    { company: "Meridian Dental Group", learnerIdxs: [0, 1] },
-    { company: "Lakeside Financial Advisors", learnerIdxs: [2, 3] },
-    { company: "Apex Manufacturing", learnerIdxs: [4, 5] },
-  ];
   let ackCount = 0;
-  for (const pair of companyLearnerPairs) {
-    for (const policy of byCompany[pair.company].policies) {
-      for (const idx of pair.learnerIdxs) {
-        const learner = learners[idx];
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    const companyLearners = learnersByCompany[co.company.name];
+    for (const policy of byCompany[co.company.name].policies) {
+      for (const learner of companyLearners) {
         const acknowledged = (ackCount % 3) !== 0; // most signed, a few still pending
         db.data.policyAcknowledgments.push({
-          id: randomUUID(), clientUserId: user.id,
+          id: randomUUID(), clientUserId: cUser.id,
           policyId: policy.id, policyName: policy.policyName,
           learnerId: learner.id, learnerName: learner.name, learnerEmail: learner.email,
           assignedAt: daysAgo(40), assignedBy: analyst.id, assignedByRole: "analyst",
@@ -995,20 +1072,20 @@ async function main() {
   }
   console.log(`   ${ackCount} policy acknowledgment rows`);
 
-  // ── Compliance calendar ──────────────────────────────────────────
+  // ── Compliance calendar (one entry per company, its own userId) ──
   console.log("\n▶ Compliance calendar");
   db.data.complianceCalendarEntries.push(
-    { id: randomUUID(), userId: user.id, title: "Cyber liability insurance renewal", category: "insurance",
+    { id: randomUUID(), userId: usersByCompany["Meridian Dental Group"].id, title: "Cyber liability insurance renewal", category: "insurance",
       dueDate: daysFromNow(45), recurrenceMonths: 12, notes: "Confirm coverage limits before renewing.",
       completedAt: null, createdAt: daysAgo(10), updatedAt: daysAgo(10), createdByStaff: analyst.id },
-    { id: randomUUID(), userId: user.id, title: "State business license renewal", category: "license",
+    { id: randomUUID(), userId: usersByCompany["Apex Manufacturing"].id, title: "State business license renewal", category: "license",
       dueDate: daysFromNow(10), recurrenceMonths: 12, notes: "Apex Manufacturing facility license.",
       completedAt: null, createdAt: daysAgo(10), updatedAt: daysAgo(10), createdByStaff: analyst.id },
-    { id: randomUUID(), userId: user.id, title: "SOC 2 Type II surveillance audit", category: "audit",
-      dueDate: daysAgo(15), recurrenceMonths: null, notes: "Lakeside Financial Advisors — schedule with auditor.",
+    { id: randomUUID(), userId: usersByCompany["Lakeside Financial Advisors"].id, title: "SOC 2 Type II surveillance audit", category: "audit",
+      dueDate: daysAgo(15), recurrenceMonths: null, notes: "Schedule with auditor.",
       completedAt: null, createdAt: daysAgo(60), updatedAt: daysAgo(60), createdByStaff: analyst.id },
   );
-  console.log("   3 compliance calendar entries");
+  console.log("   3 compliance calendar entries (1 per company)");
 
   // ── White-label branding (on the demo analyst, not the client) ──
   console.log("\n▶ White-label branding");
@@ -1029,59 +1106,175 @@ async function main() {
   }
 
   // ── CVE + dark-web exposure ──────────────────────────────────────
-  // CVE is a REAL, rate-limited NVD lookup (see the fixed DEMO_STACKS in
-  // cveService.js); dark-web is fully canned/local (demoIntel.js). Both are
-  // single-snapshot per user, so this reflects Lakeside Financial Advisors'
-  // profile (see the fixture fix above) regardless of which company's
-  // assessment a visitor happens to be viewing.
+  // CVE is a REAL, rate-limited NVD lookup (see the per-company DEMO_STACKS
+  // in cveService.js); dark-web is fully canned/local (demoIntel.js). Both
+  // are single-snapshot per user, so with each company now on its own user
+  // this correctly reflects that company's own profile.
   console.log("\n▶ CVE + dark-web exposure (real NVD lookup — may take a while without NVD_API_KEY)");
-  try {
-    await refreshClientExposure(db, user.id, { isDemo: true });
-    console.log("   CVE exposure cached.");
-  } catch (err) {
-    console.log(`   CVE exposure skipped: ${err.message}`);
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    try {
+      await refreshClientExposure(db, cUser.id, { isDemo: true });
+      console.log(`   ${co.company.name}: CVE exposure cached.`);
+    } catch (err) {
+      console.log(`   ${co.company.name}: CVE exposure skipped: ${err.message}`);
+    }
+    try {
+      await refreshClientDarkweb(db, cUser.id, { isDemo: true });
+      console.log(`   ${co.company.name}: dark-web exposure cached.`);
+    } catch (err) {
+      console.log(`   ${co.company.name}: dark-web exposure skipped: ${err.message}`);
+    }
   }
-  try {
-    await refreshClientDarkweb(db, user.id, { isDemo: true });
-    console.log("   Dark-web exposure cached.");
-  } catch (err) {
-    console.log(`   Dark-web exposure skipped: ${err.message}`);
+
+  // ── Integration connections (webhook tools, directory, chat) ────
+  // Representative, uneven-by-design (same convention as AGENT_FLEET above):
+  // Apex — the "real gaps" company — gets a directory connection whose real
+  // posture mapping disputes its own "planning to add MFA" answer; Meridian
+  // gets a webhook vulnerability-scanner connection; Lakeside, the
+  // best-resourced company, shows a connected Slack channel. Findings are
+  // produced by calling the REAL normalizeIncomingFindings()/
+  // mapM365PostureToFindings() functions those routes use for a live
+  // client, not hand-crafted objects, so seeded data is exactly as
+  // shape-correct as a real connection's.
+  console.log("\n▶ Integration connections");
+  db.data.integrations ||= [];
+  db.data.integrationFindings ||= [];
+  db.data.directoryConnections ||= [];
+  db.data.productivityConnections ||= [];
+
+  {
+    const cUser = usersByCompany["Meridian Dental Group"];
+    const integration = {
+      id: randomUUID(), ownerUserId: cUser.id, name: "Front-office Nessus scanner",
+      provider: "nessus", tokenHash: sha256hex(randomUUID()), status: "active",
+      createdAt: daysAgo(35), createdBy: cUser.id, revokedAt: null,
+      lastEventAt: daysAgo(1), eventCount: 2,
+    };
+    db.data.integrations.push(integration);
+    const nessusPayload = {
+      findings: [
+        { asset: { fqdns: ["MERIDIAN-SRV-01.meridiandental.local"] },
+          plugin: { id: 97833, name: "SSL Certificate Cannot Be Trusted", synopsis: "The SSL certificate chain for this service cannot be trusted.", cve: [] },
+          severity: "medium" },
+        { asset: { fqdns: ["MERIDIAN-WKS-04.meridiandental.local"] },
+          plugin: { id: 51192, name: "SMB Signing Disabled", synopsis: "Signing is disabled on the remote SMB server.", cve: [] },
+          severity: "low" },
+      ],
+    };
+    const normalized = normalizeIncomingFindings("nessus", nessusPayload);
+    for (const f of normalized) {
+      db.data.integrationFindings.push({
+        id: randomUUID(), integrationId: integration.id, ownerUserId: cUser.id,
+        dedupeKey: sha256hex(`${integration.id}::${f.externalId}`),
+        externalId: f.externalId, tool: "nessus", severity: f.severity, category: f.category,
+        title: f.title, message: f.message || "", host: f.host, cve: f.cve, raw: f.raw,
+        ack: false, occurrences: 1, firstSeenAt: daysAgo(1), lastSeenAt: daysAgo(1),
+      });
+    }
+    console.log(`   · Meridian: Nessus webhook connection, ${normalized.length} findings`);
+  }
+
+  {
+    const cUser = usersByCompany["Apex Manufacturing"];
+    const facts = {
+      users: [
+        ...Array.from({ length: 17 }, (_, i) => ({ userPrincipalName: `user${i + 1}@apexmfg.onmicrosoft.com`, isMfaRegistered: false, isAdmin: false })),
+        { userPrincipalName: "admin@apexmfg.onmicrosoft.com", isMfaRegistered: false, isAdmin: true },
+      ],
+      conditionalAccessPolicies: [],
+    };
+    const findings = mapM365PostureToFindings(facts);
+    const severityCounts = {};
+    for (const f of findings) severityCounts[f.severity] = (severityCounts[f.severity] || 0) + 1;
+    const connection = {
+      id: randomUUID(), ownerUserId: cUser.id, provider: "m365", kind: "oauth",
+      label: "Microsoft 365 / Entra ID", tenantOrDomain: "apexmfg.onmicrosoft.com",
+      status: "active", encryptedSecret: encryptSecret("demo-sandbox-placeholder-refresh-token"),
+      scopes: M365_SCOPES, connectedAt: daysAgo(20), connectedBy: cUser.id,
+      lastSyncAt: daysAgo(2), lastSyncSummary: { syncedAt: daysAgo(2), findingCount: findings.length, severityCounts, findings },
+      revokedAt: null,
+    };
+    db.data.directoryConnections.push(connection);
+    console.log(`   · Apex: Microsoft 365 directory connection, ${findings.length} findings (MFA gap)`);
+  }
+
+  {
+    const cUser = usersByCompany["Lakeside Financial Advisors"];
+    const connection = {
+      id: randomUUID(), ownerUserId: cUser.id, provider: "slack", kind: "oauth_bot",
+      label: "Slack", teamOrWorkspace: "Lakeside Financial Advisors",
+      status: "active", encryptedSecret: encryptSecret("xoxb-demo-sandbox-placeholder-bot-token"),
+      externalTeamId: "T0DEMOLAKE", channelId: "C0DEMOALERTS", channelName: "security-alerts",
+      enabledEvents: ["recommendation.drafted", "task.completed"],
+      connectedAt: daysAgo(50), connectedBy: cUser.id, lastNotifiedAt: daysAgo(2), revokedAt: null,
+    };
+    db.data.productivityConnections.push(connection);
+    console.log("   · Lakeside: Slack connection posting to #security-alerts");
+  }
+
+  // One endpoint shows an on-demand check-in request so the feature is
+  // visible without a demo visitor having to trigger it themselves.
+  {
+    const apexAgent = agentsByCompany["Apex Manufacturing"].find(a => a.hostname === "APEX-SHOPFLOOR-03");
+    if (apexAgent) {
+      apexAgent.pendingCheckIn = true;
+      apexAgent.checkInRequestedAt = daysAgo(0.2);
+      apexAgent.checkInRequestedBy = usersByCompany["Apex Manufacturing"].id;
+      console.log(`   · Apex: check-in requested on ${apexAgent.hostname}`);
+    }
   }
 
   // ── Notifications + client↔staff chat ───────────────────────────
   console.log("\n▶ Notifications + messages");
-  pushNotification(db, { userId: user.id, type: "program_ready", title: "Your security program is ready",
-    body: "Mastermind finished generating your prioritized roadmap, policies, and compliance mapping.", actorRole: "system" });
-  pushNotification(db, { userId: user.id, type: "review_approved", title: "Policy approved",
-    body: "Your security analyst reviewed and approved your Incident Response Policy.", actorRole: "analyst" });
-  pushNotification(db, { userId: user.id, type: "training_completed", title: "Training milestone reached",
-    body: "4 of 6 team members completed Q1 security awareness training.", actorRole: "system" });
+  const STAFF_FOLLOWUP_NOTE = {
+    "Meridian Dental Group": "Just forwarded a few recommendations to your dashboard — the stale antivirus definitions on the front-desk workstation are the one to prioritize.",
+    "Lakeside Financial Advisors": "Just forwarded a few recommendations to your dashboard — nothing urgent, just the usual patch cadence items.",
+    "Apex Manufacturing": "Just forwarded a few recommendations to your dashboard — the RDP exposure is the most urgent one.",
+  };
+  for (const co of COMPANIES) {
+    const cUser = usersByCompany[co.company.name];
+    pushNotification(db, { userId: cUser.id, type: "program_ready", title: "Your security program is ready",
+      body: "Mastermind finished generating your prioritized roadmap, policies, and compliance mapping.", actorRole: "system" });
+    pushNotification(db, { userId: cUser.id, type: "review_approved", title: "Policy approved",
+      body: "Your security analyst reviewed and approved your Incident Response Policy.", actorRole: "analyst" });
+    pushNotification(db, { userId: cUser.id, type: "training_completed", title: "Training milestone reached",
+      body: "A team member completed Q1 security awareness training.", actorRole: "system" });
 
-  db.data.clientMessages.push(
-    { id: randomUUID(), clientUserId: user.id, fromRole: "staff", authorId: analyst.id,
-      authorLabel: "ShieldAI Demo Analyst",
-      body: "Hi — I reviewed your latest endpoint report. A couple of the manufacturing floor machines need attention when you have a minute.",
-      at: daysAgo(9) },
-    { id: randomUUID(), clientUserId: user.id, fromRole: "client", authorId: user.id,
-      authorLabel: DEMO_COMPANY, body: "Thanks for flagging it — can you send over what specifically needs fixing?", at: daysAgo(9) },
-    { id: randomUUID(), clientUserId: user.id, fromRole: "staff", authorId: analyst.id,
-      authorLabel: "ShieldAI Demo Analyst",
-      body: "Just forwarded a few recommendations to your dashboard — the RDP exposure is the most urgent one.", at: daysAgo(8) },
-    { id: randomUUID(), clientUserId: user.id, fromRole: "client", authorId: user.id,
-      authorLabel: DEMO_COMPANY, body: "Got it, we'll take care of that this week.", at: daysAgo(7) },
-  );
-  console.log("   3 notifications, 4-message chat thread");
+    db.data.clientMessages.push(
+      { id: randomUUID(), clientUserId: cUser.id, fromRole: "staff", authorId: analyst.id,
+        authorLabel: "ShieldAI Demo Analyst",
+        body: "Hi — I reviewed your latest endpoint report. A couple of items need attention when you have a minute.",
+        at: daysAgo(9) },
+      { id: randomUUID(), clientUserId: cUser.id, fromRole: "client", authorId: cUser.id,
+        authorLabel: co.company.name, body: "Thanks for flagging it — can you send over what specifically needs fixing?", at: daysAgo(9) },
+      { id: randomUUID(), clientUserId: cUser.id, fromRole: "staff", authorId: analyst.id,
+        authorLabel: "ShieldAI Demo Analyst",
+        body: STAFF_FOLLOWUP_NOTE[co.company.name], at: daysAgo(8) },
+      { id: randomUUID(), clientUserId: cUser.id, fromRole: "client", authorId: cUser.id,
+        authorLabel: co.company.name, body: "Got it, we'll take care of that this week.", at: daysAgo(7) },
+    );
+  }
+  console.log(`   ${COMPANIES.length * 3} notifications, ${COMPANIES.length} chat threads (4 messages each)`);
 
   await db.write();
   console.log(`\n✅ Demo seed complete — written to demo-db.json ONLY.`);
-  console.log(`   ${COMPANIES.length} companies, each with a full program + policies.`);
+  console.log(`   ${COMPANIES.length} companies, each with its own client account, full program + policies.`);
   console.log(`   Plus: endpoints, recommendations, tasks, evidence, vendors, training delivery,`);
   console.log(`   phishing simulations, policy acknowledgment, compliance calendar, branding,`);
-  console.log(`   CVE/dark-web exposure, and notifications — every customer-facing feature.`);
-  console.log(`   Client persona:  ${DEMO_EMAIL}`);
+  console.log(`   CVE/dark-web exposure, notifications, and integration connections — every`);
+  console.log(`   customer-facing feature.`);
+  for (const co of COMPANIES) {
+    const slug = COMPANY_SLUG[co.company.name];
+    console.log(`   Client persona (${co.company.name}): ${DEMO_PERSONAS.clientsByCompany[slug].email}`);
+  }
   console.log(`   Analyst persona: ${DEMO_ANALYST_EMAIL}`);
   console.log(`   Visitors enter via the public "Try the demo" button — no credentials.`);
-  return { companies: COMPANIES.length, clientEmail: DEMO_EMAIL, analystEmail: DEMO_ANALYST_EMAIL };
+  return {
+    companies: COMPANIES.length,
+    clientEmails: Object.values(DEMO_PERSONAS.clientsByCompany).map(p => p.email),
+    analystEmail: DEMO_ANALYST_EMAIL,
+  };
 }
 
 // ── Public API ────────────────────────────────────────────────
@@ -1093,11 +1286,14 @@ export function seedDemoStore() {
 }
 
 // Has the sandbox already been built? Lets callers skip a costly re-seed.
+// Checks the analyst plus all 3 per-company client personas — a partial
+// seed (e.g. interrupted mid-run) should still be treated as "not seeded."
 export async function isDemoSeeded() {
   return runInStore(DEMO_STORE, async () => {
     await db.read();
     const emails = new Set((db.data.users || []).map(u => u.email));
-    return emails.has(DEMO_EMAIL) && emails.has(DEMO_ANALYST_EMAIL);
+    const clientEmails = Object.values(DEMO_PERSONAS.clientsByCompany).map(p => p.email);
+    return emails.has(DEMO_ANALYST_EMAIL) && clientEmails.every(e => emails.has(e));
   });
 }
 

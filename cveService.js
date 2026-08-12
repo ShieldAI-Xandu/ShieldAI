@@ -47,19 +47,28 @@ export const SECURITY_REFERENCES = [
 // the SAME code path as production — it differs only in where the software
 // list comes from, never in how CVEs are fetched or presented.
 //
-// Keyed by the demo user's companyName ("ShieldAI Demo Workspace" — see
-// seedDemo.js's DEMO_COMPANY). There is one demo client account holding three
-// fictional company assessments, not three separate accounts, so this can only
-// ever reflect one company's profile at a time; seedDemo.js seeds this as
-// Lakeside Financial Advisors' stack — a boutique wealth-management firm's
-// typical footprint. Versions are chosen to be realistic for an SMB and to
-// return real, meaningful CVEs from NVD. An empty result set makes a poor
-// demo; old versions of widely-deployed software are also simply what SMBs
-// actually run.
+// Keyed by each demo company's own companyName — one seeded client account
+// per company (see seedDemo.js), so each gets its own real, independent CVE
+// snapshot rather than all three sharing one. Versions are chosen to be
+// realistic for the company's size/maturity and to return real, meaningful
+// CVEs from NVD. An empty result set makes a poor demo; old versions of
+// widely-deployed software are also simply what SMBs actually run.
 export const DEMO_STACKS = {
-  "ShieldAI Demo Workspace": [
+  // Healthcare, modest IT maturity, on-prem Exchange handling PHI.
+  "Meridian Dental Group": [
+    "Windows Server 2019", "Microsoft Exchange Server 2019", "OpenSSL 1.1.1",
+    "Apache 2.4.49",
+  ],
+  // Well-resourced, security-conscious financial firm.
+  "Lakeside Financial Advisors": [
     "Windows Server 2022", "Microsoft Exchange Online", "Citrix ADC 13.0",
     "SQL Server 2019", "OpenSSL 3.0.1",
+  ],
+  // Weakest posture — the "real gaps" company: aging, unpatched manufacturing
+  // floor/back-office stack.
+  "Apex Manufacturing": [
+    "Windows Server 2016", "OpenSSL 1.0.2", "Apache Struts 2.5.10",
+    "Adobe ColdFusion 2016",
   ],
 };
 
