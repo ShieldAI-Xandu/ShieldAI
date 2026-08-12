@@ -311,7 +311,7 @@ function brandLogoSvg(px = 30) {
   <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z" fill="url(#sg)"/>
   <path d="M22 28 L32 38 L42 28 M32 38 L32 54" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <circle cx="22" cy="28" r="3.5" fill="#FFFFFF"/><circle cx="42" cy="28" r="3.5" fill="#FFFFFF"/>
-  <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/><circle cx="32" cy="38" r="4.5" fill="#00E5FF"/>
+  <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/><circle cx="32" cy="38" r="4.5" fill="#00C8FF"/>
   <circle cx="32" cy="38" r="2" fill="#FFFFFF"/>
 </svg>`;
 }
