@@ -192,6 +192,7 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
   app.get("/api/train/:token/policies/:id", (req, res) => {
     const learner = learnerByToken(db, req.params.token);
     if (!learner) return res.status(404).json({ error: "This link isn't valid." });
+    if (learner.status !== "active") return res.status(403).json({ error: "This account is inactive." });
     const row = (db.data.policyAcknowledgments || []).find(r => r.id === req.params.id && r.learnerId === learner.id);
     if (!row) return res.status(404).json({ error: "Not found." });
     const doc = (db.data.policyDocs || []).find(p => p.id === row.policyId);

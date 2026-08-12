@@ -338,7 +338,14 @@ export function assessStatePrivacy(checklistAnswers = {}) {
   const areas = STATE_PRIVACY_AREAS.map(a => {
     const obligations = STATE_PRIVACY_OBLIGATIONS
       .filter(o => o.area === a.id)
-      .map(o => scoreObligation(o, checklistAnswers));
+      // Same "don't score what we've already said we won't determine
+      // applicability for" rule the summary's coveragePct already follows —
+      // without this, personalDataCategories' risk-scale 0 (correctly
+      // low for "no consumer data") was averaged directly into any
+      // obligation citing it as evidence, dragging it into GAP status and
+      // surfacing in topGaps — the exact "18 gaps this business will never
+      // receive a request about" lie noConsumerDataNote below says we avoid.
+      .map(o => noConsumerData ? { ...o, status: STATUS.UNKNOWN, score: null } : scoreObligation(o, checklistAnswers));
     const scored = obligations.filter(o => o.status !== STATUS.UNKNOWN);
     const avg = scored.length ? Math.round(scored.reduce((s, o) => s + o.score, 0) / scored.length) : null;
     return {

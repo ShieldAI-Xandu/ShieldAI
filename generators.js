@@ -105,4 +105,9 @@ Limit to exactly 2 modules. Each quiz array has exactly 1 question with exactly 
 {"executiveReport":{"headline":"1 sentence","securityPosture":"2 sentences","businessRisk":"2 sentences","investmentRequired":"$ range","roi":"1 sentence","keyFindings":["finding 1","finding 2","finding 3"],"nextSteps":[{"action":"","owner":"","dueDate":"","priority":"High|Medium|Low"}]}}
 Limit keyFindings to 3 and nextSteps to 3.`,
   },
-];
+// Appends NO_FABRICATION to every step above except riskOverview (which never
+// uses this field — server.js builds its own inline system string for it,
+// anchored to the deterministic score, not to this array's `system` value).
+// This was previously documented as the intended behavior but never actually
+// wired up, meaning the anti-fabrication guardrail never reached any AI call.
+].map(step => step.key === "riskOverview" ? step : { ...step, system: step.system + NO_FABRICATION });

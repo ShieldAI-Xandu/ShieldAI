@@ -297,7 +297,11 @@ function fmtDate(iso) {
       day: "numeric",
     });
   } catch {
-    return String(iso);
+    // Unparseable input reaches here raw — escape it. Some callers
+    // interpolate this result directly without their own esc() wrapper, so
+    // unescaped passthrough here was a stored-injection path into generated
+    // documents whenever a date field wasn't validated at write time.
+    return esc(String(iso));
   }
 }
 

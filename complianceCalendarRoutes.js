@@ -75,8 +75,14 @@ function agingStatus(assignedAtIso) {
   return "current";
 }
 
+// Counts toward the plan's calendar-entry cap — same "completing something
+// frees its slot" spirit as vendorRoutes.js's countActiveVendors. Without
+// excluding completed one-off entries, a client who's simply used the
+// feature for a while (each completed, non-recurring reminder stays in the
+// collection forever) permanently loses the ability to add new ones even
+// though nothing is actually still pending.
 function countActiveCustomEntries(db, userId) {
-  return (db.data.complianceCalendarEntries || []).filter(e => e.userId === userId).length;
+  return (db.data.complianceCalendarEntries || []).filter(e => e.userId === userId && !e.completedAt).length;
 }
 
 export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient }) {

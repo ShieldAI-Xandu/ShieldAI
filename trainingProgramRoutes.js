@@ -390,6 +390,7 @@ export function registerTrainingProgramRoutes(app, {
     const { learnerIds, topicIds, title, dueDate } = req.body || {};
     if (!Array.isArray(learnerIds) || !learnerIds.length) return res.status(400).json({ error: "Select at least one learner." });
     if (!Array.isArray(topicIds) || !topicIds.length) return res.status(400).json({ error: "Select at least one topic." });
+    if (dueDate && Number.isNaN(Date.parse(dueDate))) return res.status(400).json({ error: "dueDate must be an ISO date." });
 
     const modules = modulesFromTopics(topicIds);
     if (!modules.length) return res.status(400).json({ error: "No valid topics selected." });
@@ -420,7 +421,12 @@ export function registerTrainingProgramRoutes(app, {
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
     if (!a) return res.status(404).json({ error: "Assignment not found." });
-    if (req.body?.dueDate !== undefined) a.dueDate = req.body.dueDate || null;
+    if (req.body?.dueDate !== undefined) {
+      if (req.body.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
+        return res.status(400).json({ error: "dueDate must be an ISO date." });
+      }
+      a.dueDate = req.body.dueDate || null;
+    }
     if (req.body?.status === "waived") { a.status = "waived"; a.waivedBy = req.userId; a.waivedAt = nowIso(); }
     rollup(a);
     await db.write();
@@ -470,6 +476,7 @@ export function registerTrainingProgramRoutes(app, {
     const { year, quarter, topicIds, dueDate, label } = req.body || {};
     if (!Array.isArray(topicIds) || !topicIds.length) return res.status(400).json({ error: "Select at least one topic." });
     if (!year || !quarter) return res.status(400).json({ error: "year and quarter are required." });
+    if (dueDate && Number.isNaN(Date.parse(dueDate))) return res.status(400).json({ error: "dueDate must be an ISO date." });
 
     const modules = modulesFromTopics(topicIds);
     const activeLearners = (db.data.learners || []).filter(l => l.clientUserId === scope.clientUserId && l.status === "active");
