@@ -10944,14 +10944,14 @@ function AdminPanel({ onClose }) {
 
   // Approve a lead → mint an access code (investor or client) and mark the lead
   // qualified. Returns the generated code so the admin can send it to the person.
-  async function approveLead(id, type) {
+  async function approveLead(id, type, company) {
     setBusy(id);
     setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/admin/leads/${id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify(type === "client" ? { type, company } : { type }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not approve.");
@@ -11944,8 +11944,17 @@ const LEAD_STATUSES = [
   { id:"closed",    label:"Closed",    color:C.textMut },
 ];
 
+// Matches demoGateway.js's DEMO_COMPANY_KEYS/DEMO_PERSONAS.clientsByCompany —
+// which seeded company a "client" access code lands the visitor on.
+const DEMO_COMPANY_OPTIONS = [
+  { id: "meridian", label: "Meridian (Healthcare)" },
+  { id: "lakeside", label: "Lakeside (Financial)" },
+  { id: "apex", label: "Apex (Manufacturing)" },
+];
+
 function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, onDelete }) {
   const [filter, setFilter] = useState("all");
+  const [companyByLead, setCompanyByLead] = useState({}); // leadId -> demo company key for the next "Client" approval
 
   const counts = leads.reduce((acc,l)=>{ const s=l.status||"new"; acc[s]=(acc[s]||0)+1; return acc; }, {});
   const shown = filter === "all" ? leads : leads.filter(l => (l.status||"new") === filter);
@@ -12048,7 +12057,9 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
                       })}
                     </div>
                     {/* Approve → mint access code. Investor = client+analyst
-                        tour; Client = client views only. */}
+                        tour (full portfolio, company picker doesn't apply);
+                        Client = client views only, landed on whichever
+                        seeded company is picked below. */}
                     <div style={{display:"flex",gap:5,justifyContent:"flex-end"}}>
                       <button onClick={()=>onApprove(l.id, "investor")} disabled={busy===l.id}
                         title="Approve as investor (client + analyst views)"
@@ -12057,7 +12068,14 @@ function LeadsPanel({ leads, loading, busy, onRefresh, onSetStatus, onApprove, o
                           cursor:busy===l.id?"wait":"pointer"}}>
                         ✓ Investor
                       </button>
-                      <button onClick={()=>onApprove(l.id, "client")} disabled={busy===l.id}
+                      <select value={companyByLead[l.id] || "meridian"}
+                        onChange={e=>setCompanyByLead(prev=>({...prev, [l.id]: e.target.value}))}
+                        title="Which seeded company this client code lands on"
+                        style={{padding:"5px 6px",borderRadius:6,fontSize:11,fontWeight:600,
+                          background:C.surface,border:`1px solid ${C.border}`,color:C.textSec}}>
+                        {DEMO_COMPANY_OPTIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      </select>
+                      <button onClick={()=>onApprove(l.id, "client", companyByLead[l.id] || "meridian")} disabled={busy===l.id}
                         title="Approve as client demo (client views only)"
                         style={{padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:600,
                           background:`${C.accent}18`,border:`1px solid ${C.accent}55`,color:C.accent,

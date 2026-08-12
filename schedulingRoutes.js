@@ -107,7 +107,7 @@ function decodeJwtPayload(token) {
   } catch { return {}; }
 }
 
-export function registerSchedulingRoutes(app, { db, requireAuth, gate }) {
+export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction }) {
   ensureCollections(db);
 
   const oauthStates = new Map();
@@ -250,6 +250,15 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate }) {
         topic: topic || "ShieldAI call", startTime, durationMinutes: durationMinutes || 30,
       });
       await db.write();
+      // The one write action across every integration in this codebase had
+      // no server-side ledger of its own — every peer write path
+      // (task-tracker sync, Slack/Teams recommendation actions) logs
+      // itself via logClientAction; this didn't.
+      if (logClientAction) logClientAction(db, {
+        clientUserId: c.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
+        action: "scheduling_meeting_created",
+        detail: `${c.label} — "${topic || "ShieldAI call"}" at ${startTime}.`,
+      });
       res.json({ ok: true, meeting });
     } catch (err) {
       console.error("Create meeting error:", err.message);

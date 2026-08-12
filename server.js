@@ -590,8 +590,8 @@ app.get("/api/admin/access-codes", requireAdmin, (req, res) => {
 
 app.post("/api/admin/access-codes", requireAdmin, async (req, res) => {
   try {
-    const { type, leadId, note } = req.body || {};
-    const record = await createAccessCode(db, { type, leadId: leadId || null, note: note || "", createdBy: req.userId });
+    const { type, leadId, note, company } = req.body || {};
+    const record = await createAccessCode(db, { type, leadId: leadId || null, note: note || "", createdBy: req.userId, company });
     res.json(record);
   } catch (err) {
     if (err.code === "BAD_TYPE") return res.status(400).json({ error: err.message });
@@ -609,6 +609,7 @@ app.post("/api/admin/leads/:id/approve", requireAdmin, async (req, res) => {
     const type = req.body?.type === "investor" ? "investor" : "client";
     const record = await createAccessCode(db, {
       type, leadId: lead.id, note: `Approved for ${lead.name || lead.email}`, createdBy: req.userId,
+      company: req.body?.company,
     });
     lead.status = "qualified";
     lead.accessCode = record.code;
@@ -1744,7 +1745,7 @@ registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJ
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, express });
 registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
-registerSchedulingRoutes(app, { db, requireAuth, gate });
+registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
