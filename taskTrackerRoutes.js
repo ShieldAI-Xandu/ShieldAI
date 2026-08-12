@@ -110,7 +110,16 @@ async function refreshOAuthToken(provider, refreshToken) {
 async function liveCredential(db, connection) {
   if (connection.kind === "oauth") {
     const refreshToken = decryptSecret(connection.encryptedSecret);
-    const refreshed = await refreshOAuthToken(connection.provider, refreshToken);
+    let refreshed;
+    try {
+      refreshed = await refreshOAuthToken(connection.provider, refreshToken);
+    } catch (err) {
+      // Mirrors directoryRoutes.js's sync handler: a dead refresh token means
+      // this connection needs reconnecting, not just "this one call failed."
+      connection.status = "error";
+      await db.write();
+      throw err;
+    }
     if (refreshed.refresh_token) connection.encryptedSecret = encryptSecret(refreshed.refresh_token);
     return { accessToken: refreshed.access_token };
   }
@@ -198,7 +207,13 @@ export function registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClien
         // the workaround if that's ever wrong for a given client.
         try {
           const sites = await resolveJiraSites(tokens.access_token);
-          if (sites[0]) { extra.cloudId = sites[0].id; siteOrWorkspace = sites[0].name || sites[0].url; }
+          // `name` (a friendly display name, may contain spaces/differ from
+          // the subdomain) is for the UI label; `url` is the real
+          // https://<subdomain>.atlassian.net site and is what a working
+          // ticket link has to be built from — conflating the two here
+          // previously produced browse links pointed at an invalid host
+          // whenever a site's display name differed from its subdomain.
+          if (sites[0]) { extra.cloudId = sites[0].id; extra.siteUrl = sites[0].url; siteOrWorkspace = sites[0].name || sites[0].url; }
         } catch { /* connection still saved; picker step will surface the problem */ }
       }
 
@@ -332,21 +347,28 @@ export function registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClien
     try {
       const cred = await liveCredential(db, c);
       let ref;
-      if (task.externalRef?.provider === c.provider && task.externalRef?.externalId) {
-        // Already synced to this provider — pull status instead of creating a duplicate.
+      // connectionId is checked when present so a task re-synced after
+      // reconnecting to a DIFFERENT site/workspace/board (same provider,
+      // different connection) creates a fresh ticket there instead of
+      // pulling status from the old connection's issue key under the new
+      // connection's credentials. Falls back to provider-only matching for
+      // refs written before this field existed.
+      if (task.externalRef?.provider === c.provider && task.externalRef?.externalId &&
+          (!task.externalRef.connectionId || task.externalRef.connectionId === c.id)) {
+        // Already synced to this connection — pull status instead of creating a duplicate.
         ref = await pullStatus(c, cred, task.externalRef);
       } else if (c.provider === "jira") {
         if (!c.projectKey) return res.status(409).json({ error: "Pick a Jira project for this connection first." });
-        const created = await createJiraIssue(cred.accessToken, c.cloudId, { summary: task.title, description: task.detail });
-        ref = { provider: "jira", externalId: created.externalId, externalUrl: `https://${c.siteOrWorkspace}/browse/${created.externalId}`, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
+        const created = await createJiraIssue(cred.accessToken, c.cloudId, { projectKey: c.projectKey, summary: task.title, description: task.detail });
+        ref = { provider: "jira", connectionId: c.id, externalId: created.externalId, externalUrl: `${c.siteUrl}/browse/${created.externalId}`, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
       } else if (c.provider === "asana") {
         if (!c.projectGid) return res.status(409).json({ error: "Pick an Asana project for this connection first." });
         const created = await createAsanaTask(cred.accessToken, { workspaceGid: c.workspaceGid, projectGid: c.projectGid, name: task.title, notes: task.detail });
-        ref = { provider: "asana", externalId: created.externalId, externalUrl: created.externalUrl, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
+        ref = { provider: "asana", connectionId: c.id, externalId: created.externalId, externalUrl: created.externalUrl, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
       } else if (c.provider === "trello") {
         if (!c.defaultListId) return res.status(409).json({ error: "Pick a default list for this connection first." });
         const created = await createTrelloCard(cred, { listId: c.defaultListId, name: task.title, desc: task.detail });
-        ref = { provider: "trello", externalId: created.externalId, externalUrl: created.externalUrl, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
+        ref = { provider: "trello", connectionId: c.id, externalId: created.externalId, externalUrl: created.externalUrl, externalStatus: "open", externalPriority: null, syncedAt: nowIso() };
       } else {
         return res.status(400).json({ error: "Unknown provider." });
       }

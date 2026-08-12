@@ -109,7 +109,7 @@ function ensure(db) {
 export function setTaskExternalRef(db, taskId, ref) {
   const task = ensure(db).find(t => t.id === taskId);
   if (!task) return null;
-  task.externalRef = ref; // { provider, externalId, externalUrl, syncedAt } or null to unlink
+  task.externalRef = ref; // { provider, connectionId, externalId, externalUrl, syncedAt } or null to unlink
   task.updatedAt = nowIso();
   return task;
 }
@@ -360,8 +360,12 @@ export function registerTaskRoutes(app, {
       projectedGain: sim ? sim.delta : null,
       scoreAtCreate: sim ? sim.current : null,
       // Set by taskTrackerRoutes.js once this task is synced to an external
-      // tracker (Jira/Asana/Trello) — null until then. { provider, externalId,
-      // externalUrl, externalStatus, externalPriority, syncedAt }.
+      // tracker (Jira/Asana/Trello) — null until then. { provider,
+      // connectionId, externalId, externalUrl, externalStatus,
+      // externalPriority, syncedAt }. connectionId scopes a re-sync to the
+      // same connection it was originally created under, so reconnecting to
+      // a different site/workspace/board creates a fresh ticket there
+      // instead of pulling status under the wrong connection's credentials.
       // externalStatus/externalPriority are informational only — pulling a
       // status from the tracker never drives this task through the real
       // /complete endpoint (which has posture-scoring side effects); a human

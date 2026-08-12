@@ -951,20 +951,25 @@ async function main() {
 
     // Q1 is past its due date: with 2 learners per company, one completed
     // everything, one is partway (shows as overdue, matching real rollup()
-    // behavior for a past-due incomplete assignment).
+    // behavior for a past-due incomplete assignment) — except Apex, the
+    // "real gaps" company, whose 2nd learner never started at all, so the
+    // demo has a real example of that overdue state too, not just the
+    // partial-progress one.
     learners.forEach((learner, i) => {
       const a = {
         id: randomUUID(), clientUserId: cUser.id, learnerId: learner.id,
         source: "quarterly", quarterId: q1.id, title: q1.label,
         modules: q1Modules, moduleState: {}, status: "assigned", progress: 0, score: null,
         dueDate: q1.dueDate, assignedBy: analyst.id, assignedByRole: "analyst",
-        assignedAt: daysAgo(90), startedAt: daysAgo(85), completedAt: null,
+        assignedAt: daysAgo(90), startedAt: null, completedAt: null,
       };
       if (i === 0) {
+        a.startedAt = daysAgo(85);
         q1Modules.forEach((m, mi) => {
           a.moduleState[m.topicId] = { completed: true, score: 80 + (mi * 5) % 20, completedAt: daysAgo(75) };
         });
-      } else {
+      } else if (co.company.name !== "Apex Manufacturing") {
+        a.startedAt = daysAgo(85);
         q1Modules.slice(0, 2).forEach(m => { a.moduleState[m.topicId] = { completed: true, score: 88, completedAt: daysAgo(60) }; });
       }
       rollup(a);
