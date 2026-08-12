@@ -275,6 +275,20 @@ export async function requireAuth(req, res, next) {
 
     // Impersonation ("View as Client"): req.userId already resolves to the
     // CLIENT, so every existing client-scoped route below works unchanged.
+    // The liveUser check above only re-verifies the CLIENT being viewed —
+    // the staff member actually driving is a separate live record that
+    // needs its own re-check, or a suspended/demoted actor's still-valid
+    // 45-minute impersonation token keeps working exactly as before,
+    // reintroducing the same staleness gap this function exists to close.
+    // Rederives the actor's role from their own live record too, rather
+    // than trusting the role claim baked into the token at mint time.
+    if (payload.impersonatedBy) {
+      const liveActor = (db.data.users || []).find(u => u.id === payload.impersonatedBy.id);
+      if (!liveActor || liveActor.suspended || !(liveActor.isAdmin || liveActor.isAnalyst)) {
+        return res.status(403).json({ error: "The account that started this impersonation is no longer active." });
+      }
+      payload.impersonatedBy.role = liveActor.isAdmin ? "admin" : "analyst";
+    }
     await applyImpersonation(req, payload.impersonatedBy);
 
     next();
