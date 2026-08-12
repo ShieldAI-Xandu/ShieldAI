@@ -23,6 +23,7 @@ import { randomUUID } from "crypto";
 import { counters } from "./tierGate.js";
 import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
 import { setTaskExternalRef } from "./taskRoutes.js";
+import { createPendingGrant, consumePendingGrant } from "./oauthPendingGrants.js";
 import {
   JIRA_SCOPES, resolveJiraSites, fetchJiraProjects, createJiraIssue, fetchJiraStatus,
   fetchAsanaWorkspaces, fetchAsanaProjects, createAsanaTask, fetchAsanaStatus,
@@ -217,27 +218,48 @@ export function registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClien
         } catch { /* connection still saved; picker step will surface the problem */ }
       }
 
-      const connection = {
-        id: randomUUID(),
-        ownerUserId: stateEntry.userId,
-        provider, kind: "oauth",
-        label: siteOrWorkspace,
-        siteOrWorkspace,
-        status: "active",
-        encryptedSecret: encryptSecret(tokens.refresh_token),
-        connectedAt: nowIso(),
-        connectedBy: stateEntry.userId,
-        revokedAt: null,
-        ...extra,
-      };
-      db.data.taskTrackerConnections.push(connection);
-      await db.write();
-      res.redirect(`${appUrl}/?tasktrackerConnected=1&provider=${provider}&id=${connection.id}`);
+      // NOT attributed to anyone yet — see oauthPendingGrants.js. Only an
+      // authenticated call to /finish below does that.
+      const pendingId = createPendingGrant("tasktracker", {
+        provider, siteOrWorkspace, refreshToken: tokens.refresh_token, extra,
+      });
+      res.redirect(`${appUrl}/?tasktrackerOAuthPending=${pendingId}&provider=${provider}`);
     } catch (err) {
       console.error(`${provider} OAuth callback error:`, err.message);
       fail("connect_failed");
     }
   });
+
+  // Finish step: the connection is attributed to whoever calls THIS
+  // (authenticated) — never to whoever completed the browser redirect at
+  // /callback above. See oauthPendingGrants.js's header for the
+  // confused-deputy issue this closes.
+  app.post("/api/tasktracker/oauth/finish", requireAuth,
+    gate.capability("integrations"),
+    gate.limit("integrations", counters.integrations),
+    async (req, res) => {
+      const pendingId = String(req.body?.pendingId || "");
+      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+      const grant = consumePendingGrant("tasktracker", pendingId);
+      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+
+      const connection = {
+        id: randomUUID(),
+        ownerUserId: req.userId,
+        provider: grant.provider, kind: "oauth",
+        label: grant.siteOrWorkspace,
+        siteOrWorkspace: grant.siteOrWorkspace,
+        status: "active",
+        encryptedSecret: encryptSecret(grant.refreshToken),
+        connectedAt: nowIso(),
+        connectedBy: req.userId,
+        revokedAt: null,
+        ...grant.extra,
+      };
+      db.data.taskTrackerConnections.push(connection);
+      await db.write();
+      res.json({ ok: true, id: connection.id, provider: connection.provider });
+    });
 
   // ── Trello: paste-in API key + token ─────────────────────────────
   app.post("/api/tasktracker/connect/trello", requireAuth,

@@ -17750,24 +17750,45 @@ function IntegrationsScreen({ onBack }) {
 
   // Land back here after an OAuth redirect round-trip (see
   // directoryRoutes.js's, productivityRoutes.js's, and taskTrackerRoutes.js's
-  // /oauth/.../callback).
+  // /oauth/.../callback). The callback itself never attributes the
+  // connection to anyone — it hands back a one-time pendingId, and THIS
+  // authenticated call is what actually creates it, attributed to whoever's
+  // logged in right here (see oauthPendingGrants.js for why: attributing it
+  // at /callback instead would let an attacker who shares the raw provider
+  // consent link with a victim end up owning the victim's completed grant).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const connected = params.get("directoryConnected") || params.get("productivityConnected") || params.get("tasktrackerConnected");
+    const directoryPending = params.get("directoryOAuthPending");
+    const productivityPending = params.get("productivityOAuthPending");
+    const tasktrackerPending = params.get("tasktrackerOAuthPending");
     const failed = params.get("directoryError") || params.get("productivityError") || params.get("tasktrackerError");
-    if (connected) {
-      setNotice({ msg: `Connected.`, tone: C.green });
-      load();
-    } else if (failed) {
-      setNotice({ msg: `Could not complete the connection (${failed.replace(/_/g, " ")}). Try again.`, tone: C.red });
-    }
-    if (connected || failed) {
-      params.delete("directoryConnected"); params.delete("directoryError");
-      params.delete("productivityConnected"); params.delete("productivityError");
-      params.delete("tasktrackerConnected"); params.delete("tasktrackerError"); params.delete("provider"); params.delete("id");
+    const pending = directoryPending || productivityPending || tasktrackerPending;
+
+    if (pending || failed) {
+      params.delete("directoryOAuthPending"); params.delete("productivityOAuthPending"); params.delete("tasktrackerOAuthPending");
+      params.delete("directoryError"); params.delete("productivityError"); params.delete("tasktrackerError");
+      params.delete("provider"); params.delete("id");
       const qs = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
     }
+
+    if (pending) {
+      const finishPath = directoryPending ? "/api/directory/oauth/finish"
+        : productivityPending ? "/api/productivity/oauth/slack/finish"
+        : "/api/tasktracker/oauth/finish";
+      authFetch(`${API_BASE}${finishPath}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId: pending }),
+      }).then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Could not complete the connection.");
+        setNotice({ msg: "Connected.", tone: C.green });
+        load();
+      }).catch(e => setNotice({ msg: e.message, tone: C.red }));
+    } else if (failed) {
+      setNotice({ msg: `Could not complete the connection (${failed.replace(/_/g, " ")}). Try again.`, tone: C.red });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (selected?.kind === "directory") {
@@ -18863,8 +18884,37 @@ function ScheduleCallCard() {
   const [result, setResult] = useState(null); // { joinUrl, startTime }
   const [error, setError] = useState(null);
 
-  useEffect(() => {
+  const loadConnections = useCallback(() => {
     authFetch(`${API_BASE}/api/scheduling`).then(r => r.ok ? r.json() : []).then(d => setConnections(Array.isArray(d) ? d : [])).catch(() => setConnections([]));
+  }, []);
+
+  useEffect(() => { loadConnections(); }, [loadConnections]);
+
+  // Land back here after the OAuth redirect (see schedulingRoutes.js's
+  // /callback + /finish and oauthPendingGrants.js's header) — the callback
+  // never attributes the connection itself; this authenticated call does,
+  // to whoever's actually logged in here.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pending = params.get("schedulingOAuthPending");
+    const failed = params.get("schedulingError");
+    if (!pending && !failed) return;
+    params.delete("schedulingOAuthPending"); params.delete("schedulingError"); params.delete("provider");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    if (pending) {
+      authFetch(`${API_BASE}/api/scheduling/oauth/finish`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId: pending }),
+      }).then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "Could not complete the connection.");
+        loadConnections();
+      }).catch(e => setError(e.message));
+    } else {
+      setError(`Could not complete the connection (${failed.replace(/_/g, " ")}). Try again.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const active = (connections || []).find(c => c.status === "active");
@@ -19454,6 +19504,11 @@ export default function ShieldAI() {
     params.delete("action"); params.delete("refType"); params.delete("refId");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    // Every other mutating action in the app confirms first — this is the
+    // one place a page LOAD (not a click) can trigger a write, since it
+    // comes from a Teams Action.OpenUrl link rather than an in-app button.
+    const actionLabel = { handle: "mark this as being handled", complete: "mark this complete", decline: "decline this" }[action] || `apply "${action}" to`;
+    if (!window.confirm(`This link will ${actionLabel} the recommendation it's tied to. Continue?`)) return;
     (async () => {
       try {
         const res = await authFetch(`${API_BASE}/api/productivity/apply-action`, {

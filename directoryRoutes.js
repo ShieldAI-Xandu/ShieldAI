@@ -37,6 +37,8 @@ import { randomUUID, createHash } from "crypto";
 import { counters } from "./tierGate.js";
 import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
 import { DIRECTORY_PROVIDERS } from "./directoryAdapters.js";
+import { assertSafeExternalHost } from "./outboundUrlSafety.js";
+import { createPendingGrant, consumePendingGrant } from "./oauthPendingGrants.js";
 
 const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -320,31 +322,57 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
         tenantOrDomain = claims.hd || claims.email || "unknown-domain";
       }
 
+      // NOT attributed to anyone yet — completing this browser redirect
+      // isn't proof of who should own the resulting connection (see
+      // oauthPendingGrants.js). Only an authenticated call to /finish below
+      // does that.
+      const pendingId = createPendingGrant("directory", {
+        provider,
+        tenantOrDomain: String(tenantOrDomain).slice(0, 200),
+        refreshToken: tokens.refresh_token,
+      });
+
+      res.redirect(`${appUrl}/?directoryOAuthPending=${pendingId}&provider=${provider}`);
+    } catch (err) {
+      console.error("Directory OAuth callback error:", err.message);
+      fail("connect_failed");
+    }
+  });
+
+  // Finish step: the connection is attributed to whoever calls THIS
+  // (authenticated) — never to whoever completed the browser redirect at
+  // /callback above. Closes a confused-deputy gap where an attacker could
+  // mint a state, hand a victim the resulting genuine provider consent URL,
+  // and have the victim's completed grant land in the attacker's account.
+  app.post("/api/directory/oauth/finish", requireAuth,
+    gate.capability("integrations"),
+    gate.limit("integrations", counters.integrations),
+    async (req, res) => {
+      const pendingId = String(req.body?.pendingId || "");
+      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+      const grant = consumePendingGrant("directory", pendingId);
+      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+
       const connection = {
         id: randomUUID(),
-        ownerUserId: stateEntry.userId,
-        provider,
+        ownerUserId: req.userId,
+        provider: grant.provider,
         kind: "oauth",
-        label: PROVIDER_LABELS[provider],
-        tenantOrDomain: String(tenantOrDomain).slice(0, 200),
+        label: PROVIDER_LABELS[grant.provider],
+        tenantOrDomain: grant.tenantOrDomain,
         status: "active",
-        encryptedSecret: encryptSecret(tokens.refresh_token),
-        scopes: DIRECTORY_PROVIDERS[provider].scopes,
+        encryptedSecret: encryptSecret(grant.refreshToken),
+        scopes: DIRECTORY_PROVIDERS[grant.provider].scopes,
         connectedAt: nowIso(),
-        connectedBy: stateEntry.userId,
+        connectedBy: req.userId,
         lastSyncAt: null,
         lastSyncSummary: null,
         revokedAt: null,
       };
       db.data.directoryConnections.push(connection);
       await db.write();
-
-      res.redirect(`${appUrl}/?directoryConnected=1&provider=${provider}`);
-    } catch (err) {
-      console.error("Directory OAuth callback error:", err.message);
-      fail("connect_failed");
-    }
-  });
+      res.json({ ok: true, id: connection.id, provider: connection.provider });
+    });
 
   // ── Okta: pasted read-only API token, no redirect ───────────────
   app.post("/api/directory/connect/okta", requireAuth,
@@ -356,6 +384,16 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
         const oktaDomain = String(req.body?.oktaDomain || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
         const apiToken = String(req.body?.apiToken || "").trim();
         if (!oktaDomain || !apiToken) return res.status(400).json({ error: "Okta domain and API token are required." });
+
+        // Unlike every other directory provider, Okta's domain is pasted by
+        // the client rather than fixed by an OAuth app — the same
+        // client-controls-the-host SSRF class the Teams webhook guard
+        // exists for, so it gets the same guard.
+        try {
+          await assertSafeExternalHost(`https://${oktaDomain}`);
+        } catch (err) {
+          return res.status(400).json({ error: err.message });
+        }
 
         // Validate the token actually works against a read-only endpoint
         // before storing it — same "prove it works" pattern as any

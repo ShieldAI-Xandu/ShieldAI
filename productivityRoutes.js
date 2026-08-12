@@ -31,6 +31,7 @@ import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
 import { fetchSlackChannels, respondToSlack, sendTeamsMessage } from "./productivityAdapters.js";
 import { verifySlackSignature } from "./webhookSignature.js";
 import { NOTIFICATION_EVENTS, NOTIFICATION_EVENT_IDS } from "./notificationDispatch.js";
+import { createPendingGrant, consumePendingGrant } from "./oauthPendingGrants.js";
 
 const nowIso = () => new Date().toISOString();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -239,33 +240,57 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
         return fail("connect_failed");
       }
 
-      const connection = {
-        id: randomUUID(),
-        ownerUserId: stateEntry.userId,
+      // NOT attributed to anyone yet — see oauthPendingGrants.js. Only an
+      // authenticated call to /finish below does that.
+      const pendingId = createPendingGrant("productivity", {
         provider: "slack",
-        kind: "oauth_bot",
-        label: "Slack",
         teamOrWorkspace: tokens.team?.name || "Slack workspace",
-        status: "active",
-        encryptedSecret: encryptSecret(tokens.access_token), // xoxb- bot token; doesn't expire the way an OAuth refresh token does, still encrypted at rest
-        externalTeamId: tokens.team?.id || null, // resolves an inbound Slack interactivity payload back to this connection/owner without trusting client-supplied data
-        channelId: null,
-        channelName: null,
-        enabledEvents: [],
-        connectedAt: nowIso(),
-        connectedBy: stateEntry.userId,
-        lastNotifiedAt: null,
-        revokedAt: null,
-      };
-      db.data.productivityConnections.push(connection);
-      await db.write();
+        accessToken: tokens.access_token,
+        externalTeamId: tokens.team?.id || null,
+      });
 
-      res.redirect(`${appUrl}/?productivityConnected=1&provider=slack&id=${connection.id}`);
+      res.redirect(`${appUrl}/?productivityOAuthPending=${pendingId}&provider=slack`);
     } catch (err) {
       console.error("Slack OAuth callback error:", err.message);
       fail("connect_failed");
     }
   });
+
+  // Finish step: the connection is attributed to whoever calls THIS
+  // (authenticated) — never to whoever completed the browser redirect at
+  // /callback above. See oauthPendingGrants.js's header for the
+  // confused-deputy issue this closes.
+  app.post("/api/productivity/oauth/slack/finish", requireAuth,
+    gate.capability("integrations"),
+    gate.limit("integrations", counters.integrations),
+    async (req, res) => {
+      const pendingId = String(req.body?.pendingId || "");
+      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+      const grant = consumePendingGrant("productivity", pendingId);
+      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+
+      const connection = {
+        id: randomUUID(),
+        ownerUserId: req.userId,
+        provider: "slack",
+        kind: "oauth_bot",
+        label: "Slack",
+        teamOrWorkspace: grant.teamOrWorkspace,
+        status: "active",
+        encryptedSecret: encryptSecret(grant.accessToken),
+        externalTeamId: grant.externalTeamId,
+        channelId: null,
+        channelName: null,
+        enabledEvents: [],
+        connectedAt: nowIso(),
+        connectedBy: req.userId,
+        lastNotifiedAt: null,
+        revokedAt: null,
+      };
+      db.data.productivityConnections.push(connection);
+      await db.write();
+      res.json({ ok: true, id: connection.id, provider: connection.provider });
+    });
 
   app.post("/api/productivity/:id/revoke", requireAuth, async (req, res) => {
     const c = (db.data.productivityConnections || []).find(x => x.id === req.params.id && x.ownerUserId === req.userId);

@@ -25,6 +25,7 @@ import { randomUUID } from "crypto";
 import { counters } from "./tierGate.js";
 import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
 import { SCHEDULING_PROVIDERS } from "./schedulingAdapters.js";
+import { createPendingGrant, consumePendingGrant } from "./oauthPendingGrants.js";
 
 const nowIso = () => new Date().toISOString();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -174,26 +175,52 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate }) {
           .then(r => r.ok ? r.json() : null).then(u => u?.email || accountLabel).catch(() => accountLabel);
       }
 
-      const connection = {
-        id: randomUUID(),
-        ownerUserId: stateEntry.userId,
-        provider, kind: "oauth",
-        label: PROVIDER_LABELS[provider],
+      // NOT attributed to anyone yet — see oauthPendingGrants.js. Only an
+      // authenticated call to /finish below does that. Especially important
+      // here: this is the one WRITE-capable integration in the codebase —
+      // without this, an attacker could end up able to create meetings on a
+      // victim's own Zoom/Google Calendar account through ShieldAI.
+      const pendingId = createPendingGrant("scheduling", {
+        provider,
         accountLabel: String(accountLabel).slice(0, 200),
-        status: "active",
-        encryptedSecret: encryptSecret(tokens.refresh_token),
-        connectedAt: nowIso(),
-        connectedBy: stateEntry.userId,
-        revokedAt: null,
-      };
-      db.data.schedulingConnections.push(connection);
-      await db.write();
-      res.redirect(`${appUrl}/?schedulingConnected=1&provider=${provider}`);
+        refreshToken: tokens.refresh_token,
+      });
+      res.redirect(`${appUrl}/?schedulingOAuthPending=${pendingId}&provider=${provider}`);
     } catch (err) {
       console.error(`${provider} scheduling OAuth callback error:`, err.message);
       fail("connect_failed");
     }
   });
+
+  // Finish step: the connection is attributed to whoever calls THIS
+  // (authenticated) — never to whoever completed the browser redirect at
+  // /callback above. See oauthPendingGrants.js's header for the
+  // confused-deputy issue this closes.
+  app.post("/api/scheduling/oauth/finish", requireAuth,
+    gate.capability("integrations"),
+    gate.limit("integrations", counters.integrations),
+    async (req, res) => {
+      const pendingId = String(req.body?.pendingId || "");
+      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+      const grant = consumePendingGrant("scheduling", pendingId);
+      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+
+      const connection = {
+        id: randomUUID(),
+        ownerUserId: req.userId,
+        provider: grant.provider, kind: "oauth",
+        label: PROVIDER_LABELS[grant.provider],
+        accountLabel: grant.accountLabel,
+        status: "active",
+        encryptedSecret: encryptSecret(grant.refreshToken),
+        connectedAt: nowIso(),
+        connectedBy: req.userId,
+        revokedAt: null,
+      };
+      db.data.schedulingConnections.push(connection);
+      await db.write();
+      res.json({ ok: true, id: connection.id, provider: connection.provider });
+    });
 
   // The one write action this whole file exists for.
   app.post("/api/scheduling/:id/create-meeting", requireAuth, async (req, res) => {
