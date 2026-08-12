@@ -37,7 +37,7 @@ import { randomUUID, createHash } from "crypto";
 import { counters } from "./tierGate.js";
 import { encryptSecret, decryptSecret } from "./credentialCrypto.js";
 import { DIRECTORY_PROVIDERS } from "./directoryAdapters.js";
-import { assertSafeExternalHost } from "./outboundUrlSafety.js";
+import { safeFetch } from "./outboundUrlSafety.js";
 import { createPendingGrant, consumePendingGrant } from "./oauthPendingGrants.js";
 
 const nowIso = () => new Date().toISOString();
@@ -388,19 +388,19 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
         // Unlike every other directory provider, Okta's domain is pasted by
         // the client rather than fixed by an OAuth app — the same
         // client-controls-the-host SSRF class the Teams webhook guard
-        // exists for, so it gets the same guard.
+        // exists for, so it gets the same guard. safeFetch (not a bare
+        // fetch after a one-off check) re-validates every redirect hop too
+        // — a bare fetch() follows redirects with no such check, so a host
+        // that passes validation could still 302 straight to an internal
+        // address on the actual request.
+        let check;
         try {
-          await assertSafeExternalHost(`https://${oktaDomain}`);
+          check = await safeFetch(`https://${oktaDomain}/api/v1/users?limit=1`, {
+            headers: { Authorization: `SSWS ${apiToken}`, Accept: "application/json" },
+          });
         } catch (err) {
           return res.status(400).json({ error: err.message });
         }
-
-        // Validate the token actually works against a read-only endpoint
-        // before storing it — same "prove it works" pattern as any
-        // credential-entry form should have.
-        const check = await fetch(`https://${oktaDomain}/api/v1/users?limit=1`, {
-          headers: { Authorization: `SSWS ${apiToken}`, Accept: "application/json" },
-        });
         if (!check.ok) {
           return res.status(400).json({ error: "Could not validate this Okta token — check the domain and that the token has read access." });
         }

@@ -31,7 +31,11 @@ export function isPrivateOrReservedIp(ip) {
   if (kind === 6) {
     const lower = ip.toLowerCase();
     if (lower === "::1") return true;                                        // loopback
-    if (lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd")) return true; // link-local + unique-local
+    // fe80::/10 (link-local) spans the first-hextet range fe80-febf, not
+    // just the literal fe80: prefix — a startsWith("fe80:") check alone
+    // misses fe81:: through febf::, e.g. fe90::1, feaa::1.
+    if (/^fe[89ab]/.test(lower)) return true;                                 // fe80::/10 link-local
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;        // fc00::/7 unique-local
     if (lower.startsWith("::ffff:")) return isPrivateOrReservedIp(lower.slice(7)); // IPv4-mapped
     return false;
   }
@@ -50,5 +54,26 @@ export async function assertSafeExternalHost(urlOrHost) {
   catch { throw new Error("Could not resolve that host."); }
   if (isPrivateOrReservedIp(address)) {
     throw new Error("That host resolves to a private or internal address, which isn't allowed.");
+  }
+}
+
+// fetch() with the guard applied to EVERY hop, not just the initial URL.
+// A bare fetch() defaults to following up to 20 redirects, re-resolving DNS
+// at each one with no callback into assertSafeExternalHost — so validating
+// only the caller-supplied URL and then handing it to a normal fetch() is
+// not actually safe: an attacker's server can 302 a validated public host
+// to an internal address (e.g. the cloud-metadata IP) and the redirect gets
+// followed unchecked. This fetches with redirect:"manual" and re-validates
+// each Location before following it itself, capped at a small hop count.
+export async function safeFetch(url, options = {}, maxRedirects = 5) {
+  let current = String(url);
+  for (let hop = 0; ; hop++) {
+    await assertSafeExternalHost(current);
+    const res = await fetch(current, { ...options, redirect: "manual" });
+    const isRedirect = res.status >= 300 && res.status < 400;
+    const location = isRedirect ? res.headers.get("location") : null;
+    if (!location) return res;
+    if (hop >= maxRedirects) throw new Error("Too many redirects.");
+    current = new URL(location, current).toString();
   }
 }

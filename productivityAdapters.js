@@ -5,7 +5,7 @@
 // split as directoryRoutes.js/directoryAdapters.js: this file only holds
 // calls made with an already-obtained token).
 
-import { assertSafeExternalHost } from "./outboundUrlSafety.js";
+import { safeFetch } from "./outboundUrlSafety.js";
 
 const SEVERITY_EMOJI = { critical: "🔴", high: "🟠", medium: "🟡", low: "🔵", info: "⚪" };
 
@@ -103,7 +103,6 @@ function teamsDeepLink(action, refs) {
 }
 
 export async function sendTeamsMessage({ webhookUrl, title, detail, severity, actionable, refs }) {
-  await assertSafeExternalHost(webhookUrl);
   const emoji = SEVERITY_EMOJI[severity] || SEVERITY_EMOJI.info;
   const card = {
     type: "AdaptiveCard",
@@ -122,7 +121,7 @@ export async function sendTeamsMessage({ webhookUrl, title, detail, severity, ac
     ];
   }
 
-  const res = await fetch(webhookUrl, {
+  const res = await safeFetch(webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: card }] }),
