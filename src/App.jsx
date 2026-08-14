@@ -7238,7 +7238,7 @@ function TrustTicker({ messages, color = C.green, interval = 4200 }) {
   const items = messages || [
     "Built and running in production today",
     "Real NVD CVE data — nothing fabricated",
-    "12 compliance frameworks, hundreds of controls",
+    "12 compliance frameworks, including CIS Controls v8.1",
     "AI advises, humans act — always",
   ];
   const [i, setI] = useState(0);
@@ -8380,6 +8380,8 @@ function FaqPage({ onNavigate }) {
       a: "Mastermind AI chat (Starter and up) answers questions grounded entirely in your own account's real data — your posture score, endpoints, recommendations, compliance status — and is upgrade-aware: if you ask about a feature your plan doesn't include, it'll tell you plainly and explain what upgrading would unlock, rather than pretending to show you data it doesn't have. On Guided and Managed vCISO, you can also message your assigned analyst directly from your dashboard." },
     { q: "Can I track more than one company location or domain?",
       a: "Yes — you can register more than one domain for breach monitoring (useful if you operate under multiple brands or regional sites), and you can run more than one assessment on the same account if you need to track distinct departments, locations, or lines of business separately." },
+    { q: "Does ShieldAI connect to the tools my team already uses?",
+      a: "Yes. Connect Jira, Asana, or Trello to sync remediation tasks straight into your team's existing tracker — the exact tickets you send, nothing more. Connect Zoom or Google Meet to schedule an advisor check-in or incident call in one click from Support Center. Both are the same narrowly-scoped, read/write-only-where-you-ask model as every other integration: ShieldAI never reads more than it needs or acts without you explicitly requesting it." },
   ];
   const [openIdx, setOpenIdx] = useState(1);
 
@@ -9010,6 +9012,10 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                 d:"A lightweight, read-only agent checks antivirus, patch status, disk encryption, and more on every device — and cross-checks it against what you told us, flagging disagreements before an auditor does." },
               { icon:"🔗", t:"Vendor risk management",
                 d:"A living registry with automatic reassessment dates by vendor criticality, plus AI that drafts answers to your customers' security questionnaires — grounded in your real program, never guessed." },
+              { icon:"🗒️", t:"Task tracker integrations",
+                d:"Sync remediation work straight into Jira, Asana, or Trello — the exact tickets you send, nothing more." },
+              { icon:"📅", t:"Call scheduling",
+                d:"Connect Zoom or Google Meet and schedule an advisor check-in or incident call in one click, right from Support Center." },
               { icon:"✍️", t:"Policies your team actually signs",
                 d:"Generate a complete policy library, then assign each one for a real, timestamped read-and-acknowledge — the proof an auditor or insurer actually asks for." },
               { icon:"📎", t:"Evidence & audit readiness",
