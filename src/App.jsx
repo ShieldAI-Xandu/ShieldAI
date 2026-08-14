@@ -8407,7 +8407,7 @@ function FaqPage({ onNavigate }) {
 // Shared with the authenticated Support Center's ticket form (SupportCenter,
 // below) so the topic list never drifts between the logged-out and
 // logged-in versions of "contact support."
-const SUPPORT_TOPICS = ["Technical question", "Billing question", "Compliance question", "Sales question", "Something else"];
+const SUPPORT_TOPICS = ["Technical question", "Billing question", "Compliance question", "Endpoint / Agent issue", "Integration issue", "Sales question", "Something else"];
 
 function SupportPage({ onNavigate }) {
   const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
@@ -8739,6 +8739,18 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           <div className="mkt-nav-links">
             <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
+            <button onClick={onOpenAbout}
+              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              About
+            </button>
+            <button onClick={onOpenFaq}
+              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              FAQ
+            </button>
+            <button onClick={onOpenSupport}
+              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              Support
+            </button>
             <button onClick={onOpenInvestor}
               style={{background:"none",border:"none",padding:0,color:cyan,fontSize:13,fontWeight:600,
                 cursor:"pointer",fontFamily:"inherit"}}>
@@ -12631,12 +12643,14 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                               cursor:"pointer",whiteSpace:"nowrap"}}>
                             📊 My Console
                           </button>
+                          <div style={{color:C.textMut,fontSize:10,textAlign:"center",marginTop:-4}}>Quick summary view</div>
                           <button onClick={() => openLatestProgram(a.id)} disabled={opening===a.id}
                             style={{padding:"8px 20px",background:"none",border:`1px solid ${C.borderHi}`,
                               borderRadius:8,color:C.accent,fontSize:12,fontWeight:600,
                               cursor:opening===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
                             {opening===a.id ? "Opening…" : "Open Program →"}
                           </button>
+                          <div style={{color:C.textMut,fontSize:10,textAlign:"center",marginTop:-4}}>Full program & tools</div>
                           <button onClick={() => deleteProgram(complete.id)} disabled={deletingProgram===complete.id}
                             style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
                               borderRadius:8,color:deletingProgram===complete.id?C.textMut:C.red,fontSize:12,fontWeight:600,
@@ -17291,6 +17305,95 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
   );
 }
 
+// Modeled on ProductivityConnectionDetail — the closest analog (single-account
+// OAuth). No dedicated GET /:id endpoint exists for scheduling connections
+// since the list endpoint already returns everything needed (no channels/
+// events to configure, unlike a chat-tool connection), so this takes the
+// connection object directly rather than fetching its own detail.
+function SchedulingConnectionDetail({ connection, onBack }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  if (!connection) {
+    return (
+      <div>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginTop:16,color:C.textSec,fontSize:13}}>This connection no longer exists.</div>
+      </div>
+    );
+  }
+
+  const c = connection;
+  const providerLabel = c.provider === "google_meet" ? "Google Meet" : c.provider === "zoom" ? "Zoom" : c.provider;
+  const statusColor = c.status === "active" ? C.green : C.textMut;
+  const statusLabel = c.status === "active" ? "Connected" : "Revoked";
+
+  async function revoke() {
+    if (!window.confirm(`Revoke this connection? ShieldAI will no longer be able to create ${providerLabel} meetings.`)) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/scheduling/${c.id}/revoke`, { method: "POST" });
+      if (res.ok) onBack(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/scheduling/${c.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status === "active" && (
+            <button onClick={revoke} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amber,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={removeConnection} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.red,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {error && <div style={{marginBottom:14,color:C.red,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+          <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+          <Badge label={statusLabel} color={statusColor}/>
+        </div>
+        <div style={{color:C.textSec,fontSize:13}}>
+          {providerLabel}{c.accountLabel ? ` · ${c.accountLabel}` : ""} · connected {timeAgo(c.connectedAt)}
+        </div>
+      </Card>
+
+      <p style={{color:C.textMut,fontSize:11.5,lineHeight:1.6,margin:0}}>
+        Scoped narrowly on purpose: this connection can only create a meeting when you explicitly
+        request one from Support Center's "Schedule a call" — no calendar reads, no recurring
+        access. Revoke it here at any time; ShieldAI will no longer be able to create meetings on
+        your behalf until you reconnect.
+      </p>
+    </div>
+  );
+}
+
 const TASK_TRACKER_PROVIDER_OPTIONS = [
   { id: "jira", label: "Jira", kind: "oauth" },
   { id: "asana", label: "Asana", kind: "oauth" },
@@ -17583,6 +17686,7 @@ function IntegrationsScreen({ onBack }) {
   const [directoryConnections, setDirectoryConnections] = useState([]);
   const [productivityConnections, setProductivityConnections] = useState([]);
   const [taskTrackerConnections, setTaskTrackerConnections] = useState([]);
+  const [schedulingConnections, setSchedulingConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -17590,25 +17694,27 @@ function IntegrationsScreen({ onBack }) {
   const [showAddDirectory, setShowAddDirectory] = useState(false);
   const [showAddProductivity, setShowAddProductivity] = useState(false);
   const [showAddTaskTracker, setShowAddTaskTracker] = useState(false);
-  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker", id }
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker"|"scheduling", id }
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [wRes, dRes, pRes, tRes] = await Promise.all([
+      const [wRes, dRes, pRes, tRes, sRes] = await Promise.all([
         authFetch(`${API_BASE}/api/integrations`),
         authFetch(`${API_BASE}/api/directory`),
         authFetch(`${API_BASE}/api/productivity`),
         authFetch(`${API_BASE}/api/tasktracker`),
+        authFetch(`${API_BASE}/api/scheduling`),
       ]);
       if (!wRes.ok) throw new Error("Could not load integrations.");
       setIntegrations(await wRes.json());
-      // Directory/productivity/task-tracker connections are newer, tier-gated
-      // endpoints — don't let a 402/404 on any of them block the webhook list
-      // from rendering.
+      // Directory/productivity/task-tracker/scheduling connections are newer,
+      // tier-gated endpoints — don't let a 402/404 on any of them block the
+      // webhook list from rendering.
       setDirectoryConnections(dRes.ok ? await dRes.json() : []);
       setProductivityConnections(pRes.ok ? await pRes.json() : []);
       setTaskTrackerConnections(tRes.ok ? await tRes.json() : []);
+      setSchedulingConnections(sRes.ok ? await sRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -17626,12 +17732,13 @@ function IntegrationsScreen({ onBack }) {
     const directoryPending = params.get("directoryOAuthPending");
     const productivityPending = params.get("productivityOAuthPending");
     const tasktrackerPending = params.get("tasktrackerOAuthPending");
-    const failed = params.get("directoryError") || params.get("productivityError") || params.get("tasktrackerError");
-    const pending = directoryPending || productivityPending || tasktrackerPending;
+    const schedulingPending = params.get("schedulingOAuthPending");
+    const failed = params.get("directoryError") || params.get("productivityError") || params.get("tasktrackerError") || params.get("schedulingError");
+    const pending = directoryPending || productivityPending || tasktrackerPending || schedulingPending;
 
     if (pending || failed) {
-      params.delete("directoryOAuthPending"); params.delete("productivityOAuthPending"); params.delete("tasktrackerOAuthPending");
-      params.delete("directoryError"); params.delete("productivityError"); params.delete("tasktrackerError");
+      params.delete("directoryOAuthPending"); params.delete("productivityOAuthPending"); params.delete("tasktrackerOAuthPending"); params.delete("schedulingOAuthPending");
+      params.delete("directoryError"); params.delete("productivityError"); params.delete("tasktrackerError"); params.delete("schedulingError");
       params.delete("provider"); params.delete("id");
       const qs = params.toString();
       window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
@@ -17640,7 +17747,8 @@ function IntegrationsScreen({ onBack }) {
     if (pending) {
       const finishPath = directoryPending ? "/api/directory/oauth/finish"
         : productivityPending ? "/api/productivity/oauth/slack/finish"
-        : "/api/tasktracker/oauth/finish";
+        : tasktrackerPending ? "/api/tasktracker/oauth/finish"
+        : "/api/scheduling/oauth/finish";
       authFetch(`${API_BASE}${finishPath}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pendingId: pending }),
@@ -17684,12 +17792,21 @@ function IntegrationsScreen({ onBack }) {
       </div>
     );
   }
+  if (selected?.kind === "scheduling") {
+    const c = schedulingConnections.find(x => x.id === selected.id);
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <SchedulingConnectionDetail connection={c} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
 
   const items = [
     ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
     ...directoryConnections.map(c => ({ kind: "directory", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
     ...productivityConnections.map(c => ({ kind: "productivity", id: c.id, sortAt: c.lastNotifiedAt || c.connectedAt })),
     ...taskTrackerConnections.map(c => ({ kind: "tasktracker", id: c.id, sortAt: c.connectedAt })),
+    ...schedulingConnections.map(c => ({ kind: "scheduling", id: c.id, sortAt: c.connectedAt })),
   ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
 
   return (
@@ -17827,6 +17944,29 @@ function IntegrationsScreen({ onBack }) {
                 <Card key={`t:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"tasktracker", id:c.id })}>
                   <div style={{display:"flex",alignItems:"center",gap:14}}>
                     <span style={{fontSize:20}}>🗒️</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                        <Badge label={statusLabel} color={statusColor}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {providerLabel} · connected {timeAgo(c.connectedAt)}
+                      </div>
+                    </div>
+                    <span style={{color:C.accent,fontSize:12,fontWeight:600}}>View →</span>
+                  </div>
+                </Card>
+              );
+            }
+            if (item.kind === "scheduling") {
+              const c = schedulingConnections.find(x => x.id === item.id);
+              const providerLabel = c.provider === "google_meet" ? "Google Meet" : c.provider === "zoom" ? "Zoom" : c.provider;
+              const statusColor = c.status === "active" ? C.green : C.textMut;
+              const statusLabel = c.status === "active" ? "Connected" : "Revoked";
+              return (
+                <Card key={`s:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"scheduling", id:c.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>📅</span>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
@@ -18956,6 +19096,7 @@ function SupportCenter({ onClose, onOpenMastermind }) {
               cursor:submitting?"wait":"pointer"}}>
             {submitting ? "Sending…" : "Submit request"}
           </button>
+          <div style={{color:C.textMut,fontSize:12,marginTop:9}}>We'll reply here, usually within one business day.</div>
         </Card>
 
         <SectionLabel text="Your support requests"/>
@@ -19788,7 +19929,7 @@ export default function ShieldAI() {
               borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer"}}>
             ← Back
           </button>
-          <ThreatIntelSection results={null}/>
+          <ThreatIntelSection results={results}/>
         </div>
       </div>
       </CapabilityContext.Provider>
