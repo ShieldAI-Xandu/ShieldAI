@@ -23,6 +23,8 @@ import { taskSummary, simulateControlChange, currentPosture } from "./taskRoutes
 import { evidenceSummary } from "./evidenceRoutes.js";
 import { complianceSummary } from "./complianceRoutes.js";
 import { trainingSummary, clientTrainingSummary } from "./trainingProgramRoutes.js";
+import { vendorSummary, portfolioOverdueQueue, listVendors } from "./vendorRiskService.js";
+import { clientPhishingSummary, phishingSummary } from "./phishingRoutes.js";
 // The BRIDGE, not complianceFrameworks.js. Same function signatures, but the
 // assessments are now computed by the deep control-mapped modules — so
 // check_compliance answers about ISO 27001 from 93 real Annex A controls with
@@ -35,6 +37,29 @@ import { SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { manualAsText } from "./helpManual.js";
 
 const nowIso = () => new Date().toISOString();
+
+// Policy library & sign-off status — without this, Mastermind could explain
+// the acknowledgment feature from the manual but never confirm whether a
+// client's actual policies have gone out for sign-off or been read. Used by
+// both portfolioSnapshot() and clientSnapshot() below.
+function policySummary(db, ownerUserId) {
+  const docs = (db.data.policyDocs || []).filter(p => p.userId === ownerUserId);
+  const rows = (db.data.policyAcknowledgments || []).filter(r => r.clientUserId === ownerUserId);
+  const acknowledged = rows.filter(r => r.acknowledgedAt).length;
+  return { total: docs.length, assigned: rows.length, acknowledged, pendingSignoff: rows.length - acknowledged };
+}
+
+// Generated-report status — without this, Mastermind could describe what
+// report types exist but never confirm whether this client actually has
+// one, or whether it's reached them yet. Used by both snapshots below.
+function reportsSummary(db, ownerUserId) {
+  const list = (db.data.reports || []).filter(r => r.clientId === ownerUserId);
+  const delivered = list.filter(r => r.deliveredAt).length;
+  return {
+    total: list.length, delivered, undelivered: list.length - delivered,
+    lastGeneratedAt: list.length ? list.map(r => r.createdAt).sort().slice(-1)[0] : null,
+  };
+}
 
 // Build a compact, read-only portfolio snapshot the AI can reason over without
 // blowing the token budget. No secrets, no raw report blobs.
@@ -172,6 +197,10 @@ function portfolioSnapshot(db, depth = "summary") {
         ...(full ? { items: myRecs.slice(-12).map(r => ({ title: r.title, severity: r.severity, status: r.status, origin: r.origin })) } : {}),
       },
       training: clientTrainingSummary(db, u.id, full),
+      vendorRisk: vendorSummary(db, u.id),
+      phishing: clientPhishingSummary(db, u.id),
+      policies: policySummary(db, u.id),
+      reports: reportsSummary(db, u.id),
       ...(full ? { recentActions: actions.filter(a => a.clientUserId === u.id).slice(-10).map(a => ({ action: a.action, detail: a.detail, at: a.at })) } : {}),
     };
   });
@@ -197,6 +226,8 @@ function portfolioSnapshot(db, depth = "summary") {
     evidence: evidenceSummary(db, depth),
     compliance: complianceSummary(db, depth),
     training: trainingSummary(db, depth),
+    vendorRisk: portfolioOverdueQueue(db),
+    phishing: phishingSummary(db),
     recentEvents: events.slice(-20).map(e => ({ client: nameOf(e.ownerUserId), severity: e.severity, type: e.type, message: e.message, at: e.ts || e.at })),
   };
 }
@@ -357,6 +388,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       description: "Read the standalone security-training program status. With no argument, returns a fleet-wide rollup (total learners, assignments, completion rate, overdue). Pass a client id/email to get that client's training detail: learner count, completion rate, average score, overdue learners, and quarters scheduled. Read-only.",
       input_schema: { type: "object", properties: {
         clientIdOrEmail: { type: "string", description: "Optional. If given, returns that client's training detail." },
+      }, required: [] },
+    },
+    {
+      name: "get_vendor_risk",
+      description: "Read third-party vendor risk status. With no argument, returns the fleet-wide overdue/due-soon reassessment queue grouped by client. Pass a client id/email to get that client's full vendor list (name, category, criticality, data access, next reassessment date, review status). Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "Optional. If given, returns that client's vendor list." },
       }, required: [] },
     },
   ];
@@ -689,6 +727,19 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
           };
         }
         return trainingSummary(db, "full");
+      }
+      case "get_vendor_risk": {
+        if (input.clientIdOrEmail) {
+          const u = resolveClient(input.clientIdOrEmail);
+          if (!u) return { error: "Client not found." };
+          return { client: u.companyName || u.email, vendors: listVendors(db, u.id) };
+        }
+        const queue = portfolioOverdueQueue(db);
+        if (allowedClientIds) {
+          // Roll up only this analyst's own clients rather than the platform.
+          return { assignedClients: [...allowedClientIds].length, overdueQueue: queue.filter(q => allowedClientIds.has(q.userId)) };
+        }
+        return { overdueQueue: queue };
       }
       case "list_recommendations": {
         let recs = (db.data.recommendations || []);
@@ -1137,6 +1188,25 @@ Limit findings to 6 and recommendations to 5.`;
         completed: assigns.filter(a => a.status === "completed").length,
         quartersScheduled: (db.data.trainingQuarters || []).filter(q => q.clientUserId === userId).length,
       };
+      // Same capability that gates campaign creation (phishingRoutes.js) —
+      // a Starter client's single free trial campaign isn't reflected here,
+      // matching what the client's own phishing tab actually unlocks.
+      snap.phishing = clientPhishingSummary(db, userId);
+    }
+
+    // ── Vendor risk registry (Starter+) ─────────────────────────
+    if (has("vendorRegistry")) {
+      snap.vendorRisk = vendorSummary(db, userId);
+    }
+
+    // ── Policy library & sign-off (Starter+) ────────────────────
+    if (has("createPolicies")) {
+      snap.policies = policySummary(db, userId);
+    }
+
+    // ── Generated reports (Growth+) ──────────────────────────────
+    if (has("reportsAccess")) {
+      snap.reports = reportsSummary(db, userId);
     }
 
     // ── Analyst support (Guided+) ───────────────────────────────
