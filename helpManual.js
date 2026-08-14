@@ -508,7 +508,10 @@ export const HELP_MANUAL = [
           "To add the Training Delivery add-on ($40/mo, Starter only — Growth and above already include it), click \"Add\" next to it.",
           "Downgrades aren't self-serve today — contact your ShieldAI admin to change to a lower tier.",
         ],
-        notes: ["Anywhere in the app that a feature is locked for your tier, an upgrade prompt pops up automatically telling you exactly what plan or add-on unlocks it and for how much."],
+        notes: [
+          "Anywhere in the app that a feature is locked for your tier, an upgrade prompt pops up automatically telling you exactly what plan or add-on unlocks it and for how much.",
+          "If self-serve checkout, upgrades, or the billing portal aren't available yet for your account, you'll see a message to contact your ShieldAI admin instead — that's expected while billing is being finalized for your account, not an error.",
+        ],
       },
     ],
   },

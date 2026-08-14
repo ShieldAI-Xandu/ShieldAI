@@ -60,7 +60,7 @@ import { registerTaskRoutes } from "./taskRoutes.js";
 // "verified via runtime smoke test", which cannot have been true through HTTP
 // while the route was unreachable. Registering it makes that testable.
 import { registerEvidenceRoutes } from "./evidenceRoutes.js";
-import { registerPortfolioRoutes } from "./portfolioRoutes.js";
+import { registerPortfolioRoutes, recordPostureSnapshot } from "./portfolioRoutes.js";
 import { registerSupportRoutes } from "./supportRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
@@ -1211,6 +1211,7 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
   }
 
   program.status = "complete";
+  recordPostureSnapshot(db, program.userId, posture.postureScore, posture.postureLevel);
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }

@@ -268,61 +268,8 @@ export function getFramework(id) {
   return FRAMEWORKS.find(f => f.id === id) || null;
 }
 
-/** Frameworks a client can actually select. Planned ones are never selectable. */
-export function selectableFrameworks() {
-  return FRAMEWORKS.filter(f => f.depth !== DEPTH.PLANNED);
-}
-
-export function frameworksByDepth(depth) {
-  return FRAMEWORKS.filter(f => f.depth === depth);
-}
-
 /** Does this framework have a real, computed assessment function? */
 export function isControlMapped(id) {
   const f = getFramework(id);
   return !!(f && f.depth === DEPTH.CONTROL_MAPPED && typeof f.assess === "function");
-}
-
-/**
- * Run the control-mapped assessments for the frameworks a client selected.
- * Returns only frameworks we can genuinely assess; the AI-assisted ones are
- * handled by the generator, and planned ones are unreachable by construction.
- */
-export function assessSelected(frameworkIds = [], checklistAnswers = {}, opts = {}) {
-  const out = {};
-  for (const id of frameworkIds) {
-    const f = getFramework(id);
-    if (f && f.depth === DEPTH.CONTROL_MAPPED && typeof f.assess === "function") {
-      out[id] = f.assess(checklistAnswers, opts);
-    }
-  }
-  return out;
-}
-
-/** What we can honestly say publicly about framework coverage. */
-export function coverageSummary() {
-  const mapped = frameworksByDepth(DEPTH.CONTROL_MAPPED);
-  const ai = frameworksByDepth(DEPTH.AI_ASSISTED);
-  const planned = frameworksByDepth(DEPTH.PLANNED);
-  return {
-    controlMapped: mapped.length,
-    aiAssisted: ai.length,
-    planned: planned.length,
-    total: mapped.length + ai.length,
-    // The claim we can actually defend in a diligence conversation. Built from
-    // the registry rather than typed into a slide, so it cannot drift from what
-    // the code actually does — if someone demotes a framework, the claim moves
-    // with it. Clauses are omitted when their count is zero: "0 more on the
-    // roadmap" is worse than saying nothing.
-    marketingClaim: [
-      `${mapped.length} frameworks with full control-level mapping`,
-      ai.length ? `${ai.length} with AI-assisted gap analysis` : null,
-      planned.length ? `${planned.length} more on the roadmap` : null,
-    ].filter(Boolean).join(", ") + ".",
-    names: {
-      controlMapped: mapped.map(f => f.name),
-      aiAssisted: ai.map(f => f.name),
-      planned: planned.map(f => f.name),
-    },
-  };
 }

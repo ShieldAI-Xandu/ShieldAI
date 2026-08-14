@@ -85,13 +85,6 @@ const MASTERMIND_ENGINES = {
               specialty: "Tool recommendations, training & reporting" },
 };
 
-// Maps a real (internal) provider id to its customer-facing engine role.
-function engineForProvider(provider) {
-  if (provider === "gemini") return "intel";
-  if (provider === "openai" || provider === "gpt4") return "advisory";
-  return "analyst";
-}
-
 // Task → model routing rules. Mirrors server.js's STEP_PROVIDER — kept in sync
 // manually since this table and that one live in different processes. Only
 // "intake" is ever actually passed to the frontend's callAI() below (every
@@ -1183,7 +1176,7 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
           <h2 style={{color:C.red,marginBottom:8}}>Generation Failed</h2>
           <p style={{color:C.textSec,fontSize:14}}>{error}</p>
           <p style={{color:C.textMut,fontSize:12,marginTop:16}}>
-            Check that the backend server (node server.js) is running on port 3001.
+            Please try again, or contact support if this keeps happening.
           </p>
         </div>
       </div>
@@ -1198,6 +1191,7 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
       <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",
         justifyContent:"center",fontFamily:"Inter,system-ui,sans-serif",padding:24}}>
         <div style={{width:"100%",maxWidth:420,textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.textMut,marginBottom:12}}>Step 4 of 4 — Building Your Program</div>
           <div style={{fontSize:52,marginBottom:20,animation:"spin 4s linear infinite"}}>⚙️</div>
           <h2 style={{color:C.text,marginBottom:8,fontSize:22}}>Scoring Your Assessment</h2>
           <p style={{color:C.textSec,fontSize:14}}>
@@ -1215,6 +1209,7 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",
       justifyContent:"center",fontFamily:"Inter,system-ui,sans-serif",padding:24}}>
       <div style={{width:"100%",maxWidth:520,textAlign:"center"}}>
+        <div style={{fontSize:11,color:C.textMut,marginBottom:12}}>Step 4 of 4 — Building Your Program</div>
         <div style={{fontSize:52,marginBottom:20,animation:"spin 4s linear infinite"}}>⚙️</div>
         <h2 style={{color:C.text,marginBottom:8,fontSize:22}}>Mastermind Is Building Your Security Program</h2>
         <p style={{color:C.textSec,marginBottom:32,fontSize:14}}>
@@ -1592,92 +1587,6 @@ function WorkflowsSection({ results }) {
   );
 }
 
-// SUPERSEDED by ComplianceWorkspace.jsx and no longer routed.
-//
-// This rendered `results.compliance.frameworks` — prose the AI wrote during
-// program generation — which was the only compliance view a client ever saw
-// while the deterministic engine's 624 cited controls went unrendered. The
-// workspace now reads /api/compliance/* directly.
-//
-// Kept for reference until the AI-generated program output is reworked; it is
-// not imported anywhere. Delete once that's settled.
-function ComplianceSection({ results }) {
-  const frames = results?.compliance?.frameworks || [];
-
-  // Detect a CIS Controls framework and pull out its Implementation Group
-  // (the backend names it e.g. "CIS Controls v8.1 (IG1)").
-  function cisInfo(name = "") {
-    const isCIS = /\bCIS\b/i.test(name);
-    if (!isCIS) return null;
-    const m = name.match(/\b(IG[123])\b/i);
-    return { ig: m ? m[1].toUpperCase() : null };
-  }
-  const IG_TAGLINE = {
-    IG1: "Essential cyber hygiene",
-    IG2: "Risk-based safeguards",
-    IG3: "Full control set",
-  };
-
-  return (
-    <div>
-      <SectionLabel text="Compliance Framework Analysis"/>
-      {frames.map((f,i)=>{
-        const cis = cisInfo(f.name);
-        return (
-        <Card key={i} style={{marginBottom:14}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-            <div>
-              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{color:C.text,fontWeight:700,fontSize:16}}>{safeText(f.name)}</span>
-                {cis?.ig && (
-                  <span title={`CIS Controls v8.1 — ${IG_TAGLINE[cis.ig]||""}`}
-                    style={{display:"inline-flex",alignItems:"center",gap:5,
-                      padding:"3px 9px",borderRadius:999,
-                      background:`${C.purple}1F`,border:`1px solid ${C.purple}66`,
-                      color:C.purple,fontSize:11,fontWeight:700,letterSpacing:0.4}}>
-                    🛈 {cis.ig}
-                    <span style={{color:C.purple,opacity:0.8,fontWeight:500}}>
-                      · {IG_TAGLINE[cis.ig]||""}
-                    </span>
-                  </span>
-                )}
-              </div>
-              <div style={{marginTop:4}}><Badge label={f.applicability}/></div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:28,fontWeight:700,color:
-                f.overallScore>=80?C.green:f.overallScore>=50?C.amber:C.red}}>
-                {f.overallScore}%
-              </div>
-              <ProgressBar value={f.overallScore}
-                color={f.overallScore>=80?C.green:f.overallScore>=50?C.amber:C.red}/>
-            </div>
-          </div>
-          {f.certificationPath && (
-            <div style={{marginBottom:12,padding:"8px 12px",background:`${C.accent}11`,
-              borderRadius:6,color:C.accent,fontSize:12}}>
-              📋 Path to certification: {f.certificationPath}
-            </div>
-          )}
-          <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            {(f.gaps||[]).map((g,j)=>(
-              <div key={j} style={{display:"flex",gap:12,padding:"10px 14px",
-                background:C.surface,borderRadius:8,alignItems:"flex-start"}}>
-                <Badge label={g.status}/>
-                <div style={{flex:1}}>
-                  <div style={{color:C.text,fontSize:13,fontWeight:600}}>{g.control}</div>
-                  <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{g.remediation}</div>
-                </div>
-                <Badge label={g.priority}/>
-              </div>
-            ))}
-          </div>
-        </Card>
-        );
-      })}
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────
 //  BREACH MONITORING — company domain card
@@ -8768,22 +8677,27 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
       out:"Ongoing, not a one-time report" },
   ];
 
+  // `action` (not the `cta` label) drives the click handler below — decoupled
+  // so paid-tier copy can say something other than the literal string
+  // "Start free" without silently breaking routing. Every tier still starts
+  // with the same free assessment (nothing here is a paid checkout), so
+  // `action` only ever needs two values.
   const tiers = [
     { name:"Free", tag:"Get started", price:"$0/mo",
       points:["Security assessment & NIST/CIS posture score","See exactly where you stand today","Upgrade anytime to build your program"],
-      cta:"Start free" },
+      cta:"Start free", action:"assessment" },
     { name:"Starter", tag:"Build your program", price:"$159/mo",
       points:["Multiple assessments & full program builder","Up to 6 policies with employee sign-off tracking","Vendor risk registry & compliance calendar","AI-recommended training plan + 1 free phishing test","5 monitored endpoints","Full training delivery available as a $40/mo add-on"],
-      cta:"Start free" },
+      cta:"Start with a free assessment →", action:"assessment" },
     { name:"Growth", tag:"Most popular", featured:true, price:"$349/mo",
       points:["Everything in Starter","Real threat intel + AI-answered vendor questionnaires","Employee training delivery included","5 compliance frameworks, evidence & workflows","Connect your security tools, directory, and chat apps","Up to 10 policies, 25 endpoints","Full downloads & exports"],
-      cta:"Start free" },
+      cta:"Start with a free assessment →", action:"assessment" },
     { name:"Guided", tag:"Expert-reviewed", price:"$699/mo",
       points:["Everything in Growth","Periodic engineer review, including flagged vendor answers","10 compliance frameworks & scheduled check-ins","Up to 100 endpoints"],
-      cta:"Start free" },
+      cta:"Start with a free assessment →", action:"assessment" },
     { name:"Managed vCISO", tag:"Full service", price:"$1,950/mo",
       points:["A ShieldAI engineer runs your program end-to-end, including vendor management","Unlimited endpoints & full agent access","All compliance frameworks","Client-facing Mastermind Q&A","Still below a human-only vCISO retainer"],
-      cta:"Contact us" },
+      cta:"Contact us", action:"contact" },
   ];
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
@@ -9230,7 +9144,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   </div>
                 ))}
               </div>
-              <button onClick={()=> t.cta==="Start free" ? onEnterApp() : document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
+              <button onClick={()=> t.action==="assessment" ? onEnterApp() : document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}
                 style={{width:"100%",padding:"11px",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",
                   background:t.featured?`linear-gradient(135deg,${cyan},${C.accentDm})`:"none",
                   color:t.featured?deep:ink,border:t.featured?"none":`1px solid ${line}`}}>
@@ -9355,75 +9269,6 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             <span style={{fontSize:12,color:dim}}>© 2026 Xandu Ltd</span>
           </div>
         </Section>
-      </div>
-    </div>
-  );
-}
-
-function Landing({ onStart }) {
-  const features = [
-    { icon:"🧠", title:"Mastermind AI", desc:"Three specialized agents — risk & policy, threat intel, and executive reporting — every output human-reviewed." },
-    { icon:"📋", title:"Complete Security Program", desc:"Priorities, policies, workflows, compliance mapping — all in one customized package." },
-    { icon:"🔍", title:"Live Threat Intelligence", desc:"Real-time CVE tracking, dark web monitoring, and industry-specific attack vector analysis." },
-    { icon:"✅", title:"Compliance Frameworks", desc:"Automatic gap analysis for HIPAA, PCI-DSS, SOC2, GDPR, CMMC, and more." },
-    { icon:"🎓", title:"Awareness Training", desc:"AI-generated training modules, phishing simulations, and quizzes for your team." },
-    { icon:"📊", title:"Executive Reporting", desc:"Board-ready CISO reports with risk scores, ROI analysis, and prioritized roadmaps." },
-  ];
-
-  return (
-    <div style={{minHeight:"100vh",background:C.bg,
-      fontFamily:"Inter,system-ui,sans-serif",overflowX:"hidden"}}>
-      {/* Nav */}
-      <div style={{padding:"16px 40px",borderBottom:`1px solid ${C.border}`,
-        display:"flex",alignItems:"center",gap:12,background:C.surface}}>
-        <ShieldLockup logoSize={22} textSize={16} ink={C.text}/>
-        <span style={{fontSize:11,color:C.textSec,letterSpacing:2}}>VIRTUAL CISO</span>
-        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
-          <span style={{fontSize:11,color:C.purple,
-            padding:"3px 10px",borderRadius:20,background:`${C.purple}15`}}>🧠 Mastermind</span>
-        </div>
-      </div>
-
-      {/* Hero */}
-      <div style={{maxWidth:900,margin:"0 auto",padding:"80px 40px 60px",textAlign:"center"}}>
-        <div style={{display:"inline-block",padding:"6px 18px",borderRadius:20,
-          background:`${C.accent}15`,border:`1px solid ${C.accent}33`,
-          color:C.accent,fontSize:12,fontWeight:600,letterSpacing:1.5,marginBottom:24}}>
-          POWERED BY CLAUDE · GEMINI · GPT-4O
-        </div>
-        <h1 style={{fontSize:52,fontWeight:800,lineHeight:1.1,margin:"0 0 22px",
-          background:`linear-gradient(135deg,${C.text},${C.accent})`,
-          WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
-          Your AI-Powered<br/>Chief Information Security Officer
-        </h1>
-        <p style={{fontSize:18,color:C.textSec,lineHeight:1.75,margin:"0 0 40px",maxWidth:620,
-          marginLeft:"auto",marginRight:"auto"}}>
-          Enterprise-grade cybersecurity programs for small businesses.
-          Three AI models working in concert to protect what you've built.
-        </p>
-        <button onClick={onStart}
-          style={{padding:"18px 52px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-            color:C.bg,border:"none",borderRadius:12,fontSize:17,fontWeight:700,
-            cursor:"pointer",boxShadow:`0 0 60px ${C.accent}44`,letterSpacing:0.5}}>
-          Start Free Assessment →
-        </button>
-        <div style={{marginTop:14,color:C.textMut,fontSize:13}}>
-          No credit card required · 5 minute intake · Full program generated in seconds
-        </div>
-      </div>
-
-      {/* Features */}
-      <div style={{maxWidth:1000,margin:"0 auto",padding:"0 40px 80px"}}>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
-          {features.map((f,i)=>(
-            <div key={i} style={{padding:"22px",background:C.card,
-              border:`1px solid ${C.border}`,borderRadius:12}}>
-              <div style={{fontSize:28,marginBottom:12}}>{f.icon}</div>
-              <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:8}}>{safeText(f.title)}</div>
-              <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{f.desc}</p>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -12707,10 +12552,12 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
         <div style={{display:"flex",alignItems:"flex-start",gap:16,marginBottom:28}}>
           <div style={{flex:1}}>
             <h1 style={{fontSize:26,fontWeight:700,margin:"0 0 6px",color:C.text}}>
-              Welcome back{user.companyName ? `, ${user.companyName}` : ""}
+              {assessments.length === 0 ? "Welcome" : "Welcome back"}{user.companyName ? `, ${user.companyName}` : ""}
             </h1>
             <p style={{color:C.textSec,fontSize:14,margin:0}}>
-              Your saved security assessments and programs.
+              {assessments.length === 0
+                ? "Let's run your first security assessment."
+                : "Your saved security assessments and programs."}
             </p>
           </div>
           <button onClick={onNewAssessment}
@@ -20028,15 +19875,6 @@ export default function ShieldAI() {
     );
   }
 
-  if (phase === "landing") {
-    return (
-      <div>
-        <TopBar/>
-        <Landing onStart={() => setPhase("intake")}/>
-      </div>
-    );
-  }
-
   if (phase === "intake") {
     return (
       <div style={{height:"100vh",display:"flex",flexDirection:"column",
@@ -20045,7 +19883,7 @@ export default function ShieldAI() {
         <div style={{padding:"12px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
           display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontWeight:600,color:C.text}}>Security Assessment</span>
-          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 1 of 3 — Intake Interview</span>
+          <span style={{fontSize:11,color:C.textSec,marginLeft:8}}>Step 1 of 4 — Intake Interview</span>
           <button onClick={reset} style={{marginLeft:"auto",padding:"5px 12px",background:"none",
             border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:11,cursor:"pointer"}}>
             ← Back
