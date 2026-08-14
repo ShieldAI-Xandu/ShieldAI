@@ -40,6 +40,8 @@ function redirectUriFor(provider) {
   return `${publicAppUrl()}/api/tasktracker/oauth/${provider}/callback`;
 }
 
+const PROVIDER_LABELS = { jira: "Jira", asana: "Asana" };
+
 const OAUTH_PROVIDERS = {
   jira: {
     authorizeUrl: "https://auth.atlassian.com/authorize",
@@ -165,7 +167,7 @@ export function registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClien
       const cfg = OAUTH_PROVIDERS[provider];
       if (!cfg) return res.status(400).json({ error: "Unknown task tracker provider." });
       if (!cfg.clientId() || !cfg.clientSecret()) {
-        return res.status(500).json({ error: `${provider} isn't configured on this server yet.` });
+        return res.status(500).json({ error: `${PROVIDER_LABELS[provider] || provider} isn't configured on this server yet.` });
       }
       sweepStates();
       const state = randomUUID();

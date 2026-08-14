@@ -702,7 +702,7 @@ app.post("/api/claude", requireAuth, aiLimiter, async (req, res) => {
     }
   } catch (err) {
     console.error("Claude proxy error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "The AI request failed. Please try again." });
   }
 });
 
@@ -779,7 +779,8 @@ app.post("/api/assessments", requireAuth, async (req, res) => {
     await db.write();
     res.json({ id });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Assessment save error:", err.message);
+    res.status(500).json({ error: "Could not save your assessment. Please try again." });
   }
 });
 
@@ -1334,7 +1335,7 @@ Formatting rules:
     res.json(record);
   } catch (err) {
     console.error("Policy generation error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Could not generate this policy. Please try again." });
   }
 });
 
