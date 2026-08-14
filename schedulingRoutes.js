@@ -200,26 +200,35 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClient
     gate.capability("integrations"),
     gate.limit("integrations", counters.integrations),
     async (req, res) => {
-      const pendingId = String(req.body?.pendingId || "");
-      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
-      const grant = consumePendingGrant("scheduling", pendingId);
-      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+      try {
+        const pendingId = String(req.body?.pendingId || "");
+        if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+        const grant = consumePendingGrant("scheduling", pendingId);
+        if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
 
-      const connection = {
-        id: randomUUID(),
-        ownerUserId: req.userId,
-        provider: grant.provider, kind: "oauth",
-        label: PROVIDER_LABELS[grant.provider],
-        accountLabel: grant.accountLabel,
-        status: "active",
-        encryptedSecret: encryptSecret(grant.refreshToken),
-        connectedAt: nowIso(),
-        connectedBy: req.userId,
-        revokedAt: null,
-      };
-      db.data.schedulingConnections.push(connection);
-      await db.write();
-      res.json({ ok: true, id: connection.id, provider: connection.provider });
+        const connection = {
+          id: randomUUID(),
+          ownerUserId: req.userId,
+          provider: grant.provider, kind: "oauth",
+          label: PROVIDER_LABELS[grant.provider],
+          accountLabel: grant.accountLabel,
+          status: "active",
+          encryptedSecret: encryptSecret(grant.refreshToken),
+          connectedAt: nowIso(),
+          connectedBy: req.userId,
+          revokedAt: null,
+        };
+        db.data.schedulingConnections.push(connection);
+        await db.write();
+        res.json({ ok: true, id: connection.id, provider: connection.provider });
+      } catch (err) {
+        // See directoryRoutes.js's identical comment — encryptSecret() can
+        // throw synchronously (missing/malformed CREDENTIAL_ENCRYPTION_KEY),
+        // which unguarded here would crash the whole server via
+        // server.js's unhandledRejection -> process.exit(1) handler.
+        console.error("Scheduling OAuth finish error:", err.message);
+        res.status(500).json({ error: "Could not complete this connection. Try again, or contact support if this keeps happening." });
+      }
     });
 
   // The one write action this whole file exists for.

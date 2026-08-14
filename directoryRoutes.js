@@ -348,30 +348,41 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
     gate.capability("integrations"),
     gate.limit("integrations", counters.integrations),
     async (req, res) => {
-      const pendingId = String(req.body?.pendingId || "");
-      if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
-      const grant = consumePendingGrant("directory", pendingId);
-      if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
+      try {
+        const pendingId = String(req.body?.pendingId || "");
+        if (!pendingId) return res.status(400).json({ error: "Missing pendingId." });
+        const grant = consumePendingGrant("directory", pendingId);
+        if (!grant) return res.status(410).json({ error: "This connection attempt has expired or already been used — try connecting again." });
 
-      const connection = {
-        id: randomUUID(),
-        ownerUserId: req.userId,
-        provider: grant.provider,
-        kind: "oauth",
-        label: PROVIDER_LABELS[grant.provider],
-        tenantOrDomain: grant.tenantOrDomain,
-        status: "active",
-        encryptedSecret: encryptSecret(grant.refreshToken),
-        scopes: DIRECTORY_PROVIDERS[grant.provider].scopes,
-        connectedAt: nowIso(),
-        connectedBy: req.userId,
-        lastSyncAt: null,
-        lastSyncSummary: null,
-        revokedAt: null,
-      };
-      db.data.directoryConnections.push(connection);
-      await db.write();
-      res.json({ ok: true, id: connection.id, provider: connection.provider });
+        const connection = {
+          id: randomUUID(),
+          ownerUserId: req.userId,
+          provider: grant.provider,
+          kind: "oauth",
+          label: PROVIDER_LABELS[grant.provider],
+          tenantOrDomain: grant.tenantOrDomain,
+          status: "active",
+          encryptedSecret: encryptSecret(grant.refreshToken),
+          scopes: DIRECTORY_PROVIDERS[grant.provider].scopes,
+          connectedAt: nowIso(),
+          connectedBy: req.userId,
+          lastSyncAt: null,
+          lastSyncSummary: null,
+          revokedAt: null,
+        };
+        db.data.directoryConnections.push(connection);
+        await db.write();
+        res.json({ ok: true, id: connection.id, provider: connection.provider });
+      } catch (err) {
+        // Was previously unguarded: encryptSecret() throws synchronously if
+        // CREDENTIAL_ENCRYPTION_KEY is missing/malformed, which — inside an
+        // async handler with no catch — became an unhandled rejection, and
+        // server.js's unhandledRejection handler calls process.exit(1),
+        // crashing the whole app for every user over one client's OAuth
+        // connect attempt.
+        console.error("Directory OAuth finish error:", err.message);
+        res.status(500).json({ error: "Could not complete this connection. Try again, or contact support if this keeps happening." });
+      }
     });
 
   // ── Okta: pasted read-only API token, no redirect ───────────────

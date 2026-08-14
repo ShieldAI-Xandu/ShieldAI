@@ -83,6 +83,23 @@ Set in Railway's Variables tab, not `.env` (which is gitignored):
 `SHIELDAI_DEV_MODE`, `STRIPE_*`. JWT secret has no hardcoded fallback — it should throw
 clearly if unset.
 
+**`CREDENTIAL_ENCRYPTION_KEY`** — required for every OAuth-based integration
+(directory, Slack, task-tracker, scheduling). Missing/malformed makes
+`credentialCrypto.js` throw at first use; every OAuth `/finish` route catches
+that now, so a client sees a clean error instead of the whole app crashing —
+but the feature is dead without it. Generate with
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+Confirm this is actually set in Railway, not just documented — full details
+in `SECRETS_RUNBOOK.md`.
+
+Per-provider OAuth app credentials (each integration degrades to a clear
+"isn't configured on this server yet" error if unset, not a crash) — see
+`INTEGRATIONS_SETUP.md` for the registration steps: `MS_GRAPH_CLIENT_ID` /
+`MS_GRAPH_CLIENT_SECRET`, `GOOGLE_WORKSPACE_CLIENT_ID` /
+`GOOGLE_WORKSPACE_CLIENT_SECRET`, `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET`,
+`SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`, `JIRA_CLIENT_ID` /
+`JIRA_CLIENT_SECRET`, `ASANA_CLIENT_ID` / `ASANA_CLIENT_SECRET`.
+
 ## Test accounts
 - Admin: `dbrooks@xandultd.com` (auto-promoted via `ADMIN_EMAIL`)
 - Analyst: `analyst@xandultd.com`
