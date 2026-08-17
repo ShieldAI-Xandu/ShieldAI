@@ -7056,7 +7056,7 @@ function Dashboard({ assessment, results, onReset }) {
 
 
   return (
-    <div style={{display:"flex",height:"100vh",background:C.bg,
+    <div style={{display:"flex",height:"100%",background:C.bg,
       fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
 
       {/* Sidebar */}
