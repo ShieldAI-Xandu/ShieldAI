@@ -31,6 +31,10 @@
 import { randomUUID } from "crypto";
 import { computePostureScore } from "./riskEngine.js";
 import { evaluateAllFrameworks } from "./complianceBridge.js";
+import { listVendors } from "./vendorRiskService.js";
+import { clientPhishingSummary } from "./phishingRoutes.js";
+import { cachedDarkweb } from "./darkwebService.js";
+import { cachedExposure as cachedCveExposure } from "./cveService.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -90,6 +94,8 @@ function actionsFor(db, clientUserId) {
   );
 }
 
+const SEV_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+
 // Latest posture report per host for one client (agents report repeatedly).
 function endpointsFor(db, ownerUserId) {
   const agents = (db.data.agents || []).filter(
@@ -106,6 +112,17 @@ function endpointsFor(db, ownerUserId) {
     const warns = checks.filter((c) => c.status === "warn").length;
     const posture =
       fails > 0 ? "at_risk" : warns > 0 ? "needs_attention" : "healthy";
+    // Specific failing/warning checks, worst-severity first — the detail an
+    // auditor (or the client) actually needs, not just a count.
+    const issues = checks
+      .filter((c) => c.status === "fail" || c.status === "warn")
+      .sort((a, b) => (SEV_ORDER[b.severity] ?? 0) - (SEV_ORDER[a.severity] ?? 0))
+      .map((c) => ({
+        title: c.title || c.id,
+        status: c.status,
+        severity: c.severity || "info",
+        detail: c.detail || null,
+      }));
     return {
       hostname: agent.hostname,
       os: agent.os,
@@ -114,8 +131,66 @@ function endpointsFor(db, ownerUserId) {
       failCount: fails,
       warnCount: warns,
       checkCount: checks.length,
+      issues,
     };
   });
+}
+
+// Active vendors for one client, rolled up by criticality and review status.
+function vendorRiskFor(db, clientUserId) {
+  const vendors = listVendors(db, clientUserId).filter((v) => v.status !== "offboarded");
+  const byCriticality = vendors.reduce((m, v) => {
+    m[v.criticality] = (m[v.criticality] || 0) + 1;
+    return m;
+  }, {});
+  const attention = vendors
+    .filter((v) => v.reviewStatus === "overdue" || v.reviewStatus === "due_soon")
+    .slice(0, 10)
+    .map((v) => ({
+      name: v.name,
+      criticality: v.criticality,
+      reviewStatus: v.reviewStatus,
+      nextReassessmentDue: v.nextReassessmentDue,
+    }));
+  return {
+    total: vendors.length,
+    byCriticality,
+    overdue: vendors.filter((v) => v.reviewStatus === "overdue").length,
+    dueSoon: vendors.filter((v) => v.reviewStatus === "due_soon").length,
+    attention,
+  };
+}
+
+// Policy acknowledgment rows for one client, rolled up per policy. Mirrors
+// policyAcknowledgmentRoutes.js's summarizeByPolicy — kept as a local copy
+// per this codebase's convention of each route file owning its own copy
+// rather than cross-importing route internals (see that file's comment on
+// resolveClientScope for the same pattern).
+function policyAcksFor(db, clientUserId) {
+  const rows = (db.data.policyAcknowledgments || []).filter(
+    (r) => r.clientUserId === clientUserId,
+  );
+  const byPolicy = new Map();
+  for (const r of rows) {
+    if (!byPolicy.has(r.policyId)) {
+      byPolicy.set(r.policyId, {
+        policyId: r.policyId,
+        policyName: r.policyName,
+        assigned: 0,
+        acknowledged: 0,
+        pending: 0,
+      });
+    }
+    const b = byPolicy.get(r.policyId);
+    b.assigned++;
+    if (r.acknowledgedAt) b.acknowledged++;
+    else b.pending++;
+  }
+  return {
+    totalAssigned: rows.length,
+    totalAcknowledged: rows.filter((r) => r.acknowledgedAt).length,
+    byPolicy: [...byPolicy.values()],
+  };
 }
 
 // Fixed a real bug here: this used to read db.data.trainingLearners (wrong
@@ -257,6 +332,13 @@ export function gatherReportData(db, clientId) {
     endpoints: endpointsFor(db, clientId),
     training: trainingFor(db, clientId),
     actions: actionsFor(db, clientId),
+    vendorRisk: vendorRiskFor(db, clientId),
+    phishing: clientPhishingSummary(db, clientId),
+    // Cached snapshots only (both are refreshed elsewhere on a schedule/on
+    // demand) — a report must never trigger a live HIBP/NVD call itself.
+    darkweb: cachedDarkweb(db, clientId),
+    threatIntel: cachedCveExposure(db, clientId),
+    policyAcks: policyAcksFor(db, clientId),
   };
 }
 
@@ -406,6 +488,156 @@ function postureBlock(d) {
   }</p>`;
 }
 
+function endpointsDetailBlock(endpoints) {
+  if (!endpoints.length) {
+    return `<p class="meta">No monitored endpoints enrolled yet.</p>`;
+  }
+  const healthy = endpoints.filter((e) => e.posture === "healthy").length;
+  const summary = `<p class="meta">${endpoints.length} monitored endpoint(s): ${healthy} healthy, ${
+    endpoints.length - healthy
+  } need attention.</p>`;
+  const withIssues = endpoints.filter((e) => e.issues.length);
+  if (!withIssues.length) return summary;
+  const rows = withIssues
+    .flatMap((e) =>
+      e.issues.slice(0, 5).map(
+        (i) => `<tr>
+        <td>${esc(e.hostname)}</td>
+        <td>${esc(i.title)}</td>
+        <td>${esc(i.severity)}</td>
+        <td>${esc(i.status)}</td>
+      </tr>`,
+      ),
+    )
+    .join("");
+  return `${summary}<table class="content">
+    <tr><th>Host</th><th>Issue</th><th>Severity</th><th>Status</th></tr>
+    ${rows}
+  </table>`;
+}
+
+function vendorRiskBlock(v) {
+  if (!v || !v.total) {
+    return `<div class="note">No vendors on file yet. Add third-party vendors to track their risk and review cadence.</div>`;
+  }
+  const byCrit = ["critical", "high", "medium", "low"]
+    .map((k) => (v.byCriticality[k] ? `${v.byCriticality[k]} ${k}` : null))
+    .filter(Boolean)
+    .join(", ");
+  const attentionTable = v.attention.length
+    ? `<table class="content">
+        <tr><th>Vendor</th><th>Criticality</th><th>Review</th><th>Due</th></tr>
+        ${v.attention
+          .map(
+            (a) => `<tr>
+          <td>${esc(a.name)}</td>
+          <td>${esc(a.criticality)}</td>
+          <td>${esc(String(a.reviewStatus).replace("_", " "))}</td>
+          <td>${fmtDate(a.nextReassessmentDue)}</td>
+        </tr>`,
+          )
+          .join("")}
+      </table>`
+    : "";
+  return `
+  <div>
+    ${kpi(v.total, "Vendors tracked")}
+    ${kpi(v.overdue, "Reviews overdue")}
+    ${kpi(v.dueSoon, "Due soon")}
+  </div>
+  <p class="meta">By criticality: ${esc(byCrit || "—")}.</p>
+  ${attentionTable}`;
+}
+
+function phishingBlock(p) {
+  if (!p || !p.campaignsRun) {
+    return `<div class="note">No phishing simulation campaigns run yet.</div>`;
+  }
+  return `
+  <div>
+    ${kpi(p.campaignsRun, "Campaigns run")}
+    ${kpi(pct(p.overallClickRatePct), "Click rate")}
+    ${kpi(fmtDate(p.lastCampaignAt), "Last run")}
+  </div>`;
+}
+
+function darkwebBlock(dw) {
+  if (!dw) {
+    return `<div class="note">Dark-web exposure monitoring hasn't been run for this client yet.</div>`;
+  }
+  const lines = [`Status: <b>${esc(dw.statusLevel)}</b>`];
+  if (dw.domain) lines.push(`Domain(s): ${esc(dw.domain)}`);
+  if (typeof dw.breachedAccounts === "number") {
+    lines.push(
+      `${dw.breachedAccounts} breached account(s) across ${dw.distinctBreaches ?? 0} breach(es)${
+        dw.breaches?.length ? `: ${esc(dw.breaches.join(", "))}` : ""
+      }.`,
+    );
+  }
+  if (dw.reason) lines.push(esc(dw.reason));
+  if (dw.note) lines.push(esc(dw.note));
+  return `<p class="meta">${lines.join("<br/>")}</p>${
+    dw.simulated
+      ? `<div class="note">This is simulated demo data, not a live breach lookup.</div>`
+      : ""
+  }`;
+}
+
+function threatIntelBlock(ti) {
+  if (!ti || ti.empty) {
+    return `<div class="note">No client software inventory on file yet, so threat-intel exposure can't be computed. Enrolling an endpoint agent or completing the tech-stack assessment question enables this.</div>`;
+  }
+  const counts = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+    .map((s) => (ti.counts?.[s] ? `${ti.counts[s]} ${s.toLowerCase()}` : null))
+    .filter(Boolean)
+    .join(", ");
+  const topRows = (ti.top || [])
+    .slice(0, 5)
+    .map(
+      (c) => `<tr>
+      <td>${esc(c.id)}</td>
+      <td>${esc(c.severity)}</td>
+      <td>${fmtDate(c.published)}</td>
+      <td>${esc((c.description || "").slice(0, 140))}</td>
+    </tr>`,
+    )
+    .join("");
+  return `
+  <p class="meta">${esc(counts || "No known vulnerabilities matched to your software inventory.")}${
+    ti.refreshedAt ? ` &middot; Checked ${fmtDate(ti.refreshedAt)}` : ""
+  }</p>
+  ${
+    topRows
+      ? `<table class="content"><tr><th>CVE</th><th>Severity</th><th>Published</th><th>Description</th></tr>${topRows}</table>`
+      : ""
+  }
+  <p class="meta">Sourced from the National Vulnerability Database (NVD), matched against software reported by your endpoints/assessment.</p>`;
+}
+
+function policyAcksBlock(pa) {
+  if (!pa || !pa.totalAssigned) {
+    return `<div class="note">No policies have been assigned for acknowledgment yet.</div>`;
+  }
+  const rows = pa.byPolicy
+    .map(
+      (p) => `<tr>
+      <td>${esc(p.policyName)}</td>
+      <td>${esc(p.acknowledged)}/${esc(p.assigned)}</td>
+      <td>${esc(p.pending)}</td>
+    </tr>`,
+    )
+    .join("");
+  return `
+  <div>
+    ${kpi(pa.totalAcknowledged, "Acknowledged")}
+    ${kpi(pa.totalAssigned - pa.totalAcknowledged, "Pending")}
+  </div>
+  <table class="content">
+    <tr><th>Policy</th><th>Acknowledged</th><th>Pending</th></tr>
+    ${rows}
+  </table>`;
+}
+
 // ── Report builders ──────────────────────────────────────────────────────────
 
 const DISCLAIMERS = {
@@ -482,15 +714,7 @@ function buildStatusReport(d) {
     ${kpi(d.tasks.done, "Completed")}
     ${kpi(d.evidence.total, "Evidence on file")}
   </div>
-  ${
-    d.endpoints.length
-      ? `<p class="meta">${d.endpoints.length} monitored endpoint(s): ${
-          d.endpoints.filter((e) => e.posture === "healthy").length
-        } healthy, ${
-          d.endpoints.filter((e) => e.posture !== "healthy").length
-        } need attention.</p>`
-      : `<p class="meta">No monitored endpoints enrolled yet.</p>`
-  }
+  ${endpointsDetailBlock(d.endpoints)}
   ${
     d.training.assigned
       ? `<p class="meta">Security training: ${d.training.completed} of ${d.training.assigned} assignments complete (${pct(
@@ -498,6 +722,21 @@ function buildStatusReport(d) {
         )}).</p>`
       : ""
   }
+
+  <h2>Vendor risk</h2>
+  ${vendorRiskBlock(d.vendorRisk)}
+
+  <h2>Phishing simulation</h2>
+  ${phishingBlock(d.phishing)}
+
+  <h2>Dark web exposure</h2>
+  ${darkwebBlock(d.darkweb)}
+
+  <h2>Threat intelligence</h2>
+  ${threatIntelBlock(d.threatIntel)}
+
+  <h2>Policy acknowledgments</h2>
+  ${policyAcksBlock(d.policyAcks)}
 
   <h2>What to focus on next</h2>
   ${openTasksTable(d, 15)}
