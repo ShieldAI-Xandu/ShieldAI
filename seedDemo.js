@@ -573,6 +573,7 @@ async function main() {
     db.data.users.push(analyst);
     console.log(`Created demo analyst: ${DEMO_ANALYST_EMAIL}`);
   }
+  analyst.tier = "managed"; // keep in sync even on re-seed of a pre-existing analyst
 
   // Find or create the 3 demo client users — one per company.
   const usersByCompany = {}; // companyName -> user record
@@ -633,6 +634,7 @@ async function main() {
     }
     cUser.isDemo = true;
     cUser.companyName = co.company.name; // keep in sync even on re-seed of a pre-existing user
+    cUser.tier = "managed"; // keep in sync too — stale/renamed tier ids must not survive a re-seed
     usersByCompany[co.company.name] = cUser;
   }
   db.data.branding = (db.data.branding || []).filter(b => b.ownerUserId !== analyst.id);
