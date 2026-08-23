@@ -632,7 +632,7 @@ function IntakeChat({ onComplete }) {
             {m.role==="assistant" && (
               <div style={{width:34,height:34,borderRadius:8,flexShrink:0,
                 background:`${C.accent}15`,border:`1px solid ${C.accent}33`,
-                display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20}/></div>
+                display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20} powerOn={false}/></div>
             )}
             <div style={{maxWidth:"75%"}}>
               <div style={{padding:"12px 16px",borderRadius:m.role==="user"?"16px 16px 4px 16px":"4px 16px 16px 16px",
@@ -651,7 +651,7 @@ function IntakeChat({ onComplete }) {
           <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
             <div style={{width:34,height:34,borderRadius:8,flexShrink:0,
               background:`${C.accent}15`,border:`1px solid ${C.accent}33`,
-              display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20}/></div>
+              display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={20} powerOn={false}/></div>
             <div style={{maxWidth:"75%",padding:"12px 16px",borderRadius:"4px 16px 16px 16px",
               background:C.card,border:`1px solid ${C.border}`,color:C.text,fontSize:14,lineHeight:1.7}}>
               {/* The intake system prompt outputs ONLY the raw <ASSESSMENT_DONE>
@@ -7166,9 +7166,31 @@ function Dashboard({ assessment, results, onReset }) {
 // `motion`: "none" (default — every in-app usage) | "tilt" (a slow, subtle
 // 3D tilt used only on marketing surfaces, so the badge catches light like a
 // seal rather than spinning like a loading indicator — see MOTION_CSS below).
-function ShieldLogo({ size = 28, glow = false, motion = "none" }) {
+//
+// `powerOn` (default true): plays a one-shot "circuit burn-in" intro once on
+// mount — black shield, electrical traces draw in, outline flashes, then it
+// settles into the normal look above — replayable by hovering/tapping. Set
+// `powerOn={false}` for small/repeated/decorative instances (chat avatars,
+// watermarks, empty-state illustrations) where the effect would be visual
+// noise rather than a moment.
+//
+// `instanceKey`: only needed for call sites whose component identity isn't
+// stable (e.g. TopBar, which is a local const recreated on most root-level
+// re-renders — see shieldPoweredOn below). Every other call site can omit it.
+const shieldPoweredOn = new Set();
+
+function ShieldLogo({ size = 28, glow = false, motion = "none", powerOn = true, instanceKey }) {
+  const [playKey, setPlayKey] = useState(0);
+  const alreadyPlayed = instanceKey ? shieldPoweredOn.has(instanceKey) : false;
+  useEffect(() => {
+    if (instanceKey) shieldPoweredOn.add(instanceKey);
+  }, [instanceKey]);
+  const replay = powerOn ? () => setPlayKey(k => k + 1) : undefined;
+  const showIntro = powerOn && !(playKey === 0 && alreadyPlayed);
+
   const svg = (
     <svg viewBox="0 0 64 80" width={size} height={size * (80/64)}
+      onMouseEnter={replay} onTouchStart={replay}
       style={{ display:"block", filter: glow ? "drop-shadow(0 0 8px rgba(0,200,255,0.5))" : "none" }}>
       <defs>
         <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -7185,6 +7207,34 @@ function ShieldLogo({ size = 28, glow = false, motion = "none" }) {
       <circle cx="32" cy="54" r="3.5" fill="#FFFFFF"/>
       <circle cx="32" cy="38" r="4.5" fill="#00C8FF"/>
       <circle cx="32" cy="38" r="2" fill="#FFFFFF"/>
+      {showIntro && (
+        <g key={playKey}>
+          <style>{`
+            @keyframes shieldai-shield-black{0%{opacity:1}55%{opacity:1}78%{opacity:0}100%{opacity:0}}
+            @keyframes shieldai-shield-trace{0%{stroke-dashoffset:70;opacity:0}5%{opacity:1}40%{stroke-dashoffset:0;opacity:1}70%{stroke-dashoffset:0;opacity:1}90%{opacity:0}100%{stroke-dashoffset:0;opacity:0}}
+            @keyframes shieldai-shield-flash{0%{opacity:0}58%{opacity:0}66%{opacity:1}72%{opacity:0.6}84%{opacity:0}100%{opacity:0}}
+          `}</style>
+          {/* Black fill — starts opaque, hiding the gradient shield beneath */}
+          <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z" fill="#050607"
+            style={{opacity:0,animation:"shieldai-shield-black 2000ms ease-out forwards"}}/>
+          {/* Circuit traces burning in from the center node */}
+          {[
+            { d:"M32 38 L18 38 L18 20", delay:0 },
+            { d:"M32 38 L46 38 L46 52", delay:70 },
+            { d:"M32 38 L32 62 L44 68", delay:140 },
+          ].map((t,i) => (
+            <path key={i} d={t.d} stroke="#22D3EE" fill="none" strokeWidth="2.5"
+              strokeLinecap="round" strokeLinejoin="round" strokeDasharray="70"
+              style={{opacity:0,filter:"drop-shadow(0 0 3px #22D3EE)",
+                animation:`shieldai-shield-trace 2000ms ease-out ${t.delay}ms forwards`}}/>
+          ))}
+          {/* White outline flash, peaking as the black fill clears */}
+          <path d="M32 4 L56 14 L56 38 C56 56 42 68 32 76 C22 68 8 56 8 38 L8 14 Z"
+            fill="none" stroke="#FFFFFF" strokeWidth="3"
+            style={{opacity:0,filter:"drop-shadow(0 0 3px #fff) drop-shadow(0 0 8px #22D3EE)",
+              animation:"shieldai-shield-flash 2000ms ease-in-out forwards"}}/>
+        </g>
+      )}
     </svg>
   );
   if (motion === "none") return svg;
@@ -7255,14 +7305,14 @@ function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
 }
 
 // Logo + wordmark lockup
-function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false }) {
+function ShieldLockup({ logoSize = 28, textSize = 18, ink = "#FFFFFF", gap = 10, glow = false, powerOn = true, instanceKey }) {
   const brand = useBranding();
   const customLogo = brand && !brand.isDefault && brand.logoUrl;
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap }}>
       {customLogo
         ? <img src={brand.logoUrl} alt="" style={{ height:logoSize, maxWidth:logoSize*4, objectFit:"contain" }}/>
-        : <ShieldLogo size={logoSize} glow={glow}/>}
+        : <ShieldLogo size={logoSize} glow={glow} powerOn={powerOn} instanceKey={instanceKey}/>}
       <ShieldWordmark size={textSize} ink={ink}/>
     </span>
   );
@@ -7995,7 +8045,7 @@ function LearnerModulePlayer({ module, token, onComplete, busy, onClose }) {
           background:`radial-gradient(circle at 85% 15%, ${cyan}0A, transparent 55%)`}}>
           {/* Faint corner watermark — the "designed template" touch */}
           <div style={{position:"absolute",right:-16,bottom:-16,opacity:0.05,pointerEvents:"none"}}>
-            <ShieldLogo size={160}/>
+            <ShieldLogo size={160} powerOn={false}/>
           </div>
 
           {module.completed && stage !== "results" ? (
@@ -12880,7 +12930,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
         ) : assessments.length === 0 ? (
           /* Empty state */
           <Card style={{textAlign:"center",padding:"48px 24px"}}>
-            <div style={{display:"flex",justifyContent:"center",marginBottom:14}}><ShieldLogo size={44}/></div>
+            <div style={{display:"flex",justifyContent:"center",marginBottom:14}}><ShieldLogo size={44} powerOn={false}/></div>
             <div style={{color:C.text,fontWeight:600,fontSize:16,marginBottom:8}}>
               No assessments yet
             </div>
@@ -20146,7 +20196,7 @@ export default function ShieldAI() {
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
-        <ShieldLockup logoSize={22} textSize={15} ink={C.text}/>
+        <ShieldLockup logoSize={22} textSize={15} ink={C.text} instanceKey="topbar"/>
       </span>
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
         <span style={{fontSize:12,color:C.textSec}}>
