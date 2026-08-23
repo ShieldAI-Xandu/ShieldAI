@@ -61,6 +61,16 @@ const TEXT_SAFE = {
 };
 function textSafe(hex) { return TEXT_SAFE[hex] || hex; }
 
+// Original pre-light-theme dark palette, copy-pasted (not C-referencing) so
+// it can't drift when C changes. For standalone "product preview" style
+// components (dashboard/report mockups) that want to look like real dark
+// app UI regardless of the page they're dropped into — currently the
+// marketing page's compliance-snapshot and policy-checklist previews.
+const DARK = {
+  bg: "#080D18", card: "#101C30", surface: "#0D1526", border: "#1A2D47",
+  text: "#E2EDFF", textSec: "#7B92B2", textMut: "#2E4A6A",
+};
+
 // ─────────────────────────────────────────────────────────────
 //  AI ROUTER — routes tasks to the right model
 //
@@ -7251,11 +7261,11 @@ function ShieldLogo({ size = 28, glow = false, motion = "none", powerOn = true, 
 // circling a core. Not decorative: it's a literal diagram of the product's
 // actual multi-agent architecture. `animated` slowly orbits the nodes —
 // used on the marketing page only; static elsewhere.
-function MastermindLogo({ size = 48, animated = false }) {
+function MastermindLogo({ size = 48, animated = false, nodeColors = [C.purpleText, C.accentText, C.greenText], centerFill = C.card, centerBorder = C.borderHi }) {
   const nodes = [
-    { color: C.purpleText, angle: -90 },
-    { color: C.accentText, angle: 30 },
-    { color: C.greenText,  angle: 150 },
+    { color: nodeColors[0], angle: -90 },
+    { color: nodeColors[1], angle: 30 },
+    { color: nodeColors[2], angle: 150 },
   ];
   const r = size * 0.36;
   const cx = size / 2, cy = size / 2;
@@ -7265,7 +7275,7 @@ function MastermindLogo({ size = 48, animated = false }) {
         <style>{`@keyframes shieldai-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       )}
       <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ display:"block" }}>
-        <circle cx={cx} cy={cy} r={size*0.16} fill={C.card} stroke={C.borderHi} strokeWidth="1.5"/>
+        <circle cx={cx} cy={cy} r={size*0.16} fill={centerFill} stroke={centerBorder} strokeWidth="1.5"/>
         <text x={cx} y={cy+size*0.055} textAnchor="middle" fontSize={size*0.16}>🧠</text>
         <g style={animated ? { transformOrigin:`${cx}px ${cy}px`, animation:"shieldai-orbit 16s linear infinite" } : undefined}>
           {nodes.map((n,i) => {
@@ -8713,35 +8723,35 @@ function ComplianceSnapshotPreview() {
   const gapColor = (g) => g > 40 ? C.redText : g > 15 ? C.amberText : C.greenText;
   const gapBg = (g) => g > 40 ? "#FCEBEB" : g > 15 ? "#FEF3E2" : "#E7F5EF";
   return (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",
-      boxShadow:"0 4px 20px rgba(15,23,42,0.08)"}}>
+    <div style={{background:DARK.card,border:`1px solid ${DARK.border}`,borderRadius:16,overflow:"hidden",
+      boxShadow:"0 20px 50px rgba(0,0,0,0.25)"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
-        borderBottom:`1px solid ${C.border}`,background:C.surface}}>
+        borderBottom:`1px solid ${DARK.border}`,background:DARK.bg}}>
         <span style={{width:9,height:9,borderRadius:"50%",background:"#FF5F57"}}/>
         <span style={{width:9,height:9,borderRadius:"50%",background:"#FEBC2E"}}/>
         <span style={{width:9,height:9,borderRadius:"50%",background:"#28C840"}}/>
-        <span style={{marginLeft:8,fontSize:11.5,color:C.textSec,fontWeight:600}}>ShieldAI · Compliance snapshot</span>
-        <span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,fontSize:10,color:C.greenText,fontWeight:700}}>
-          <LivePulse color={C.greenText} size={6}/> LIVE
+        <span style={{marginLeft:8,fontSize:11.5,color:DARK.textSec,fontWeight:600}}>ShieldAI · Compliance snapshot</span>
+        <span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,fontSize:10,color:C.green,fontWeight:700}}>
+          <LivePulse color={C.green} size={6}/> LIVE
         </span>
       </div>
       <div style={{padding:"18px 20px",display:"flex",flexDirection:"column",gap:16}}>
         {rows.map((r,i)=>(
           <div key={i}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:7}}>
-              <span style={{fontSize:13.5,fontWeight:700,flex:1}}>{r.name}</span>
+              <span style={{fontSize:13.5,fontWeight:700,flex:1,color:DARK.text}}>{r.name}</span>
               <span style={{fontSize:11,fontWeight:700,padding:"2px 9px",borderRadius:20,
                 background:gapBg(r.gaps),color:gapColor(r.gaps)}}>{r.gaps} gaps</span>
             </div>
-            <div style={{height:6,borderRadius:6,background:C.border,overflow:"hidden"}}>
+            <div style={{height:6,borderRadius:6,background:DARK.border,overflow:"hidden"}}>
               <div style={{height:"100%",borderRadius:6,background:C.accent,
                 width:mounted?`${r.pct}%`:"0%",transition:`width 1s ease ${i*0.15}s`}}/>
             </div>
-            <div style={{fontSize:11,color:C.textMut,marginTop:5}}>{r.assessed} of {r.total} controls assessed</div>
+            <div style={{fontSize:11,color:DARK.textSec,marginTop:5}}>{r.assessed} of {r.total} controls assessed</div>
           </div>
         ))}
       </div>
-      <div style={{padding:"12px 20px",borderTop:`1px solid ${C.border}`,fontSize:11.5,color:C.textMut}}>
+      <div style={{padding:"12px 20px",borderTop:`1px solid ${DARK.border}`,fontSize:11.5,color:DARK.textSec}}>
         Every control traces to real evidence — nothing here is estimated.
         <span style={{marginLeft:6,fontStyle:"italic"}}>(Sample data for illustration.)</span>
       </div>
@@ -8751,7 +8761,7 @@ function ComplianceSnapshotPreview() {
 
 // Graphics Concept 2 — the hero's posture ring, made to count up from 0 the
 // first time it scrolls into view instead of rendering statically.
-function AnimatedPostureRing({ score = 91, label = "Strong" }) {
+function AnimatedPostureRing({ score = 91, label = "Strong", trackColor = C.border, ringColor = C.greenText, labelColor = C.textSec }) {
   const ref = useRef(null);
   const [pct, setPct] = useState(0);
   useEffect(() => {
@@ -8776,18 +8786,18 @@ function AnimatedPostureRing({ score = 91, label = "Strong" }) {
     <div ref={ref} style={{textAlign:"center"}}>
       <div style={{position:"relative",width:104,height:104}}>
         <svg viewBox="0 0 100 100" width="104" height="104">
-          <circle cx="50" cy="50" r="42" fill="none" stroke={C.border} strokeWidth="8"/>
-          <circle cx="50" cy="50" r="42" fill="none" stroke={C.greenText} strokeWidth="8"
+          <circle cx="50" cy="50" r="42" fill="none" stroke={trackColor} strokeWidth="8"/>
+          <circle cx="50" cy="50" r="42" fill="none" stroke={ringColor} strokeWidth="8"
             strokeLinecap="round" strokeDasharray={`${(pct/100)*circ} ${circ}`}
             transform="rotate(-90 50 50)"/>
         </svg>
         <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",
           alignItems:"center",justifyContent:"center"}}>
-          <span style={{fontSize:30,fontWeight:800,color:C.greenText,lineHeight:1}}>{pct}</span>
-          <span style={{fontSize:8,color:C.textSec,letterSpacing:1}}>POSTURE</span>
+          <span style={{fontSize:30,fontWeight:800,color:ringColor,lineHeight:1}}>{pct}</span>
+          <span style={{fontSize:8,color:labelColor,letterSpacing:1}}>POSTURE</span>
         </div>
       </div>
-      <div style={{fontSize:11,color:C.greenText,fontWeight:600,marginTop:8}}>{label}</div>
+      <div style={{fontSize:11,color:ringColor,fontWeight:600,marginTop:8}}>{label}</div>
     </div>
   );
 }
@@ -8804,9 +8814,9 @@ function PolicyChecklistPreview() {
     return () => clearTimeout(t);
   }, [checked]);
   return (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px 22px",
-      boxShadow:"0 4px 20px rgba(15,23,42,0.08)"}}>
-      <div style={{fontSize:13,fontWeight:700,color:C.textSec,marginBottom:14,letterSpacing:0.3}}>
+    <div style={{background:DARK.card,border:`1px solid ${DARK.border}`,borderRadius:16,padding:"20px 22px",
+      boxShadow:"0 20px 50px rgba(0,0,0,0.25)"}}>
+      <div style={{fontSize:13,fontWeight:700,color:DARK.textSec,marginBottom:14,letterSpacing:0.3}}>
         Policies your team actually signs
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:11}}>
@@ -8816,15 +8826,15 @@ function PolicyChecklistPreview() {
             <div key={p} style={{display:"flex",alignItems:"center",gap:10}}>
               <span style={{width:20,height:20,borderRadius:6,flexShrink:0,display:"flex",
                 alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:800,
-                background:done?C.green:"none",border:done?"none":`1.5px solid ${C.border}`,
+                background:done?C.green:"none",border:done?"none":`1.5px solid ${DARK.border}`,
                 color:"#04121F",transition:"background 0.2s"}}>{done?"✓":""}</span>
-              <span style={{fontSize:13.5,color:done?C.text:C.textSec,transition:"color 0.2s"}}>{p}</span>
+              <span style={{fontSize:13.5,color:done?DARK.text:DARK.textSec,transition:"color 0.2s"}}>{p}</span>
             </div>
           );
         })}
       </div>
-      <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`,fontSize:12,
-        fontWeight:600,color:checked>=policies.length?C.greenText:C.textMut}}>
+      <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${DARK.border}`,fontSize:12,
+        fontWeight:600,color:checked>=policies.length?C.green:DARK.textSec}}>
         {checked} of {policies.length} signed
       </div>
     </div>
@@ -8892,6 +8902,10 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   // guidance. Independent of C so they can't drift light with the rest of
   // the page.
   const darkText = "#E2EDFF", darkTextSec = "#7B92B2", darkBorder = "#1A2D47", darkCyan = "#00C8FF";
+  // Same dark literals, plus the two surface tones — for the "product
+  // preview" style panels (dashboard mockup, compliance snapshot, etc.)
+  // that are meant to look like real dark app UI floating on the light page.
+  const darkCard = "#101C30", darkSurface = "#0D1526";
 
   const Eyebrow = ({ children, color = C.accentText }) => (
     <div style={{fontSize:12,fontWeight:700,letterSpacing:2,textTransform:"uppercase",
@@ -9101,50 +9115,51 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             so it can't 404, and it shows the actual dashboard motifs a visitor
             sees inside — posture score, live CVE exposure, remediation gain. */}
         <div style={{marginTop:56,maxWidth:720,marginLeft:"auto",marginRight:"auto",
-          background:C.card,border:`1px solid ${line}`,borderRadius:18,overflow:"hidden",
-          boxShadow:`0 20px 60px rgba(15,23,42,0.12)`,textAlign:"left"}}>
+          background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:18,overflow:"hidden",
+          boxShadow:`0 20px 50px rgba(0,0,0,0.25)`,textAlign:"left"}}>
           {/* Window chrome */}
           <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
-            borderBottom:`1px solid ${line}`,background:C.surface}}>
+            borderBottom:`1px solid ${darkBorder}`,background:navy}}>
             <span style={{width:10,height:10,borderRadius:"50%",background:"#FF5F57"}}/>
             <span style={{width:10,height:10,borderRadius:"50%",background:"#FEBC2E"}}/>
             <span style={{width:10,height:10,borderRadius:"50%",background:"#28C840"}}/>
-            <span style={{marginLeft:10,fontSize:11,color:dim}}>ShieldAI · Security Dashboard</span>
+            <span style={{marginLeft:10,fontSize:11,color:darkTextSec}}>ShieldAI · Security Dashboard</span>
             <span style={{marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:6,
-              fontSize:10,color:C.greenText,fontWeight:600}}><LivePulse size={5}/> LIVE</span>
+              fontSize:10,color:C.green,fontWeight:600}}><LivePulse color={C.green} size={5}/> LIVE</span>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:20,padding:"22px 24px"}}>
             {/* Posture ring — counts up from 0 on scroll-into-view */}
-            <AnimatedPostureRing score={91} label="Strong"/>
+            <AnimatedPostureRing score={91} label="Strong"
+              trackColor={darkBorder} ringColor={C.green} labelColor={darkTextSec}/>
             {/* Live tiles */}
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               <div style={{display:"flex",gap:10}}>
-                <div style={{flex:1,padding:"10px 12px",background:C.surface,borderRadius:10,border:`1px solid ${line}`}}>
-                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>CVE EXPOSURE · NVD</div>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${darkBorder}`}}>
+                  <div style={{fontSize:9,color:darkTextSec,letterSpacing:1,marginBottom:4}}>CVE EXPOSURE · NVD</div>
                   <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
-                    <span style={{fontSize:18,fontWeight:800,color:C.redText}}>3</span>
-                    <span style={{fontSize:11,color:dim}}>High</span>
-                    <span style={{fontSize:18,fontWeight:800,color:C.amberText,marginLeft:6}}>7</span>
-                    <span style={{fontSize:11,color:dim}}>Medium</span>
+                    <span style={{fontSize:18,fontWeight:800,color:C.red}}>3</span>
+                    <span style={{fontSize:11,color:darkTextSec}}>High</span>
+                    <span style={{fontSize:18,fontWeight:800,color:C.amber,marginLeft:6}}>7</span>
+                    <span style={{fontSize:11,color:darkTextSec}}>Medium</span>
                   </div>
                 </div>
-                <div style={{flex:1,padding:"10px 12px",background:C.surface,borderRadius:10,border:`1px solid ${line}`}}>
-                  <div style={{fontSize:9,color:dim,letterSpacing:1,marginBottom:4}}>AUDIT COVERAGE</div>
+                <div style={{flex:1,padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${darkBorder}`}}>
+                  <div style={{fontSize:9,color:darkTextSec,letterSpacing:1,marginBottom:4}}>AUDIT COVERAGE</div>
                   <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
-                    <span style={{fontSize:18,fontWeight:800,color:C.greenText}}>86%</span>
-                    <span style={{fontSize:11,color:dim}}>evidence on file</span>
+                    <span style={{fontSize:18,fontWeight:800,color:C.green}}>86%</span>
+                    <span style={{fontSize:11,color:darkTextSec}}>evidence on file</span>
                   </div>
                 </div>
               </div>
-              <div style={{padding:"10px 12px",background:C.surface,borderRadius:10,border:`1px solid ${line}`,
+              <div style={{padding:"10px 12px",background:navy,borderRadius:10,border:`1px solid ${darkBorder}`,
                 display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:9,color:dim,letterSpacing:1}}>TOP FIX</span>
-                <span style={{fontSize:12,color:ink,flex:1}}>Enable MFA on remote access</span>
-                <span style={{fontSize:12,fontWeight:700,color:C.greenText}}>+6 posture</span>
+                <span style={{fontSize:9,color:darkTextSec,letterSpacing:1}}>TOP FIX</span>
+                <span style={{fontSize:12,color:darkText,flex:1}}>Enable MFA on remote access</span>
+                <span style={{fontSize:12,fontWeight:700,color:C.green}}>+6 posture</span>
               </div>
             </div>
           </div>
-          <div style={{padding:"12px 24px",borderTop:`1px solid ${line}`,fontSize:12,color:dim}}>
+          <div style={{padding:"12px 24px",borderTop:`1px solid ${darkBorder}`,fontSize:12,color:darkTextSec}}>
             Every point traces to a specific control — the evidence insurers and auditors trust.
           </div>
         </div>
@@ -9291,16 +9306,16 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
 
             <div style={{display:"flex",gap:40,flexWrap:"wrap-reverse",alignItems:"center"}}>
               <div style={{flex:"1 1 320px",minWidth:280,maxWidth:420}}>
-                <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"20px 22px",
-                  boxShadow:"0 4px 20px rgba(15,23,42,0.08)"}}>
-                  <div style={{fontSize:9,color:C.textMut,letterSpacing:1,marginBottom:8}}>CVE EXPOSURE · NVD</div>
+                <div style={{background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:16,padding:"20px 22px",
+                  boxShadow:"0 20px 50px rgba(0,0,0,0.25)"}}>
+                  <div style={{fontSize:9,color:darkTextSec,letterSpacing:1,marginBottom:8}}>CVE EXPOSURE · NVD</div>
                   <div style={{display:"flex",gap:16,alignItems:"baseline",marginBottom:14}}>
-                    <span style={{fontSize:26,fontWeight:800,color:C.redText}}>3</span>
-                    <span style={{fontSize:12,color:dim}}>High</span>
-                    <span style={{fontSize:26,fontWeight:800,color:C.amberText,marginLeft:8}}>7</span>
-                    <span style={{fontSize:12,color:dim}}>Medium</span>
+                    <span style={{fontSize:26,fontWeight:800,color:C.red}}>3</span>
+                    <span style={{fontSize:12,color:darkTextSec}}>High</span>
+                    <span style={{fontSize:26,fontWeight:800,color:C.amber,marginLeft:8}}>7</span>
+                    <span style={{fontSize:12,color:darkTextSec}}>Medium</span>
                   </div>
-                  <div style={{fontSize:11,color:C.textSec,paddingTop:12,borderTop:`1px solid ${line}`}}>
+                  <div style={{fontSize:11,color:darkTextSec,paddingTop:12,borderTop:`1px solid ${darkBorder}`}}>
                     Matched against your actual software, live — not a generic advisory feed.
                   </div>
                 </div>
@@ -9323,10 +9338,11 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                 </div>
               </div>
               <div style={{flex:"1 1 320px",minWidth:280,maxWidth:420,display:"flex",justifyContent:"center"}}>
-                <div style={{background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"28px",
-                  boxShadow:"0 4px 20px rgba(15,23,42,0.08)",textAlign:"center"}}>
-                  <MastermindLogo size={64} animated/>
-                  <div style={{fontSize:12.5,color:dim,marginTop:14,maxWidth:260}}>
+                <div style={{background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:16,padding:"28px",
+                  boxShadow:"0 20px 50px rgba(0,0,0,0.25)",textAlign:"center"}}>
+                  <MastermindLogo size={64} animated
+                    nodeColors={[C.purple, C.accent, C.green]} centerFill={darkCard} centerBorder={darkBorder}/>
+                  <div style={{fontSize:12.5,color:darkTextSec,marginTop:14,maxWidth:260}}>
                     Three AI engines draft, map, and monitor — a security engineer reviews what reaches you.
                   </div>
                 </div>
