@@ -9528,12 +9528,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             </div>
           </div>
 
-          <div style={{flex:"1 1 360px",background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:16,padding:"28px"}}>
+          <div style={{flex:"1 1 360px",background:C.card,border:`2px solid ${navy}`,borderRadius:16,padding:"28px"}}>
             {submitted ? (
               <div style={{textAlign:"center",padding:"30px 10px"}}>
                 <div style={{fontSize:40,marginBottom:14}}>✓</div>
-                <div style={{fontSize:18,fontWeight:700,marginBottom:8,color:darkText}}>Thanks — we'll be in touch.</div>
-                <div style={{fontSize:14,color:darkTextSec,lineHeight:1.6}}>
+                <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Thanks — we'll be in touch.</div>
+                <div style={{fontSize:14,color:dim,lineHeight:1.6}}>
                   Your request is in. A member of our team will reach out to {form.email} shortly.
                 </div>
               </div>
@@ -9545,19 +9545,19 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   { k:"company", label:"Company", ph:"Acme Inc." },
                 ].map(f=>(
                   <div key={f.k} style={{marginBottom:14}}>
-                    <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>{f.label}</label>
+                    <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>{f.label}</label>
                     <input value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})}
                       placeholder={f.ph}
-                      style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
-                        border:`1px solid ${darkBorder}`,borderRadius:9,color:darkText,fontSize:14,
+                      style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
+                        border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,
                         fontFamily:"Inter,system-ui,sans-serif"}}/>
                   </div>
                 ))}
                 <div style={{marginBottom:14}}>
-                  <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>Company size</label>
+                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>Company size</label>
                   <select value={form.employees} onChange={e=>setForm({...form,employees:e.target.value})}
-                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
-                      border:`1px solid ${darkBorder}`,borderRadius:9,color:form.employees?darkText:darkTextSec,fontSize:14}}>
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
+                      border:`1px solid ${line}`,borderRadius:9,color:form.employees?ink:dim,fontSize:14}}>
                     <option value="">Select…</option>
                     <option value="1-10">1–10 employees</option>
                     <option value="11-50">11–50 employees</option>
@@ -9566,21 +9566,21 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   </select>
                 </div>
                 <div style={{marginBottom:18}}>
-                  <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>How can we help?</label>
+                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>How can we help?</label>
                   <textarea value={form.message} onChange={e=>setForm({...form,message:e.target.value})}
                     rows={3} placeholder="Tell us about your situation…"
-                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
-                      border:`1px solid ${darkBorder}`,borderRadius:9,color:darkText,fontSize:14,resize:"vertical",
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
+                      border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,resize:"vertical",
                       fontFamily:"Inter,system-ui,sans-serif"}}/>
                 </div>
-                {formErr && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{formErr}</div>}
+                {formErr && <div style={{color:C.redText,fontSize:13,marginBottom:12}}>{formErr}</div>}
                 <button onClick={submitLead} disabled={submitting}
                   style={{width:"100%",padding:"13px",background:C.accent,
                     color:"#04121F",border:"none",borderRadius:9,fontSize:15,fontWeight:700,
                     cursor:submitting?"wait":"pointer"}}>
                   {submitting ? "Sending…" : "Request information"}
                 </button>
-                <div style={{fontSize:11,color:darkTextSec,textAlign:"center",marginTop:10}}>
+                <div style={{fontSize:11,color:dim,textAlign:"center",marginTop:10}}>
                   We'll only use your details to follow up. No spam.
                 </div>
               </>
