@@ -8986,59 +8986,37 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         }
       `}</style>
 
-      {/* NAV */}
-      <div style={{borderBottom:`1px solid ${line}`,position:"sticky",top:0,zIndex:20,
-        background:`${deep}EE`,backdropFilter:"blur(10px)"}}>
+      {/* NAV — dark band, deliberately different from the rest of the page
+          (which is now solid white); About/FAQ/Support/Investors live only
+          in the footer, not duplicated up here. */}
+      <div style={{borderBottom:`1px solid ${darkBorder}`,position:"sticky",top:0,zIndex:20,
+        background:`${navy}EE`,backdropFilter:"blur(10px)"}}>
         <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
-          <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
-          <span style={{fontSize:11,color:dim,marginLeft:4}}>Virtual CISO</span>
+          <ShieldLockup logoSize={26} textSize={18} ink={darkText}/>
+          <span style={{fontSize:11,color:darkTextSec,marginLeft:4}}>Virtual CISO</span>
           <div className="mkt-nav-links">
-            <a href="#how" style={{color:dim,fontSize:13,textDecoration:"none"}}>How it works</a>
-            <a href="#pricing" style={{color:dim,fontSize:13,textDecoration:"none"}}>Pricing</a>
-            <button onClick={onOpenAbout}
-              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-              About
-            </button>
-            <button onClick={onOpenFaq}
-              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-              FAQ
-            </button>
-            <button onClick={onOpenSupport}
-              style={{background:"none",border:"none",padding:0,color:dim,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-              Support
-            </button>
-            <button onClick={onOpenInvestor}
-              style={{background:"none",border:"none",padding:0,color:C.accentText,fontSize:13,fontWeight:600,
-                cursor:"pointer",fontFamily:"inherit"}}>
-              Investors
-            </button>
-            <a href="#contact" style={{color:dim,fontSize:13,textDecoration:"none"}}>Contact</a>
+            <a href="#how" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>How it works</a>
+            <a href="#pricing" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>Pricing</a>
+            <a href="#contact" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>Contact</a>
             <button onClick={onLogin} style={{padding:"8px 16px",background:"none",
-              border:`1px solid ${line}`,borderRadius:8,color:ink,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+              border:`1px solid ${darkBorder}`,borderRadius:8,color:darkText,fontSize:13,fontWeight:600,cursor:"pointer"}}>
               Client Login
             </button>
           </div>
-          <button className="mkt-nav-toggle" aria-label="Menu" onClick={()=>setMobileMenu(o=>!o)}>
+          <button className="mkt-nav-toggle" aria-label="Menu" onClick={()=>setMobileMenu(o=>!o)}
+            style={{color:darkText,borderColor:darkBorder}}>
             {mobileMenu ? "✕" : "☰"}
           </button>
         </div>
         {/* Mobile dropdown */}
         <div className={`mkt-mobile-menu${mobileMenu?" open":""}`}
-          style={{borderTop:`1px solid ${line}`,background:deep}}>
-          <a href="#how" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>How it works</a>
-          <a href="#pricing" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Pricing</a>
-          <button onClick={()=>{setMobileMenu(false);onOpenAbout();}}
-            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>About</button>
-          <button onClick={()=>{setMobileMenu(false);onOpenFaq();}}
-            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>FAQ</button>
-          <button onClick={()=>{setMobileMenu(false);onOpenSupport();}}
-            style={{background:"none",border:"none",padding:"10px 0",color:dim,fontSize:15,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Support</button>
-          <button onClick={()=>{setMobileMenu(false);onOpenInvestor();}}
-            style={{background:"none",border:"none",padding:"10px 0",color:C.accentText,fontSize:15,fontWeight:600,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>Investors</button>
-          <a href="#contact" onClick={()=>setMobileMenu(false)} style={{color:dim,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Contact</a>
+          style={{borderTop:`1px solid ${darkBorder}`,background:navy}}>
+          <a href="#how" onClick={()=>setMobileMenu(false)} style={{color:darkTextSec,fontSize:15,textDecoration:"none",padding:"10px 0"}}>How it works</a>
+          <a href="#pricing" onClick={()=>setMobileMenu(false)} style={{color:darkTextSec,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Pricing</a>
+          <a href="#contact" onClick={()=>setMobileMenu(false)} style={{color:darkTextSec,fontSize:15,textDecoration:"none",padding:"10px 0"}}>Contact</a>
           <button onClick={()=>{setMobileMenu(false);onLogin();}}
-            style={{marginTop:8,padding:"11px",background:"none",border:`1px solid ${line}`,borderRadius:8,
-              color:ink,fontSize:15,fontWeight:600,cursor:"pointer"}}>Client Login</button>
+            style={{marginTop:8,padding:"11px",background:"none",border:`1px solid ${darkBorder}`,borderRadius:8,
+              color:darkText,fontSize:15,fontWeight:600,cursor:"pointer"}}>Client Login</button>
         </div>
       </div>
 
@@ -9167,7 +9145,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
       </div>
 
       {/* PROBLEM */}
-      <div style={{background:C.surface,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
         <Section>
           <Eyebrow>The problem</Eyebrow>
           <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 30px",maxWidth:680}}>
@@ -9179,19 +9157,19 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               { stat:"$200K+", label:"per year for a full-time CISO — out of reach for most.", src:"Industry salary benchmarks" },
               { stat:"43%", label:"of all cyberattacks target small businesses.", src:"Verizon DBIR" },
             ].map((b,i)=>(
-              <div key={i} style={{flex:"1 1 240px",background:C.card,border:`1px solid ${line}`,
+              <div key={i} style={{flex:"1 1 240px",background:darkCard,border:`1px solid ${darkBorder}`,
                 borderRadius:14,padding:"26px 24px"}}>
-                <div style={{fontSize:40,fontWeight:800,color:C.accentText,lineHeight:1,marginBottom:10}}>{b.stat}</div>
-                <div style={{fontSize:14,color:dim,lineHeight:1.5,marginBottom:10}}>{b.label}</div>
-                <div style={{fontSize:11,color:C.textMut,letterSpacing:0.3}}>Source: {b.src}</div>
+                <div style={{fontSize:40,fontWeight:800,color:C.accent,lineHeight:1,marginBottom:10}}>{b.stat}</div>
+                <div style={{fontSize:14,color:darkTextSec,lineHeight:1.5,marginBottom:10}}>{b.label}</div>
+                <div style={{fontSize:11,color:darkTextSec,letterSpacing:0.3}}>Source: {b.src}</div>
               </div>
             ))}
           </div>
-          <div style={{marginTop:36,background:C.card,border:`1px solid ${line}`,borderRadius:14,
+          <div style={{marginTop:36,background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:14,
             overflow:"hidden",maxWidth:640}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"12px 20px",
-              background:C.surface,borderBottom:`1px solid ${line}`,
-              fontSize:11,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:C.textMut}}>
+              background:darkSurface,borderBottom:`1px solid ${darkBorder}`,
+              fontSize:11,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:darkTextSec}}>
               <div></div><div>Old way</div><div>ShieldAI</div>
             </div>
             {[
@@ -9200,29 +9178,25 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               { l:"Audit prep", old:"Scramble when asked", ours:"Evidence on file year-round" },
             ].map((r,i)=>(
               <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"14px 20px",
-                borderBottom:i<2?`1px solid ${line}`:"none",fontSize:13.5,alignItems:"center"}}>
-                <div style={{fontWeight:700}}>{r.l}</div>
-                <div style={{color:dim}}>{r.old}</div>
-                <div style={{color:C.greenText,fontWeight:600}}>{r.ours}</div>
+                borderBottom:i<2?`1px solid ${darkBorder}`:"none",fontSize:13.5,alignItems:"center"}}>
+                <div style={{fontWeight:700,color:darkText}}>{r.l}</div>
+                <div style={{color:darkTextSec}}>{r.old}</div>
+                <div style={{color:C.green,fontWeight:600}}>{r.ours}</div>
               </div>
             ))}
           </div>
         </Section>
       </div>
 
-      {/* WHY NOW — deliberately kept on a dark band per Gemini's guidance
-          (allows 1-2 high-impact sections to stay dark on an otherwise light
-          page). Uses copy-pasted dark literals (darkText/darkTextSec/
-          darkBorder/darkCyan), never the page's ink/dim/line/cyan aliases —
-          those are now light-mapped and would be unreadable here. */}
-      <div style={{background:navy,borderTop:`1px solid ${darkBorder}`,borderBottom:`1px solid ${darkBorder}`,
-        padding:"64px 0",color:darkText}}>
+      {/* WHY NOW — white section like everything else; tiles stay dark to
+          contrast against it. */}
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
         <Section>
-          <Eyebrow color={darkCyan}>Why now</Eyebrow>
-          <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px",maxWidth:680,color:darkText}}>
+          <Eyebrow>Why now</Eyebrow>
+          <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 16px",maxWidth:680}}>
             You may already be required to have this.
           </h2>
-          <p style={{fontSize:16,color:darkTextSec,lineHeight:1.6,maxWidth:640,margin:"0 0 30px"}}>
+          <p style={{fontSize:16,color:dim,lineHeight:1.6,maxWidth:640,margin:"0 0 30px"}}>
             Security is no longer optional for small businesses — three forces are making it mandatory.
           </p>
           <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
@@ -9231,7 +9205,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               { icon:"🤝", t:"Customer requirements", d:"Larger customers push SOC 2 and other security questionnaires down to their vendors. No program can mean no contract." },
               { icon:"⚖️", t:"Regulation", d:"HIPAA, CMMC, PCI DSS 4.0 (already mandatory), the FTC Safeguards Rule and state privacy laws now reach deep into the small-business tier." },
             ].map((b,i)=>(
-              <div key={i} style={{flex:"1 1 260px",background:"#101C30",border:`1px solid ${darkBorder}`,borderRadius:14,padding:"24px"}}>
+              <div key={i} style={{flex:"1 1 260px",background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:14,padding:"24px"}}>
                 <div style={{fontSize:24,marginBottom:12}}>{b.icon}</div>
                 <div style={{fontSize:16,fontWeight:700,marginBottom:8,color:darkText}}>{b.t}</div>
                 <div style={{fontSize:14,color:darkTextSec,lineHeight:1.6}}>{b.d}</div>
@@ -9251,19 +9225,19 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
           {steps.map((s,i)=>(
             <div key={i} style={{flex:"1 1 220px",position:"relative",display:"flex",flexDirection:"column",
-              padding:"22px 20px 20px",background:C.card,border:`1px solid ${line}`,borderRadius:14}}>
+              padding:"22px 20px 20px",background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:14}}>
               {/* Step rail — a thin accent that fades along the sequence */}
               <div style={{position:"absolute",top:0,left:20,right:20,height:2,borderRadius:2,
                 background:`linear-gradient(90deg,${cyan}${i===0?"CC":"66"},${cyan}${i===steps.length-1?"22":"55"})`}}/>
               <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:12}}>
                 <div style={{width:26,height:26,borderRadius:7,display:"flex",alignItems:"center",
                   justifyContent:"center",background:`${cyan}18`,border:`1px solid ${cyan}33`,
-                  fontSize:11,fontWeight:800,color:C.accentText,letterSpacing:0.5}}>{s.n}</div>
-                <div style={{fontSize:17,fontWeight:700}}>{s.t}</div>
+                  fontSize:11,fontWeight:800,color:C.accent,letterSpacing:0.5}}>{s.n}</div>
+                <div style={{fontSize:17,fontWeight:700,color:darkText}}>{s.t}</div>
               </div>
-              <div style={{fontSize:13.5,color:dim,lineHeight:1.6,flex:1}}>{s.d}</div>
-              <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${line}`,
-                fontSize:11.5,fontWeight:600,color:C.greenText,letterSpacing:0.2}}>
+              <div style={{fontSize:13.5,color:darkTextSec,lineHeight:1.6,flex:1}}>{s.d}</div>
+              <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${darkBorder}`,
+                fontSize:11.5,fontWeight:600,color:C.green,letterSpacing:0.2}}>
                 {s.out}
               </div>
             </div>
@@ -9274,7 +9248,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
       {/* PLATFORM CAPABILITIES — the working feature set, kept honest: these are
           all live in the product, not roadmap. Mirrors what a demo visitor
           actually sees inside the client dashboard. */}
-      <div style={{background:C.surface,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"56px 0"}}>
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"56px 0"}}>
         <Section>
           <Eyebrow>Inside the platform</Eyebrow>
           <h2 style={{fontSize:32,fontWeight:800,letterSpacing:-0.8,margin:"0 0 10px",maxWidth:640}}>
@@ -9390,11 +9364,13 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               { icon:"💬", t:"Slack & Teams notifications",
                 d:"Get pinged the moment there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out. Recommendation alerts include action buttons so you can respond without leaving chat." },
             ].map((f,i)=>(
-              <div key={i} style={{padding:"20px 22px",background:C.card,border:`1px solid ${line}`,borderRadius:14,
-                boxShadow:"0 4px 16px rgba(15,23,42,0.06)"}}>
+              <div key={i} style={{padding:"20px 22px",
+                background:`linear-gradient(160deg,${darkCard},${darkSurface})`,
+                border:`1px solid ${darkBorder}`,borderRadius:14,
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 4px rgba(0,0,0,0.4), 0 14px 28px rgba(0,0,0,0.35)"}}>
                 <div style={{fontSize:26,marginBottom:11}}>{f.icon}</div>
-                <div style={{fontSize:15.5,fontWeight:700,marginBottom:7}}>{f.t}</div>
-                <div style={{fontSize:13,color:dim,lineHeight:1.6}}>{f.d}</div>
+                <div style={{fontSize:15.5,fontWeight:700,marginBottom:7,color:darkText}}>{f.t}</div>
+                <div style={{fontSize:13,color:darkTextSec,lineHeight:1.6}}>{f.d}</div>
               </div>
             ))}
           </div>
@@ -9417,7 +9393,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           intentionally never render a vendor name. If this marketing-page
           exception is ever reversed, the agent-role framing (Analyst/
           Intelligence/Advisory) below still works without the `v:` field. */}
-      <div style={{background:C.surface,borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"52px 0"}}>
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"52px 0"}}>
         <Section>
           <div style={{display:"flex",gap:40,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
             <div style={{flex:"1 1 380px",minWidth:280}}>
@@ -9444,24 +9420,24 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             </div>
             <div style={{flex:"0 1 380px",minWidth:280,display:"flex",flexDirection:"column",gap:10}}>
               {[
-                { t:"Analyst Agent", v:"Claude · Anthropic", color:C.purpleText,
+                { t:"Analyst Agent", v:"Claude · Anthropic", color:C.purple,
                   d:"Risk scoring, policy drafting, compliance and workflow reasoning." },
-                { t:"Intelligence Agent", v:"Gemini · Google", color:C.accentText,
+                { t:"Intelligence Agent", v:"Gemini · Google", color:C.accent,
                   d:"Real-time threat research, vendor and industry-threat lookups." },
-                { t:"Advisory Agent", v:"ChatGPT · OpenAI", color:C.greenText,
+                { t:"Advisory Agent", v:"ChatGPT · OpenAI", color:C.green,
                   d:"Tool recommendations, training content, and executive reporting." },
               ].map((x,i)=>(
                 <div key={i} style={{display:"flex",gap:11,alignItems:"flex-start",padding:"12px 14px",
-                  background:C.card,border:`1px solid ${line}`,borderRadius:10}}>
+                  background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:10}}>
                   <div style={{width:16,height:16,borderRadius:5,flexShrink:0,marginTop:1,
                     background:`${x.color}1A`,border:`1px solid ${x.color}44`,display:"flex",
                     alignItems:"center",justifyContent:"center",fontSize:9,color:x.color,fontWeight:800}}>🧠</div>
                   <div>
                     <div style={{display:"flex",alignItems:"baseline",gap:7,marginBottom:3,flexWrap:"wrap"}}>
-                      <div style={{fontSize:13,fontWeight:700}}>{x.t}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:darkText}}>{x.t}</div>
                       <div style={{fontSize:10.5,color:x.color,fontWeight:600}}>{x.v}</div>
                     </div>
-                    <div style={{fontSize:12,color:dim,lineHeight:1.5}}>{x.d}</div>
+                    <div style={{fontSize:12,color:darkTextSec,lineHeight:1.5}}>{x.d}</div>
                   </div>
                 </div>
               ))}
@@ -9515,7 +9491,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
       </Section>
 
       {/* TRUST */}
-      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"40px 0",background:C.surface}}>
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"40px 0"}}>
         <Section>
           <div style={{fontSize:12,color:dim,letterSpacing:1.5,textTransform:"uppercase",textAlign:"center",marginBottom:20}}>
             Built on the standards that matter
@@ -9552,12 +9528,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             </div>
           </div>
 
-          <div style={{flex:"1 1 360px",background:C.card,border:`1px solid ${line}`,borderRadius:16,padding:"28px"}}>
+          <div style={{flex:"1 1 360px",background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:16,padding:"28px"}}>
             {submitted ? (
               <div style={{textAlign:"center",padding:"30px 10px"}}>
                 <div style={{fontSize:40,marginBottom:14}}>✓</div>
-                <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Thanks — we'll be in touch.</div>
-                <div style={{fontSize:14,color:dim,lineHeight:1.6}}>
+                <div style={{fontSize:18,fontWeight:700,marginBottom:8,color:darkText}}>Thanks — we'll be in touch.</div>
+                <div style={{fontSize:14,color:darkTextSec,lineHeight:1.6}}>
                   Your request is in. A member of our team will reach out to {form.email} shortly.
                 </div>
               </div>
@@ -9569,19 +9545,19 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   { k:"company", label:"Company", ph:"Acme Inc." },
                 ].map(f=>(
                   <div key={f.k} style={{marginBottom:14}}>
-                    <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>{f.label}</label>
+                    <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>{f.label}</label>
                     <input value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})}
                       placeholder={f.ph}
-                      style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
-                        border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,
+                      style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
+                        border:`1px solid ${darkBorder}`,borderRadius:9,color:darkText,fontSize:14,
                         fontFamily:"Inter,system-ui,sans-serif"}}/>
                   </div>
                 ))}
                 <div style={{marginBottom:14}}>
-                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>Company size</label>
+                  <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>Company size</label>
                   <select value={form.employees} onChange={e=>setForm({...form,employees:e.target.value})}
-                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
-                      border:`1px solid ${line}`,borderRadius:9,color:form.employees?ink:dim,fontSize:14}}>
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
+                      border:`1px solid ${darkBorder}`,borderRadius:9,color:form.employees?darkText:darkTextSec,fontSize:14}}>
                     <option value="">Select…</option>
                     <option value="1-10">1–10 employees</option>
                     <option value="11-50">11–50 employees</option>
@@ -9590,21 +9566,21 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   </select>
                 </div>
                 <div style={{marginBottom:18}}>
-                  <label style={{display:"block",fontSize:12,color:dim,marginBottom:5}}>How can we help?</label>
+                  <label style={{display:"block",fontSize:12,color:darkTextSec,marginBottom:5}}>How can we help?</label>
                   <textarea value={form.message} onChange={e=>setForm({...form,message:e.target.value})}
                     rows={3} placeholder="Tell us about your situation…"
-                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:C.surface,
-                      border:`1px solid ${line}`,borderRadius:9,color:ink,fontSize:14,resize:"vertical",
+                    style={{width:"100%",boxSizing:"border-box",padding:"11px 13px",background:darkSurface,
+                      border:`1px solid ${darkBorder}`,borderRadius:9,color:darkText,fontSize:14,resize:"vertical",
                       fontFamily:"Inter,system-ui,sans-serif"}}/>
                 </div>
-                {formErr && <div style={{color:C.redText,fontSize:13,marginBottom:12}}>{formErr}</div>}
+                {formErr && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{formErr}</div>}
                 <button onClick={submitLead} disabled={submitting}
                   style={{width:"100%",padding:"13px",background:C.accent,
                     color:"#04121F",border:"none",borderRadius:9,fontSize:15,fontWeight:700,
                     cursor:submitting?"wait":"pointer"}}>
                   {submitting ? "Sending…" : "Request information"}
                 </button>
-                <div style={{fontSize:11,color:dim,textAlign:"center",marginTop:10}}>
+                <div style={{fontSize:11,color:darkTextSec,textAlign:"center",marginTop:10}}>
                   We'll only use your details to follow up. No spam.
                 </div>
               </>
