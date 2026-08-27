@@ -116,7 +116,8 @@ export function phishingSummary(db) {
   return clientIds.map(id => ({ clientUserId: id, ...clientPhishingSummary(db, id) }));
 }
 
-export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient }) {
+export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter }) {
+  const emailLimit = emailSendLimiter || ((req, res, next) => next());
   ensureCollections(db);
 
   // ── Scenario catalog ──────────────────────────────────────────
@@ -249,7 +250,7 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
   });
 
   // ── Send ───────────────────────────────────────────────────────
-  app.post("/api/phishing/campaigns/:id/send", requireAuth, async (req, res) => {
+  app.post("/api/phishing/campaigns/:id/send", requireAuth, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const campaign = (db.data.phishingCampaigns || []).find(c => c.id === req.params.id && c.clientUserId === scope.clientUserId);

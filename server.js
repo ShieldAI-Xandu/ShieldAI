@@ -234,6 +234,19 @@ const changePasswordLimiter = rateLimit({
   message: { error: "Too many attempts. Please wait a few minutes and try again." },
 });
 
+// Phishing-campaign send and policy-reminder send both trigger a real
+// outbound email via emailService.js — authenticated, so keyed on user like
+// changePasswordLimiter, so one client's campaign burst can't lock out
+// another client sharing an office IP.
+const emailSendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  message: { error: "Too many email sends. Please wait a few minutes and try again." },
+});
+
 // ── DEMO / PRODUCTION BOUNDARY ───────────────────────────────
 // Bind every request to exactly one data store before any route runs.
 // Demo requests → demo-db.json. Everything else → db.json. Nothing downstream
@@ -1764,9 +1777,9 @@ registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson });
-registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate });
+registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate, emailSendLimiter });
 registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
-registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient });
+registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 

@@ -25,6 +25,22 @@ import { notify } from "./notificationDispatch.js";
 
 const nowIso = () => new Date().toISOString();
 
+// Mirrors reportRoutes.js's esc() — policyName/learner name are
+// client-controlled and get interpolated into email HTML/subject below.
+function esc(s) {
+  return String(s ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
+}
+
 function ensureCollections(db) {
   // One row per (policyId, learnerId) assignment. Kept even after
   // acknowledgment (acknowledgedAt set) as the actual proof record — this
@@ -71,10 +87,11 @@ function summarizeByPolicy(rows) {
   return [...byPolicy.values()];
 }
 
-export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate }) {
+export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate, emailSendLimiter }) {
   ensureCollections(db);
 
   const gateRoster = (gate && gate.capability) ? gate.capability("employeeRoster") : (req, res, next) => next();
+  const emailLimit = emailSendLimiter || ((req, res, next) => next());
 
   // ── Client: list all acknowledgment rows + per-policy summary ───
   app.get("/api/client/policies/acknowledgments", requireAuth, (req, res) => {
@@ -146,7 +163,7 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
   });
 
   // ── Client: send a real reminder email to a pending signer ───
-  app.post("/api/client/policies/acknowledgments/:id/remind", requireAuth, gateRoster, async (req, res) => {
+  app.post("/api/client/policies/acknowledgments/:id/remind", requireAuth, gateRoster, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const row = (db.data.policyAcknowledgments || []).find(r => r.id === req.params.id && r.clientUserId === scope.clientUserId);
@@ -165,8 +182,8 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
       return res.json({ ok: true, emailed: false, learnerLink: `/train/${learner.token}`, remindedAt: row.remindedAt });
     }
     const link = `${process.env.APP_URL || "http://localhost:5173"}/train/${learner.token}`;
-    const html = `<p>Hi ${learner.name.split(" ")[0]},</p>
-<p>You have a company policy waiting for your review: <strong>${row.policyName}</strong>.</p>
+    const html = `<p>Hi ${esc(learner.name.split(" ")[0])},</p>
+<p>You have a company policy waiting for your review: <strong>${esc(row.policyName)}</strong>.</p>
 <p>Please take a moment to read it and confirm you've reviewed it:</p>
 <p><a href="${link}">${link}</a></p>
 <p>Thanks,<br/>Your security team</p>`;
