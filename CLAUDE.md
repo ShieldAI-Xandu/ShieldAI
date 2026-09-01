@@ -101,7 +101,14 @@ Per-provider OAuth app credentials (each integration degrades to a clear
 `JIRA_CLIENT_SECRET`, `ASANA_CLIENT_ID` / `ASANA_CLIENT_SECRET`.
 
 ## Test accounts
-- Admin: `dbrooks@xandultd.com` (auto-promoted via `ADMIN_EMAIL`)
+- Super-admin: `dbrooks@xandultd.com` — the single all-access, staff-only account,
+  defined by `ADMIN_EMAIL`. No company/assessment/program; lands in the Admin console
+  (Analyst console one click away); cannot be demoted, suspended, or deleted. Derived
+  `category: "superadmin"` / `isSuperAdmin: true` on the user object; `req.isSuperAdmin`
+  server-side. There is only ever one.
+- Regular staff: `isAdmin` and `isAnalyst` remain the enforcement booleans, but for a
+  regular account the two are **mutually exclusive** — the admin "role" toggle grants one
+  and clears the other. `category` is `admin` / `analyst` / `client` accordingly.
 - Analyst: `analyst@xandultd.com`
 - Demo client: `demo@shieldai.com`
 - Passwords live in local, gitignored notes — not in this file.

@@ -100,6 +100,8 @@ import {
   adminResetPassword,
   changeOwnPassword,
   adminDeleteUser,
+  accountCategory,
+  isSuperAdminEmail,
   MAX_USERS,
 } from "./auth.js";
 
@@ -1631,6 +1633,8 @@ app.get("/api/admin/users", requireAdmin, (req, res) => {
       companyName: u.companyName,
       isAdmin: !!u.isAdmin,
       isAnalyst: !!u.isAnalyst,
+      isSuperAdmin: isSuperAdminEmail(u.email),
+      category: accountCategory(u),
       createdAt: u.createdAt,
       stats: {
         assessments: assessments.length,

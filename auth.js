@@ -46,6 +46,25 @@ function isAnalystEmail(email) {
   return Boolean(ANALYST_EMAIL && email === ANALYST_EMAIL);
 }
 
+// The ADMIN_EMAIL account IS the super-admin: the single staff-only account with
+// total site-wide access, no company/assessment/program, and no way to be
+// demoted/suspended/deleted. There is only ever one. Regular admins created via
+// adminRoutes.js are not super-admins.
+export function isSuperAdminEmail(email) {
+  return isAdminEmail(String(email || "").trim().toLowerCase());
+}
+
+// The account's category — derived, never stored. superadmin > admin > analyst >
+// client. Regular staff accounts are exactly one of admin/analyst (adminRoutes.js
+// enforces that when a role is set).
+export function accountCategory(user) {
+  if (!user) return "client";
+  if (isSuperAdminEmail(user.email)) return "superadmin";
+  if (user.isAdmin) return "admin";
+  if (user.isAnalyst) return "analyst";
+  return "client";
+}
+
 // Count only standard (non-admin, non-analyst) users against the cap
 function nonAdminCount() {
   return (db.data.users || []).filter(u => !u.isAdmin && !u.isAnalyst).length;
@@ -190,6 +209,8 @@ export function publicUser(user) {
     companyName: user.companyName,
     isAdmin: !!user.isAdmin,
     isAnalyst: !!user.isAnalyst,
+    isSuperAdmin: isSuperAdminEmail(user.email),
+    category: accountCategory(user),
     isDemo: !!user.isDemo,
     mustChangePassword: !!user.mustChangePassword,
     tier: tierId,
@@ -237,6 +258,7 @@ export async function requireAuth(req, res, next) {
     req.userEmail = demo.email;
     req.isAdmin = false;
     req.isAnalyst = !!demo.isAnalyst;
+    req.isSuperAdmin = false;
     req.isDemo = true;
     await applyImpersonation(req, demo.impersonatedBy);
     return next();
@@ -271,6 +293,9 @@ export async function requireAuth(req, res, next) {
     req.userEmail = payload.email;
     req.isAdmin = !!liveUser.isAdmin;
     req.isAnalyst = !!liveUser.isAnalyst;
+    // The one super-admin, keyed off ADMIN_EMAIL against the live record. During
+    // impersonation liveUser is the CLIENT, so this correctly comes out false.
+    req.isSuperAdmin = isSuperAdminEmail(liveUser.email);
     req.isDemo = false;
 
     // Impersonation ("View as Client"): req.userId already resolves to the
@@ -376,6 +401,11 @@ export async function adminDeleteUser(targetUserId) {
   if (!user) {
     const err = new Error("User not found.");
     err.code = "NOT_FOUND";
+    throw err;
+  }
+  if (isSuperAdminEmail(user.email)) {
+    const err = new Error("The super-admin account cannot be deleted.");
+    err.code = "FORBIDDEN";
     throw err;
   }
   if (user.isAdmin) {

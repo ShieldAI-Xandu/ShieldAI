@@ -10863,7 +10863,7 @@ function AdminCustomFrameworksPanel() {
   );
 }
 
-function AdminPanel({ onClose }) {
+function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind }) {
   const [view, setView] = useState("list");   // list | user | program
   const [listTab, setListTab] = useState("accounts"); // accounts | leads
   const [users, setUsers] = useState([]);
@@ -11305,11 +11305,34 @@ function AdminPanel({ onClose }) {
             ← {backTo.label}
           </button>
         )}
-        <button onClick={onClose}
-          style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-            color:"#04121F",border:"none",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
-          Exit Admin
-        </button>
+        {onOpenMastermind && (
+          <button onClick={onOpenMastermind}
+            style={{padding:"6px 14px",background:`${C.purple}22`,border:`1px solid ${C.purple}55`,
+              borderRadius:6,color:C.purpleText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            🧠 Mastermind
+          </button>
+        )}
+        {onOpenAnalyst && (
+          <button onClick={onOpenAnalyst}
+            style={{padding:"6px 14px",background:`${C.accent}22`,border:`1px solid ${C.accent}55`,
+              borderRadius:6,color:C.accentText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            🛰️ Analyst Console
+          </button>
+        )}
+        {onViewClientApp && (
+          <button onClick={onViewClientApp}
+            style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            👁 View client app
+          </button>
+        )}
+        {!onOpenAnalyst && (
+          <button onClick={onClose}
+            style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:"#04121F",border:"none",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            Exit Admin
+          </button>
+        )}
       </div>
     </div>
   );
@@ -11408,8 +11431,12 @@ function AdminPanel({ onClose }) {
                       <span style={{color:C.text,fontWeight:700,fontSize:16}}>
                         {u.companyName || "(no company name)"}
                       </span>
-                      {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
-                          {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
+                      {u.category === "superadmin"
+                        ? <Badge label="SUPER-ADMIN" color={C.purple}/>
+                        : <>
+                            {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
+                            {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
+                          </>}
                     </div>
                     <div style={{color:C.textSec,fontSize:13}}>{u.email}</div>
                     <div style={{color:C.textMut,fontSize:11,marginTop:4}}>
@@ -11468,6 +11495,15 @@ function AdminPanel({ onClose }) {
                     {/* Role */}
                     <div>
                       <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>Role & Access</div>
+                      {accountCtl.category === "superadmin" ? (
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                          <span style={{padding:"6px 12px",borderRadius:20,fontSize:11,fontWeight:700,letterSpacing:1,
+                            background:`${C.purple}22`,border:`1px solid ${C.purple}`,color:C.purpleText}}>SUPER-ADMIN</span>
+                          <span style={{color:C.textMut,fontSize:11.5}}>
+                            Defined by the ADMIN_EMAIL environment variable — full site-wide access, and can't be changed, suspended, or deleted here.
+                          </span>
+                        </div>
+                      ) : (
                       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                         <button onClick={()=>setRole(accountCtl.id,"admin",!accountCtl.isAdmin)} disabled={ctlBusy}
                           style={{padding:"7px 14px",borderRadius:7,cursor:ctlBusy?"wait":"pointer",fontSize:12,fontWeight:600,
@@ -11490,6 +11526,10 @@ function AdminPanel({ onClose }) {
                             Reset to standard client
                           </button>
                         )}
+                      </div>
+                      )}
+                      <div style={{color:C.textMut,fontSize:11,marginTop:6}}>
+                        Admin and analyst are mutually exclusive — granting one clears the other.
                       </div>
                     </div>
 
@@ -11880,8 +11920,12 @@ function AdminPanel({ onClose }) {
                           <span style={{color:C.text,fontWeight:600,fontSize:14}}>
                             {u.companyName || "(no company name)"}
                           </span>
-                          {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
-                          {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
+                          {u.category === "superadmin"
+                            ? <Badge label="SUPER-ADMIN" color={C.purple}/>
+                            : <>
+                                {u.isAdmin && <Badge label="ADMIN" color={C.purple}/>}
+                                {u.isAnalyst && <Badge label="ANALYST" color={C.accent}/>}
+                              </>}
                         </div>
                         <div style={{color:C.textSec,fontSize:12,marginBottom:8}}>{u.email}</div>
                         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -15036,7 +15080,7 @@ function AnalystMastermindPanel({ mmOpen, setMmOpen, active, mmThread, mmThinkin
   );
 }
 
-function AnalystConsole({ user, onExit, onImpersonate }) {
+function AnalystConsole({ user, onExit, onImpersonate, onOpenAdmin }) {
   const [view, setView] = useState("portfolio");
   const [active, setActive] = useState(null);
   const [mmOpen, setMmOpen] = useState(false);
@@ -15326,7 +15370,7 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
         )}
         <button onClick={onExit} style={{padding:"6px 16px",background:SOC.cyan,
           color:SOC.bg,border:"none",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
-          Exit Console
+          {onOpenAdmin ? "⚙ Admin Console" : "Exit Console"}
         </button>
       </div>
     </div>
@@ -19712,6 +19756,10 @@ export default function ShieldAI() {
   // own session so exitClientView() can restore it. Every write made while
   // impersonating is logged server-side against the client's action log.
   const [impersonating, setImpersonating] = useState(null); // { staffToken, staffUser, clientName }
+  // Super-admin only: an explicit, opt-in peek at the client experience. The
+  // super-admin never lands there; this lets it inspect the client app on
+  // demand from the console, with a persistent "back to console" banner.
+  const [staffViewClient, setStaffViewClient] = useState(false);
 
   // Frontend analyst detection for the mockup (matches the actual backend flag).
   // Later this becomes a real role flag from the backend.
@@ -19721,7 +19769,7 @@ export default function ShieldAI() {
   const isAnalyst = user && (
     user.isDemo
       ? user.accessType === "investor"
-      : (user.isAnalyst || user.email === ANALYST_EMAIL)
+      : (user.isAnalyst || user.isSuperAdmin || user.email === ANALYST_EMAIL)
   );
 
   // ── Navigation state: refresh persistence + Back/Forward ──
@@ -19831,6 +19879,14 @@ export default function ShieldAI() {
         const userObj = await res.json();
         if (cancelled) return;
         setUser(userObj);
+
+        // The super-admin has no client workspace to resume into. Restore any
+        // staff overlay that was open (analyst console, mastermind, etc.); the
+        // render guard defaults to the Admin console when none is.
+        if (userObj?.isSuperAdmin) {
+          applyNavOverlays(loadResumeState());
+          return;
+        }
 
         const resume = loadResumeState();
         if (resume?.phase === "dashboard" && resume.assessmentId) {
@@ -19977,6 +20033,12 @@ export default function ShieldAI() {
     // session is different: it should start in the CLIENT experience (that's
     // what a prospect sees) with the analyst console one click away, so the
     // investor sees both sides. So we skip the auto-jump for demo sessions.
+    // The super-admin is a staff-only account with no company: the render guard
+    // below puts it straight into the Admin console (Analyst console one click
+    // away), never the client home screen. Nothing to set here.
+    if (userObj && userObj.isSuperAdmin) {
+      return;
+    }
     if (userObj && !userObj.isDemo && (userObj.isAnalyst || userObj.email === ANALYST_EMAIL)) {
       setShowAnalyst(true);
     }
@@ -20153,6 +20215,31 @@ export default function ShieldAI() {
       onSignOut={signOut}/>;
   }
 
+  // Super-admin: a staff-only account with no company, assessment, or program.
+  // Its base surface is the Admin console; the Analyst console and the other
+  // staff overlays are reachable from there. It never falls through to the
+  // client home / assessment / program screens — the only way there is the
+  // explicit "view client app" peek (staffViewClient), which carries a
+  // persistent banner back to the console.
+  if (user.isSuperAdmin && !staffViewClient) {
+    if (showAnalyst) {
+      return <AnalystConsole user={user}
+        onExit={() => setShowAnalyst(false)}
+        onOpenAdmin={() => setShowAnalyst(false)}
+        onImpersonate={enterClientView}/>;
+    }
+    if (!showMastermind && !showEndpoints && !showThreatIntel && !showIntegrations && !showHelp) {
+      return <AdminPanel
+        onClose={() => {}}
+        onOpenAnalyst={() => setShowAnalyst(true)}
+        onOpenMastermind={() => setShowMastermind(true)}
+        onViewClientApp={() => setStaffViewClient(true)}/>;
+    }
+    // else: an independent staff overlay is open — fall through to its block
+    // (Mastermind / Endpoints / Threat Intel / Integrations / Help each render
+    // themselves below; closing one returns here to the Admin console).
+  }
+
   // Admin panel (admins only)
   if (showAdmin && user.isAdmin) {
     return <AdminPanel onClose={() => setShowAdmin(false)}/>;
@@ -20205,6 +20292,22 @@ export default function ShieldAI() {
     <>
     {demoBanner}
     {impersonating && <ImpersonationBanner clientName={impersonating.clientName} onExit={exitClientView}/>}
+    {staffViewClient && (
+      <div style={{padding:"8px 20px",background:`${C.purple}22`,borderBottom:`1px solid ${C.purple}55`,
+        display:"flex",alignItems:"center",gap:12,fontSize:12,color:C.purpleText}}>
+        <span style={{fontWeight:700}}>👁 Client-app preview</span>
+        <span style={{color:C.textSec}}>You're viewing the client experience as the super-admin. Nothing here is your own data.</span>
+        <button onClick={() => {
+            setStaffViewClient(false);
+            setShowEndpoints(false); setShowThreatIntel(false);
+            setShowIntegrations(false); setShowHelp(false);
+          }}
+          style={{marginLeft:"auto",padding:"4px 12px",background:C.purple,border:"none",borderRadius:6,
+            color:"#0B0417",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+          ← Back to console
+        </button>
+      </div>
+    )}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
     <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
       display:"flex",alignItems:"center",gap:10}}>

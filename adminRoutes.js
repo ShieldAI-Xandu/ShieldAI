@@ -17,6 +17,7 @@
 
 import { randomUUID } from "crypto";
 import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier } from "./tiers.js";
+import { isSuperAdminEmail, accountCategory } from "./auth.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -35,6 +36,8 @@ function adminUserView(db, u) {
     companyName: u.companyName || "",
     isAdmin: !!u.isAdmin,
     isAnalyst: !!u.isAnalyst,
+    isSuperAdmin: isSuperAdminEmail(u.email),
+    category: accountCategory(u),
     tier: userTier(u),
     suspended: !!u.suspended,
     mustChangePassword: !!u.mustChangePassword,
@@ -102,6 +105,11 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     if ((db.data.users || []).some(u => u.email === normalized)) {
       return res.status(409).json({ error: "An account with this email already exists." });
     }
+    if (role === "superadmin" || isSuperAdminEmail(normalized)) {
+      return res.status(400).json({
+        error: "The super-admin is defined by the ADMIN_EMAIL environment variable, not created here.",
+      });
+    }
     const wantRole = ["analyst", "admin", "client"].includes(role) ? role : "client";
 
     // Use the provided temp password, or generate a strong one to show once.
@@ -145,6 +153,12 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     if (!u) return res.status(404).json({ error: "Account not found." });
     const { role, value } = req.body || {};
 
+    // The super-admin is defined by ADMIN_EMAIL and is not editable here.
+    if (isSuperAdminEmail(u.email)) {
+      return res.status(403).json({
+        error: "The super-admin account is defined by the ADMIN_EMAIL environment variable and can't be changed here.",
+      });
+    }
     // Guard: an admin cannot remove their OWN admin rights (prevents lockout).
     if (u.id === req.userId && role === "admin" && value === false) {
       return res.status(409).json({ error: "You cannot remove your own admin access." });
@@ -157,8 +171,10 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
       }
     }
 
-    if (role === "admin") u.isAdmin = !!value;
-    else if (role === "analyst") u.isAnalyst = !!value;
+    // admin and analyst are mutually exclusive categories for a regular account —
+    // granting one clears the other.
+    if (role === "admin") { u.isAdmin = !!value; if (value) u.isAnalyst = false; }
+    else if (role === "analyst") { u.isAnalyst = !!value; if (value) u.isAdmin = false; }
     else if (role === "client") { u.isAdmin = false; u.isAnalyst = false; }
     else return res.status(400).json({ error: "role must be 'admin', 'analyst', or 'client'." });
 
@@ -204,6 +220,9 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     const { suspended } = req.body || {};
     if (u.id === req.userId && suspended) {
       return res.status(409).json({ error: "You cannot suspend your own account." });
+    }
+    if (isSuperAdminEmail(u.email) && suspended) {
+      return res.status(403).json({ error: "The super-admin account cannot be suspended." });
     }
     if (u.isAdmin && suspended) {
       return res.status(409).json({ error: "Suspend the admin role before suspending an admin account." });
