@@ -71,6 +71,11 @@ const DARK = {
   text: "#E2EDFF", textSec: "#7B92B2", textMut: "#2E4A6A",
 };
 
+// The top-of-page nav bar — one navy shared by the client TopBar, the admin
+// console header, the analyst console header, and the marketing site's sticky
+// nav (MarketingPage's local `navy`), so every page reads as one product.
+const NAV = { bg: "#0A1428", border: "#1A2D47", text: "#E2EDFF", textDim: "#8AA0C0" };
+
 // ─────────────────────────────────────────────────────────────
 //  AI ROUTER — routes tasks to the right model
 //
@@ -8905,7 +8910,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   }
 
   const ink = C.text, dim = C.textSec, line = C.border, cyan = C.accent, deep = C.bg;
-  const navy = "#0A1428";
+  const navy = NAV.bg; // shared with the in-app top nav bar (see NAV)
   // Copy-pasted (not C-referencing) old dark-theme literals — for the two
   // sections deliberately kept on a dark band (WHY NOW, footer) per Gemini's
   // guidance. Independent of C so they can't drift light with the rest of
@@ -11291,38 +11296,38 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind 
   }
 
   const Header = ({ title, backTo }) => (
-    <div style={{padding:"14px 24px",background:C.surface,borderBottom:`1px solid ${C.border}`,
+    <div style={{padding:"14px 24px",background:NAV.bg,borderBottom:`1px solid ${NAV.border}`,
       display:"flex",alignItems:"center",gap:12}}>
       <span style={{fontSize:20}}>⚙️</span>
-      <span style={{fontWeight:700,fontSize:16}}>{title}</span>
-      <span style={{fontSize:11,color:C.purpleText,letterSpacing:1.5,
+      <span style={{fontWeight:700,fontSize:16,color:NAV.text}}>{title}</span>
+      <span style={{fontSize:11,color:C.purple,letterSpacing:1.5,
         padding:"2px 10px",background:`${C.purple}22`,borderRadius:20}}>ADMINISTRATOR</span>
       <div style={{marginLeft:"auto",display:"flex",gap:8}}>
         {backTo && (
           <button onClick={backTo.fn}
-            style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
-              borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            style={{padding:"6px 14px",background:"rgba(255,255,255,0.06)",border:`1px solid ${NAV.border}`,
+              borderRadius:6,color:NAV.textDim,fontSize:12,cursor:"pointer"}}>
             ← {backTo.label}
           </button>
         )}
         {onOpenMastermind && (
           <button onClick={onOpenMastermind}
-            style={{padding:"6px 14px",background:`${C.purple}22`,border:`1px solid ${C.purple}55`,
-              borderRadius:6,color:C.purpleText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            style={{padding:"6px 14px",background:`${C.purple}22`,border:`1px solid ${C.purple}66`,
+              borderRadius:6,color:C.purple,fontSize:12,fontWeight:600,cursor:"pointer"}}>
             🧠 Mastermind
           </button>
         )}
         {onOpenAnalyst && (
           <button onClick={onOpenAnalyst}
             style={{padding:"6px 14px",background:`${C.accent}22`,border:`1px solid ${C.accent}55`,
-              borderRadius:6,color:C.accentText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+              borderRadius:6,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>
             🛰️ Analyst Console
           </button>
         )}
         {onViewClientApp && (
           <button onClick={onViewClientApp}
-            style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
-              borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+            style={{padding:"6px 14px",background:"rgba(255,255,255,0.06)",border:`1px solid ${NAV.border}`,
+              borderRadius:6,color:NAV.textDim,fontSize:12,cursor:"pointer"}}>
             👁 View client app
           </button>
         )}
@@ -15324,7 +15329,7 @@ function AnalystConsole({ user, onExit, onImpersonate, onOpenAdmin }) {
   const metaFor = s => statusMeta[s] || statusMeta.unknown;
 
   const Header = ({ title, backTo }) => (
-    <div style={{padding:"13px 22px",background:SOC.panel,borderBottom:`1px solid ${SOC.border}`,
+    <div style={{padding:"13px 22px",background:NAV.bg,borderBottom:`1px solid ${NAV.border}`,
       display:"flex",alignItems:"center",gap:12}}>
       <span style={{fontSize:18}}>🛰️</span>
       <span style={{fontWeight:700,fontSize:15,color:SOC.text}}>{title}</span>
@@ -20309,25 +20314,25 @@ export default function ShieldAI() {
       </div>
     )}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
-    <div style={{padding:"10px 20px",background:C.surface,borderBottom:`1px solid ${C.border}`,
+    <div style={{padding:"10px 20px",background:NAV.bg,borderBottom:`1px solid ${NAV.border}`,
       display:"flex",alignItems:"center",gap:10}}>
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
-        <ShieldLockup logoSize={22} textSize={15} ink={C.text} instanceKey="topbar"/>
+        <ShieldLockup logoSize={22} textSize={15} ink={NAV.text} instanceKey="topbar"/>
       </span>
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
-        <span style={{fontSize:12,color:C.textSec}}>
+        <span style={{fontSize:12,color:NAV.textDim}}>
           {user.companyName || user.email}
         </span>
         <button onClick={() => setShowEndpoints(true)}
-          style={{padding:"5px 12px",background:`${C.accent}18`,
+          style={{padding:"5px 12px",background:`${C.accent}1E`,
             border:`1px solid ${C.accent}55`,borderRadius:6,
-            color:C.accentText,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🖥️ Endpoints
         </button>
         <button onClick={() => setShowThreatIntel(true)}
-          style={{padding:"5px 12px",background:`${C.purple}18`,
-            border:`1px solid ${C.purple}55`,borderRadius:6,
-            color:C.purpleText,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          style={{padding:"5px 12px",background:`${C.purple}22`,
+            border:`1px solid ${C.purple}66`,borderRadius:6,
+            color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
           🔍 Threat Intel
         </button>
         <button onClick={() => can("integrations")
@@ -20335,15 +20340,15 @@ export default function ShieldAI() {
             : setUpgradePrompt({ error:"Security tool integrations (SIEM/EDR/scanner findings) are available on the Growth plan and above. Upgrade to Growth ($349/mo) to connect your tools.", code:"UPGRADE_REQUIRED", capability:"integrations", currentTier:user.tier, requiresTier:"growth" })}
           title={can("integrations") ? "" : "Growth plan feature"}
           style={{padding:"5px 12px",
-            background: can("integrations") ? `${C.accent}18` : C.surface,
-            border:`1px solid ${can("integrations") ? C.accent+"55" : C.border}`,borderRadius:6,
-            color: can("integrations") ? C.accentText : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+            background: can("integrations") ? `${C.accent}1E` : "rgba(255,255,255,0.04)",
+            border:`1px solid ${can("integrations") ? C.accent+"55" : NAV.border}`,borderRadius:6,
+            color: can("integrations") ? C.accent : NAV.textDim,fontSize:11,cursor:"pointer",fontWeight:600}}>
           {can("integrations") ? "🔌 Integrations" : "🔒 Integrations"}
         </button>
         <button onClick={() => setShowHelp(true)}
-          style={{padding:"5px 12px",background:`${C.textSec}18`,
-            border:`1px solid ${C.border}`,borderRadius:6,
-            color:C.textSec,fontSize:11,cursor:"pointer",fontWeight:600}}>
+          style={{padding:"5px 12px",background:"rgba(255,255,255,0.06)",
+            border:`1px solid ${NAV.border}`,borderRadius:6,
+            color:NAV.textDim,fontSize:11,cursor:"pointer",fontWeight:600}}>
           ❓ Help
         </button>
         {!user.isAdmin && !user.isAnalyst && (
@@ -20352,9 +20357,9 @@ export default function ShieldAI() {
               : setUpgradePrompt({ error:"Direct analyst messaging is available on the Guided plan and above. Upgrade to Guided ($699/mo) to message your assigned analyst directly — or reach our team any time via the Support form.", code:"UPGRADE_REQUIRED", capability:"analystSupport", currentTier:user.tier, requiresTier:"guided" })}
             title={can("analystSupport") ? "" : "Guided plan feature"}
             style={{padding:"5px 12px",
-              background: can("analystSupport") ? `${C.green}1E` : C.surface,
-              border:`1px solid ${can("analystSupport") ? C.green+"55" : C.border}`,borderRadius:6,
-              color: can("analystSupport") ? C.greenText : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              background: can("analystSupport") ? `${C.green}1E` : "rgba(255,255,255,0.04)",
+              border:`1px solid ${can("analystSupport") ? C.green+"55" : NAV.border}`,borderRadius:6,
+              color: can("analystSupport") ? C.green : NAV.textDim,fontSize:11,cursor:"pointer",fontWeight:600}}>
             {can("analystSupport") ? "💬 Chat" : "🔒 Chat"}
           </button>
         )}
@@ -20364,9 +20369,9 @@ export default function ShieldAI() {
               : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter" })}
             title={can("mastermindChat") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
-              background: can("mastermindChat") ? `${C.purple}22` : C.surface,
-              border:`1px solid ${can("mastermindChat") ? C.purple+"55" : C.border}`,borderRadius:6,
-              color: can("mastermindChat") ? C.purpleText : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              background: can("mastermindChat") ? `${C.purple}22` : "rgba(255,255,255,0.04)",
+              border:`1px solid ${can("mastermindChat") ? C.purple+"66" : NAV.border}`,borderRadius:6,
+              color: can("mastermindChat") ? C.purple : NAV.textDim,fontSize:11,cursor:"pointer",fontWeight:600}}>
             {can("mastermindChat") ? "🧠 Mastermind" : "🔒 Mastermind"}
           </button>
         )}
@@ -20376,25 +20381,25 @@ export default function ShieldAI() {
               : setUpgradePrompt({ error:"The in-app Support Center is available on the Starter plan and above. Upgrade to Starter ($159/mo) to submit support requests and chat with Mastermind for help — or reach our team any time via the public Support form.", code:"UPGRADE_REQUIRED", capability:"supportCenter", currentTier:user.tier, requiresTier:"starter" })}
             title={can("supportCenter") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
-              background: can("supportCenter") ? `${C.accent}1E` : C.surface,
-              border:`1px solid ${can("supportCenter") ? C.accent+"55" : C.border}`,borderRadius:6,
-              color: can("supportCenter") ? C.accentText : C.textMut,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              background: can("supportCenter") ? `${C.accent}1E` : "rgba(255,255,255,0.04)",
+              border:`1px solid ${can("supportCenter") ? C.accent+"55" : NAV.border}`,borderRadius:6,
+              color: can("supportCenter") ? C.accent : NAV.textDim,fontSize:11,cursor:"pointer",fontWeight:600}}>
             {can("supportCenter") ? "🎫 Support" : "🔒 Support"}
           </button>
         )}
         {user.isAdmin && (
           <button onClick={() => setShowMastermind(true)}
             style={{padding:"5px 12px",background:`${C.purple}22`,
-              border:`1px solid ${C.purple}55`,borderRadius:6,
-              color:C.purpleText,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              border:`1px solid ${C.purple}66`,borderRadius:6,
+              color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
             🧠 Mastermind
           </button>
         )}
         {user.isAdmin && (
           <button onClick={() => setShowAdmin(true)}
             style={{padding:"5px 12px",background:`${C.purple}22`,
-              border:`1px solid ${C.purple}55`,borderRadius:6,
-              color:C.purpleText,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              border:`1px solid ${C.purple}66`,borderRadius:6,
+              color:C.purple,fontSize:11,cursor:"pointer",fontWeight:600}}>
             ⚙ Admin
           </button>
         )}
@@ -20402,13 +20407,13 @@ export default function ShieldAI() {
           <button onClick={() => setShowAnalyst(true)}
             style={{padding:"5px 12px",background:`${C.accent}22`,
               border:`1px solid ${C.accent}55`,borderRadius:6,
-              color:C.accentText,fontSize:11,cursor:"pointer",fontWeight:600}}>
+              color:C.accent,fontSize:11,cursor:"pointer",fontWeight:600}}>
             🛰️ Analyst Console
           </button>
         )}
         <button onClick={signOut}
-          style={{padding:"5px 12px",background:"none",border:`1px solid ${C.border}`,
-            borderRadius:6,color:C.textSec,fontSize:11,cursor:"pointer"}}>
+          style={{padding:"5px 12px",background:"none",border:`1px solid ${NAV.border}`,
+            borderRadius:6,color:NAV.textDim,fontSize:11,cursor:"pointer"}}>
           Sign Out
         </button>
       </div>
