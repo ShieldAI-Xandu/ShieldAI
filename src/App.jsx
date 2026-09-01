@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
-import ComplianceWorkspace, { ConflictQueue } from "./ComplianceWorkspace.jsx";
+import ComplianceWorkspace, { ConflictQueue, RemediationVerifyQueue } from "./ComplianceWorkspace.jsx";
 import { HELP_MANUAL } from "../helpManual.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -2520,6 +2520,7 @@ const REPORT_TYPE_META = {
   insurance:  { icon: "🛡️", label: "Insurance Report",   blurb: "Attestable controls for a cyber-insurance application or renewal." },
   legal:      { icon: "⚖️", label: "Legal Record",       blurb: "Defensible record of what was assessed, advised, and acted on." },
   training:   { icon: "🎓", label: "Training Report",    blurb: "Full learner roster, status, and grades — for compliance, insurance, or legal." },
+  remediation:{ icon: "🧠", label: "Remediation Plan",   blurb: "Mastermind's step-by-step guide to closing every gap and conflict across your frameworks." },
 };
 
 function EvidenceSection() {
@@ -6085,7 +6086,7 @@ function ChatMarkdown({ text, color, mutedColor }) {
 //  Clients self-generate Status and Update reports, and see/download any
 //  Compliance / Insurance / Legal reports their analyst has delivered.
 // ─────────────────────────────────────────────────────────────
-function ReportsSection() {
+function ReportsSection({ hasFullReports = true }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);   // which action is running
@@ -6110,9 +6111,14 @@ function ReportsSection() {
   async function generate(type) {
     setBusy(type); setError(null);
     try {
-      const body = { type };
+      // The remediation plan is AI-backed and has its own route (Starter+, not
+      // Growth+ like the deterministic reports).
+      const endpoint = type === "remediation"
+        ? `${API_BASE}/api/reports/remediation-plan`
+        : `${API_BASE}/api/reports/generate`;
+      const body = type === "remediation" ? {} : { type };
       if (type === "update" && since) body.since = new Date(since).toISOString();
-      const res = await authFetch(`${API_BASE}/api/reports/generate`, {
+      const res = await authFetch(endpoint, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
@@ -6145,15 +6151,17 @@ function ReportsSection() {
     finally { setBusy(null); }
   }
 
-  const selfCards = ["status", "update"];
+  const selfCards = hasFullReports
+    ? ["status", "update", "remediation"]
+    : ["remediation"];
 
   return (
     <div>
       <SectionLabel text="Reports"/>
       <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px",maxWidth:680}}>
-        Generate a plain-language status or update report anytime. Compliance,
-        insurance, legal, and training reports are prepared by your ShieldAI
-        analyst and appear here once delivered.
+        {hasFullReports
+          ? "Generate a plain-language status or update report anytime, or a Mastermind remediation plan that walks through every open gap and conflict. Compliance, insurance, legal, and training reports are prepared by your ShieldAI analyst and appear here once delivered."
+          : "Generate a Mastermind remediation plan anytime — a step-by-step guide to closing every open compliance gap and conflict across your frameworks. Status, compliance, and insurance reports are available on Growth and above."}
       </p>
 
       {toast && (
@@ -6172,6 +6180,7 @@ function ReportsSection() {
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
                 <span style={{fontSize:22}}>{m.icon}</span>
                 <span style={{color:C.text,fontWeight:700,fontSize:15}}>{m.label}</span>
+                {type === "remediation" && <span style={{marginLeft:"auto"}}><AIChip/></span>}
               </div>
               <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.55,margin:"0 0 14px"}}>{m.blurb}</p>
               {type === "update" && (
@@ -7097,7 +7106,7 @@ function Dashboard({ assessment, results, onReset }) {
     training:   !hasTrainingView ? lockedSections.training : <TrainingSection results={results} assessment={assessment} canGenerateFull={hasTrainingFull}/>,
     trainingmgr: !hasTrainingFull ? lockedSections.trainingmgr : <TrainingProgramSection/>,
     report:     !hasPrograms ? lockedSections.report : <ExecReportSection assessment={assessment} results={results}/>,
-    reports:    !hasReports ? lockedSections.reports : <ReportsSection/>,
+    reports:    (!hasReports && !hasCompliance) ? lockedSections.reports : <ReportsSection hasFullReports={hasReports}/>,
     library:    !hasPrograms ? lockedSections.library : <PolicyLibrarySection assessment={assessment}/>,
     billing:    <PlanBillingSection/>,
   };
@@ -15911,6 +15920,18 @@ function AnalystConsole({ user, onExit, onImpersonate }) {
             <div style={{marginTop:14}}>
               <SocPanel title="Compliance Conflicts" accent={SOC.purple}>
                 <ConflictQueue authFetch={authFetch} apiBase={API_BASE} clientId={c.id}/>
+              </SocPanel>
+            </div>
+          )}
+
+          {/* The client marks a framework gap "remediated" and it re-scores
+              immediately, but stays flagged unverified until an analyst
+              confirms it here — a file is required before Verify is allowed.
+              Reject reverts the answers the attestation moved. */}
+          {c.compliancePct && (
+            <div style={{marginTop:14}}>
+              <SocPanel title="Remediations to verify" accent={SOC.purple}>
+                <RemediationVerifyQueue authFetch={authFetch} apiBase={API_BASE} clientId={c.id}/>
               </SocPanel>
             </div>
           )}

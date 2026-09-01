@@ -33,7 +33,7 @@ import { toAssessOpts, intakeFor, visibleQuestions, intakeStatus } from "./frame
 import { corroborate, RESOLUTION_OPTIONS } from "./agentEvidence.js";
 import { toEvidence, SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
-import { complianceFrameworkLimit } from "./tiers.js";
+import { complianceFrameworkLimit, hasCapability } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -263,6 +263,30 @@ export function registerComplianceRoutes(app, {
       ? evaluateWithAgent(req.params.id, checklistOf(a), reports, optsFor(a)[toRegistryId(req.params.id)] || {})
       : evaluateFramework(req.params.id, checklistOf(a), optsFor(a)[toRegistryId(req.params.id)] || {});
     const client = userById(targetId);
+
+    // Attach any client remediation attestation to its requirement so the
+    // walkthrough can badge "pending verification" / "verified" without a
+    // second round-trip. Latest non-rejected record per requirement wins.
+    const attByReq = {};
+    for (const rec of (db.data.remediationAttestations || [])) {
+      if (rec.clientUserId !== targetId || rec.frameworkId !== def.id) continue;
+      if (rec.status === "rejected") continue;
+      const prev = attByReq[rec.requirementId];
+      if (!prev || new Date(rec.attestedAt) > new Date(prev.attestedAt)) attByReq[rec.requirementId] = rec;
+    }
+    if (Array.isArray(report?.requirements)) {
+      for (const r of report.requirements) {
+        const rec = attByReq[r.id];
+        if (rec) {
+          r.remediation = {
+            id: rec.id, status: rec.status, note: rec.note,
+            evidenceId: rec.evidenceId, attestedAt: rec.attestedAt,
+            verifiedAt: rec.verifiedAt || null,
+          };
+        }
+      }
+    }
+
     res.json({
       hasAssessment: true,
       client: { id: targetId, name: client?.companyName || client?.email },
@@ -343,6 +367,241 @@ Write remediation steps to close this gap. Requirements for your answer:
     }
 
     res.json({ ...ctx, guidance, aiGenerated });
+  });
+
+  // ── Client "Mark remediated": attest that a framework gap is fixed ──
+  // Moves the underlying checklist answer(s) to the required option — the exact
+  // same mechanism as /api/compliance/answer, so posture and every framework
+  // re-score from one source of truth. The attestation is recorded as
+  // unverified until an analyst confirms it with evidence; no status or score is
+  // ever written directly.
+  app.post("/api/compliance/remediate/attest", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
+    const { frameworkId, requirementId, note, evidenceId, clientId } = req.body || {};
+    const targetId = clientId || req.userId;
+    const actor = userById(req.userId);
+    if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
+    if (!String(note || "").trim()) {
+      return res.status(400).json({ error: "A note describing what you did is required." });
+    }
+
+    const a = latestAssessmentFor(db, targetId);
+    if (!a) return res.status(400).json({ error: "Client has no assessment." });
+
+    const rid = toRegistryId(frameworkId);
+    const fwId = getFrameworkDef(frameworkId)?.id || frameworkId;
+    const ctx = remediationContext(frameworkId, requirementId, checklistOf(a), optsFor(a)[rid] || {});
+    if (!ctx) return res.status(400).json({ error: "Unknown framework or requirement." });
+    if (ctx.status === STATUS.COMPLIANT) {
+      return res.status(400).json({ error: "This requirement is already satisfied — nothing to attest." });
+    }
+
+    db.data.remediationAttestations ||= [];
+    if (db.data.remediationAttestations.some(
+      r => r.clientUserId === targetId && r.frameworkId === fwId &&
+           r.requirementId === requirementId && r.status === "pending")) {
+      return res.status(409).json({ error: "There's already a remediation pending verification for this requirement." });
+    }
+
+    if (evidenceId) {
+      const ev = (db.data.evidence || []).find(e => e.id === evidenceId);
+      if (!ev || ev.ownerUserId !== targetId) {
+        return res.status(400).json({ error: "evidenceId does not match a file on this account." });
+      }
+    }
+
+    const { SECURITY_CHECKLIST } = await import("./securityChecklist.js");
+    const failing = ctx.controls.filter(c => !c.meets);
+    if (!failing.length) {
+      return res.status(400).json({ error: "This requirement has no failing controls to remediate." });
+    }
+
+    // Validate every target answer before mutating anything.
+    const moves = [];
+    for (const c of failing) {
+      const q = SECURITY_CHECKLIST.find(x => x.id === c.controlId);
+      if (!q) return res.status(400).json({ error: `Unknown control ${c.controlId}.` });
+      if (!c.requiredAnswer || !q.options.some(o => o.label === c.requiredAnswer)) {
+        return res.status(400).json({
+          error: `No single target answer for "${c.question}". Use the control-by-control editor for this one.`,
+        });
+      }
+      moves.push({ controlId: c.controlId, from: checklistOf(a)[c.controlId] || null, to: c.requiredAnswer });
+    }
+
+    a.data = a.data || {};
+    const before = computePostureScore(a.data);
+    const nextChecklist = { ...checklistOf(a) };
+    for (const m of moves) nextChecklist[m.controlId] = m.to;
+    a.data.checklist = nextChecklist;
+    a.updatedAt = nowIso();
+    const after = computePostureScore(a.data);
+
+    db.data.postureHistory ||= [];
+    db.data.postureHistory.push({
+      id: `ph_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      userId: targetId, at: nowIso(),
+      score: after.postureScore, level: after.postureLevel,
+      reason: `remediation-attested:${fwId}:${requirementId}`,
+    });
+
+    const rec = {
+      id: `ra_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      clientUserId: targetId,
+      frameworkId: fwId,
+      requirementId,
+      requirementName: ctx.requirement?.name || requirementId,
+      controlIds: moves.map(m => m.controlId),
+      priorAnswers: Object.fromEntries(moves.map(m => [m.controlId, m.from])),
+      newAnswers: Object.fromEntries(moves.map(m => [m.controlId, m.to])),
+      note: String(note).trim().slice(0, 2000),
+      evidenceId: evidenceId || null,
+      attestedBy: req.userId,
+      attestedByRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+      attestedAt: nowIso(),
+      status: "pending",
+      verifiedBy: null, verifiedAt: null,
+      rejectedBy: null, rejectedAt: null, rejectedReason: null,
+    };
+    db.data.remediationAttestations.push(rec);
+
+    if (logClientAction) {
+      logClientAction(db, {
+        clientUserId: targetId, actorUserId: req.userId,
+        actorRole: rec.attestedByRole,
+        action: "remediation_attested",
+        detail: `${fwId} · ${rec.requirementName}: marked remediated (pending verification).`,
+      });
+    }
+    await db.write();
+
+    // How many OTHER control-mapped requirements this same set of answers just
+    // satisfied — one disk-encryption answer settles dozens across ISO/PCI/HIPAA.
+    const flipped = new Set(moves.map(m => m.controlId));
+    let alsoAffects = 0;
+    for (const id of listFrameworkIds()) {
+      const rep = evaluateFramework(id, checklistOf(a), optsFor(a)[toRegistryId(id)] || {});
+      if (!rep || rep.notControlMapped) continue;
+      for (const r of rep.requirements) {
+        if ((getFrameworkDef(id)?.id || id) === fwId && r.id === requirementId) continue;
+        if (r.controls?.some(c => flipped.has(c.controlId))) alsoAffects++;
+      }
+    }
+
+    res.status(201).json({
+      attestation: rec,
+      posture: {
+        before: before.postureScore, after: after.postureScore,
+        delta: after.postureScore - before.postureScore,
+        levelBefore: before.postureLevel, levelAfter: after.postureLevel,
+      },
+      frameworks: evaluateAllFrameworks(checklistOf(a), optsFor(a)),
+      alsoAffects,
+    });
+  });
+
+  // ── List remediation attestations (badges + staff verification queue) ──
+  app.get("/api/compliance/remediations", requireAuth, gate.capability("complianceAccess"), (req, res) => {
+    const actor = userById(req.userId);
+    const scopeId = req.query.clientId || null;
+    let list = db.data.remediationAttestations || [];
+    if (scopeId) {
+      if (!canAccess(actor, scopeId)) return res.status(403).json({ error: "Not permitted." });
+      list = list.filter(r => r.clientUserId === scopeId);
+    } else if (actor.isAdmin) {
+      /* all */
+    } else if (actor.isAnalyst && analystClientIds) {
+      const ids = new Set(analystClientIds(db, actor.id));
+      list = list.filter(r => ids.has(r.clientUserId));
+    } else {
+      list = list.filter(r => r.clientUserId === actor.id);
+    }
+    list = [...list].sort((x, y) => new Date(y.attestedAt) - new Date(x.attestedAt));
+    res.json(list);
+  });
+
+  // ── Staff: verify a client's remediation attestation ──
+  app.post("/api/compliance/remediation/:id/verify", requireAuth, async (req, res) => {
+    const actor = userById(req.userId);
+    if (!actor || (!actor.isAdmin && !actor.isAnalyst)) {
+      return res.status(403).json({ error: "Only ShieldAI staff can verify a remediation." });
+    }
+    const rec = (db.data.remediationAttestations || []).find(r => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "Remediation not found." });
+    if (!canAccess(actor, rec.clientUserId)) return res.status(403).json({ error: "Not permitted." });
+    if (rec.status !== "pending") return res.status(409).json({ error: `This remediation is already ${rec.status}.` });
+    if (!rec.evidenceId) return res.status(400).json({ error: "Evidence is required before a remediation can be verified." });
+
+    rec.status = "verified";
+    rec.verifiedBy = req.userId;
+    rec.verifiedAt = nowIso();
+    if (logClientAction) {
+      logClientAction(db, {
+        clientUserId: rec.clientUserId, actorUserId: req.userId,
+        actorRole: actor.isAdmin ? "admin" : "analyst",
+        action: "remediation_verified",
+        detail: `${rec.frameworkId} · ${rec.requirementName}: verified.`,
+      });
+    }
+    await db.write();
+    res.json(rec);
+  });
+
+  // ── Staff: reject a remediation attestation (reverts the answers it moved) ──
+  app.post("/api/compliance/remediation/:id/reject", requireAuth, async (req, res) => {
+    const actor = userById(req.userId);
+    if (!actor || (!actor.isAdmin && !actor.isAnalyst)) {
+      return res.status(403).json({ error: "Only ShieldAI staff can reject a remediation." });
+    }
+    const { reason } = req.body || {};
+    if (!String(reason || "").trim()) {
+      return res.status(400).json({ error: "A written reason is required — the client will see it." });
+    }
+    const rec = (db.data.remediationAttestations || []).find(r => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "Remediation not found." });
+    if (!canAccess(actor, rec.clientUserId)) return res.status(403).json({ error: "Not permitted." });
+    if (rec.status !== "pending") return res.status(409).json({ error: `This remediation is already ${rec.status}.` });
+
+    const a = latestAssessmentFor(db, rec.clientUserId);
+    let postureDelta = null;
+    if (a) {
+      const before = computePostureScore(a.data);
+      const next = { ...checklistOf(a) };
+      for (const [cid, prev] of Object.entries(rec.priorAnswers || {})) {
+        // Only revert a control the client hasn't changed again since attesting.
+        if (next[cid] !== rec.newAnswers?.[cid]) continue;
+        if (prev == null) delete next[cid];
+        else next[cid] = prev;
+      }
+      a.data.checklist = next;
+      a.updatedAt = nowIso();
+      const after = computePostureScore(a.data);
+      postureDelta = {
+        before: before.postureScore, after: after.postureScore,
+        delta: after.postureScore - before.postureScore,
+      };
+      db.data.postureHistory ||= [];
+      db.data.postureHistory.push({
+        id: `ph_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        userId: rec.clientUserId, at: nowIso(),
+        score: after.postureScore, level: after.postureLevel,
+        reason: `remediation-rejected:${rec.id}`,
+      });
+    }
+
+    rec.status = "rejected";
+    rec.rejectedBy = req.userId;
+    rec.rejectedAt = nowIso();
+    rec.rejectedReason = String(reason).trim().slice(0, 1000);
+    if (logClientAction) {
+      logClientAction(db, {
+        clientUserId: rec.clientUserId, actorUserId: req.userId,
+        actorRole: actor.isAdmin ? "admin" : "analyst",
+        action: "remediation_rejected",
+        detail: `${rec.frameworkId} · ${rec.requirementName}: rejected — ${rec.rejectedReason}`,
+      });
+    }
+    await db.write();
+    res.json({ attestation: rec, posture: postureDelta });
   });
 
   // ── Framework scoping intake ──
@@ -557,6 +816,67 @@ Write remediation steps to close this gap. Requirements for your answer:
       // show what was decided and when, rather than treating it as brand new.
       answerAtResolution: checklistOf(a)[controlId] || null,
     };
+
+    // "My answer is the goal" — track the fix as a real remediation task so it
+    // lands in the client's task list, not just as a line in the response text.
+    // Only for clients whose plan includes task tracking; without it, behave
+    // exactly as before (no task, no error, no new gate).
+    let taskCreated = null;
+    if (decision === "fix-the-gap") {
+      const tierId = gate.tierOf(targetId);
+      const goalLabel = checklistOf(a)[controlId] || null;
+      const validGoal = goalLabel && q.options.some(o => o.label === goalLabel);
+      if (hasCapability(tierId, "remediationTasks") && validGoal) {
+        db.data.tasks ||= [];
+        const already = db.data.tasks.some(
+          t => t.ownerUserId === targetId && t.controlId === controlId &&
+               t.origin === "compliance-conflict" && !["done", "cancelled"].includes(t.status));
+        if (!already) {
+          const now = nowIso();
+          const task = {
+            id: `tsk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            ownerUserId: targetId,
+            controlId,
+            targetLabel: goalLabel,
+            title: `Bring endpoints into line: ${q.question || controlId}`.slice(0, 160),
+            detail: "Created from a resolved compliance conflict — the monitoring agent's telemetry disagreed with the questionnaire answer, and you chose to fix the endpoints. Closes when the agent's next report agrees.",
+            nistFunction: q.nistFunction || null,
+            status: "open",
+            priority: "high",
+            effort: null,
+            dueDate: null,
+            assigneeUserId: null,
+            origin: "compliance-conflict",
+            createdBy: req.userId,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: null,
+            projectedGain: null,
+            scoreAtCreate: null,
+            externalRef: null,
+            evidence: [],
+            history: [{
+              at: now,
+              actorType: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client",
+              actorId: req.userId,
+              action: "created",
+              note: `From conflict resolution on ${controlId} (fix-the-gap).`,
+            }],
+          };
+          db.data.tasks.push(task);
+          taskCreated = task.id;
+          if (logClientAction) {
+            logClientAction(db, {
+              clientUserId: targetId, actorUserId: req.userId,
+              actorRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+              action: "task_created",
+              detail: task.title,
+            });
+          }
+        }
+      }
+    }
+
     a.updatedAt = nowIso();
     await db.write();
 
@@ -573,6 +893,9 @@ Write remediation steps to close this gap. Requirements for your answer:
       posture: postureDelta,
       effect: opt.effect,
       stillDisputed,
+      // The id of the remediation task opened for a "fix-the-gap" decision, or
+      // null (client's plan has no task tracking, or one is already open).
+      taskCreated,
       // Only meaningful when stillDisputed is true — concrete next step, not
       // just "still open". fix-the-gap and out-of-scope are EXPECTED to stay
       // open by design (the answer didn't change); update-answer staying open

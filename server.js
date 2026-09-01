@@ -1781,7 +1781,7 @@ registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClie
 registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
-registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
+registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate, callClaudeText, aiLimiter });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

@@ -744,7 +744,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
 
           <div style={{ display: "grid", gap: 8 }}>
             {reqs.map(r => (
-              <RequirementRow key={r.id} r={r} authFetch={authFetch} apiBase={apiBase}
+              <RequirementRow key={r.id} r={r} frameworkId={frameworkId} authFetch={authFetch} apiBase={apiBase}
                 clientId={clientId} onSaved={load} />
             ))}
           </div>
@@ -760,7 +760,222 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
   );
 }
 
-function RequirementRow({ r, authFetch, apiBase, clientId, onSaved }) {
+// Read a File into { filename, mimeType, content } (raw base64) — the shape
+// POST /api/evidence expects. Mirrors App.jsx's fileToUpload; inlined here so
+// this module stays self-contained.
+function readFileAsUpload(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const s = String(fr.result || "");
+      const i = s.indexOf(",");
+      resolve({ filename: file.name, mimeType: file.type, content: i >= 0 ? s.slice(i + 1) : s });
+    };
+    fr.onerror = () => reject(new Error("Could not read the file."));
+    fr.readAsDataURL(file);
+  });
+}
+const REMEDIATION_EVIDENCE_MAX = 3.5 * 1024 * 1024;
+
+// "Mark remediated": records that the client fixed a framework gap. Moves the
+// underlying answer(s) to their target so the score updates now, but the
+// requirement is badged "pending verification" until an analyst signs off — and
+// a file is required before they can. The facts (which answers move, to what)
+// are computed server-side; this only collects the note and the evidence.
+function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSaved }) {
+  const existing = r.remediation;
+  const [openForm, setOpenForm] = useState(false);
+  const [note, setNote] = useState("");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null); // { text, tone }
+
+  if (existing && existing.status !== "rejected") {
+    const verified = existing.status === "verified";
+    return (
+      <div style={{
+        marginTop: 8, padding: "9px 11px", background: C.surface, borderRadius: 6,
+        border: `1px solid ${verified ? C.green + "55" : C.amber + "55"}`,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: existing.note ? 4 : 0 }}>
+          <Pill
+            text={verified ? "REMEDIATION VERIFIED" : "ATTESTED · PENDING VERIFICATION"}
+            color={verified ? C.green : C.amber} />
+          <span style={{ color: C.textMut, fontSize: 10.5 }}>
+            {verified
+              ? `Verified ${new Date(existing.verifiedAt).toLocaleDateString()}`
+              : `Marked ${new Date(existing.attestedAt).toLocaleDateString()}`}
+          </span>
+        </div>
+        {existing.note && (
+          <div style={{ color: C.textSec, fontSize: 11.5, lineHeight: 1.5 }}>{safeText(existing.note)}</div>
+        )}
+        {existing.status === "pending" && !existing.evidenceId && (
+          <div style={{ color: C.textMut, fontSize: 10.5, marginTop: 4 }}>
+            Attach evidence so your analyst can verify this.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (r.status !== "gap" && r.status !== "partial") return null;
+
+  async function submit() {
+    if (busy) return;
+    if (!note.trim()) { setMsg({ text: "Describe what you changed.", tone: C.red }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      let evidenceId = null;
+      if (file) {
+        if (file.size > REMEDIATION_EVIDENCE_MAX) throw new Error("File is over the 3.5MB limit.");
+        const up = await readFileAsUpload(file);
+        const evRes = await authFetch(`${apiBase}/api/evidence`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "control", refId: `${frameworkId}:${r.id}`,
+            title: `Remediation evidence: ${r.name}`.slice(0, 160),
+            note: note.trim(),
+            ...(clientId ? { ownerUserId: clientId } : {}),
+            ...up,
+          }),
+        });
+        const evData = await evRes.json();
+        if (!evRes.ok) throw new Error(evData.error || "Could not upload evidence.");
+        evidenceId = evData.id;
+      }
+      const res = await authFetch(`${apiBase}/api/compliance/remediate/attest`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frameworkId, requirementId: r.id, note: note.trim(), evidenceId, clientId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not record that.");
+      const delta = data.posture?.delta;
+      setMsg({
+        text: `Recorded — pending verification.${delta ? ` Posture ${delta > 0 ? "+" : ""}${delta}.` : ""}${
+          data.alsoAffects ? ` Also satisfied ${data.alsoAffects} related requirement(s).` : ""
+        }`,
+        tone: C.green,
+      });
+      setOpenForm(false); setNote(""); setFile(null);
+      onSaved?.();
+    } catch (e) {
+      setMsg({ text: e.message, tone: C.red });
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      {!openForm ? (
+        <button onClick={() => setOpenForm(true)} style={{
+          background: "transparent", border: `1px solid ${C.border}`, color: C.accent,
+          fontSize: 11, fontWeight: 600, borderRadius: 6, padding: "5px 10px", cursor: "pointer",
+        }}>Mark remediated</button>
+      ) : (
+        <div style={{ background: C.surface, borderRadius: 6, padding: "10px 11px", border: `1px solid ${C.border}` }}>
+          <div style={{ color: C.textSec, fontSize: 11, marginBottom: 6, lineHeight: 1.5 }}>
+            Moves the failing answer(s) to their target now. Your analyst verifies it —
+            a file is required before they can.
+          </div>
+          <textarea value={note} onChange={e => setNote(e.target.value)}
+            placeholder="What did you change? (required)" rows={3} style={{
+              width: "100%", boxSizing: "border-box", background: C.card, color: C.text,
+              border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 11.5, padding: "6px 8px", resize: "vertical",
+            }} />
+          <input type="file" onChange={e => setFile(e.target.files?.[0] || null)}
+            style={{ color: C.textSec, fontSize: 11, marginTop: 6, display: "block" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={submit} disabled={busy} style={{
+              background: C.accent, border: "none", color: "#03121A", fontSize: 11, fontWeight: 700,
+              borderRadius: 6, padding: "5px 12px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+            }}>{busy ? "Saving…" : "Submit"}</button>
+            <button onClick={() => { setOpenForm(false); setMsg(null); }} style={{
+              background: "transparent", border: `1px solid ${C.border}`, color: C.textSec,
+              fontSize: 11, borderRadius: 6, padding: "5px 12px", cursor: "pointer",
+            }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ color: msg.tone, fontSize: 11, marginTop: 6 }}>{safeText(msg.text)}</div>}
+    </div>
+  );
+}
+
+// Staff-side queue: the client's remediation attestations awaiting a verify or
+// reject decision. Rendered in the analyst client-detail view.
+export function RemediationVerifyQueue({ authFetch, apiBase, clientId }) {
+  const [list, setList] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
+  const load = useCallback(() => {
+    authFetch(`${apiBase}/api/compliance/remediations${q}`)
+      .then(r => r.json())
+      .then(d => setList(Array.isArray(d) ? d : []))
+      .catch(() => setList([]));
+  }, [apiBase, q, authFetch]);
+  useEffect(() => { load(); }, [load]);
+
+  async function act(rec, kind) {
+    let reason = null;
+    if (kind === "reject") {
+      reason = window.prompt("Why are you rejecting this remediation? The client will see it.");
+      if (reason == null || !reason.trim()) return;
+    }
+    setBusyId(rec.id); setMsg(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/compliance/remediation/${rec.id}/${kind}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(kind === "reject" ? { reason: reason.trim() } : {}),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Action failed.");
+      setMsg({ text: kind === "verify" ? "Verified." : "Rejected — answers reverted.", tone: C.green });
+      load();
+    } catch (e) {
+      setMsg({ text: e.message, tone: C.red });
+    } finally { setBusyId(null); }
+  }
+
+  if (!list) return null;
+  const pending = list.filter(r => r.status === "pending");
+  if (!pending.length) {
+    return <div style={{ color: C.textSec, fontSize: 12 }}>No remediations awaiting verification.</div>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {pending.map(rec => (
+        <div key={rec.id} style={{ background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, padding: "10px 12px" }}>
+          <div style={{ color: C.text, fontSize: 12.5, fontWeight: 600 }}>
+            {safeText(rec.frameworkId)} · {safeText(rec.requirementName)}
+          </div>
+          <div style={{ color: C.textSec, fontSize: 11.5, margin: "4px 0", lineHeight: 1.5 }}>{safeText(rec.note)}</div>
+          <div style={{ color: C.textMut, fontSize: 10.5 }}>
+            Marked {new Date(rec.attestedAt).toLocaleDateString()} ·{" "}
+            {rec.evidenceId ? "evidence attached" : "no evidence — cannot verify"}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={() => act(rec, "verify")} disabled={busyId === rec.id || !rec.evidenceId} style={{
+              background: rec.evidenceId ? C.green : C.border, border: "none", color: "#03121A",
+              fontSize: 11, fontWeight: 700, borderRadius: 6, padding: "5px 12px",
+              cursor: (busyId === rec.id || !rec.evidenceId) ? "default" : "pointer",
+              opacity: (busyId === rec.id || !rec.evidenceId) ? 0.6 : 1,
+            }}>Verify</button>
+            <button onClick={() => act(rec, "reject")} disabled={busyId === rec.id} style={{
+              background: "transparent", border: `1px solid ${C.red}66`, color: C.red,
+              fontSize: 11, fontWeight: 600, borderRadius: 6, padding: "5px 12px",
+              cursor: busyId === rec.id ? "default" : "pointer",
+            }}>Reject</button>
+          </div>
+        </div>
+      ))}
+      {msg && <div style={{ color: msg.tone, fontSize: 11 }}>{safeText(msg.text)}</div>}
+    </div>
+  );
+}
+
+function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved }) {
   const [open, setOpen] = useState(false);
   const color = STATUS_COLOR[r.status];
   return (
@@ -774,6 +989,8 @@ function RequirementRow({ r, authFetch, apiBase, clientId, onSaved }) {
         <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{safeText(r.name)}</span>
         {r.hasCorroboration && <Pill text="AGENT-CONFIRMED" color={C.green} title="Independently confirmed by the monitoring agent — measured evidence, not a self-assessment." />}
         {r.hasDispute && <Pill text="CONFLICT" color={C.amber} title="Your answer and the agent's measurement disagree. Needs your decision." />}
+        {r.remediation?.status === "pending" && <Pill text="ATTESTED" color={C.amber} title="You've marked this remediated — pending analyst verification." />}
+        {r.remediation?.status === "verified" && <Pill text="VERIFIED" color={C.green} title="Remediation verified by your analyst." />}
         <Pill text={STATUS_LABEL[r.status]} color={color} />
       </div>
 
@@ -825,6 +1042,11 @@ function RequirementRow({ r, authFetch, apiBase, clientId, onSaved }) {
               )}
             </div>
           ))}
+
+          {authFetch && (
+            <RemediationAttest r={r} frameworkId={frameworkId} authFetch={authFetch}
+              apiBase={apiBase} clientId={clientId} onSaved={onSaved} />
+          )}
         </div>
       )}
     </div>

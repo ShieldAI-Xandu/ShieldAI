@@ -31,6 +31,8 @@
 import { randomUUID } from "crypto";
 import { computePostureScore } from "./riskEngine.js";
 import { evaluateAllFrameworks } from "./complianceBridge.js";
+import { buildRemediationPlanData } from "./remediationPlan.js";
+import { hasCapability } from "./tiers.js";
 import { listVendors } from "./vendorRiskService.js";
 import { clientPhishingSummary } from "./phishingRoutes.js";
 import { cachedDarkweb } from "./darkwebService.js";
@@ -653,6 +655,8 @@ const DISCLAIMERS = {
     "This report is a record of activity within ShieldAI: what was assessed, what was recommended, and actions taken. ShieldAI provides advisory output; decisions and actions are made by the client and its personnel. This document is not legal advice and does not constitute a legal opinion. It should be reviewed by a licensed attorney before being relied upon in any legal or contractual matter.",
   training:
     "This training-completion report reflects learner records and assignment status on file within ShieldAI as of the generation date. Completion and quiz scores are self-reported by the learner at the time each module was marked complete and are not independently proctored or verified. This document is a readiness aid for compliance, insurance, or legal review — not a certified attestation — and should be verified against your own personnel records before submission to a third party.",
+  remediation:
+    "This remediation plan is generated from the client's self-reported assessment answers and ShieldAI's deterministic control-mapping engines. Gaps and conflicts reflect the information on file at the time of generation. The remediation steps are AI-drafted advisory guidance produced by ShieldAI Mastermind, not a certification path or an audit opinion. Effort estimates and tooling suggestions are indicative only. Verify each step against your own environment and have a qualified assessor review before relying on this for certification or regulatory submission.",
 };
 
 function frameworksTable(frameworks) {
@@ -1060,6 +1064,94 @@ function buildTrainingReport(d) {
   };
 }
 
+// REMEDIATION PLAN — Mastermind's step-by-step guide to closing every gap and
+// conflict across the client's selected frameworks. Consumes the aggregator
+// output from remediationPlan.js (NOT gatherReportData).
+function buildRemediationReport(d) {
+  const c = d.counts || {};
+
+  const fixesHtml = !d.fixes.length
+    ? `<div class="note">No open gaps across the frameworks you've selected. Keep your evidence current and re-run this plan after your next assessment change.</div>`
+    : d.fixes
+        .map((fx, i) => {
+          const affects = fx.affects
+            .map(
+              (r) =>
+                `<li>${esc(r.frameworkName)} <b>${esc(r.requirementId)}</b> — ${esc(r.requirementName)}</li>`,
+            )
+            .join("");
+          const answerRows = fx.failing
+            .map(
+              (f) => `<tr>
+          <td>${esc(f.question)}</td>
+          <td>${esc(f.currentAnswer || "unanswered")}</td>
+          <td>${esc(f.requiredAnswer || "—")}</td>
+        </tr>`,
+            )
+            .join("");
+          return `
+        <h3>Fix ${i + 1}. ${esc(fx.failing.map((f) => f.question).join("; ")).slice(0, 200)}</h3>
+        <p class="meta">Closing this resolves ${fx.affects.length} requirement(s):</p>
+        <ul>${affects}</ul>
+        <table class="content">
+          <tr><th>Control</th><th>Your answer now</th><th>Needs to be</th></tr>
+          ${answerRows}
+        </table>
+        <div class="note">${esc(fx.steps).replace(/\n/g, "<br/>")}</div>`;
+        })
+        .join("");
+
+  const conflictsHtml = !d.conflicts.length
+    ? `<div class="note">No open conflicts between your answers and monitoring-agent telemetry.</div>`
+    : d.conflicts
+        .map(
+          (cf, i) => `
+        <h3>Conflict ${i + 1}. ${esc(cf.question)}</h3>
+        <table class="content">
+          <tr><th>You answered</th><td>${esc(cf.yourAnswer || "—")}</td></tr>
+          <tr><th>The agent measured</th><td>${esc(cf.agentObserved)}</td></tr>
+        </table>
+        <p class="meta">Resolve this in the compliance workspace by choosing one of:</p>
+        <ul>${cf.options.map((o) => `<li><b>${esc(o.label)}</b> — ${esc(o.effect)}</li>`).join("")}</ul>`,
+        )
+        .join("");
+
+  const truncNote = c.truncated
+    ? `<div class="note">${c.truncated} additional lower-impact fix(es) below are listed with standard guidance rather than a tailored Mastermind write-up. Ask your analyst for a full-depth walkthrough of those.</div>`
+    : "";
+
+  const body = `
+  <h2>Summary</h2>
+  <div>
+    ${kpi(c.frameworks ?? "—", "Frameworks")}
+    ${kpi(c.gaps ?? "—", "Open gaps")}
+    ${kpi(c.fixes ?? "—", "Distinct fixes")}
+    ${kpi(c.conflicts ?? "—", "Open conflicts")}
+  </div>
+  <p class="meta">Covers the frameworks selected for ${esc(d.client.name)} as of ${fmtDate(d.generatedAt)}. Remediation steps prepared by ShieldAI Mastermind.</p>
+
+  <h2>Framework readiness</h2>
+  ${frameworksTable(d.frameworks)}
+
+  <h2>How to close every gap</h2>
+  ${truncNote}
+  ${fixesHtml}
+
+  <h2>Conflicts to resolve</h2>
+  ${conflictsHtml}`;
+
+  return {
+    filename: `ShieldAI_Remediation_Plan_${slug(d.client.name)}_${dateStamp()}.doc`,
+    html: wrapDoc({
+      title: "Compliance Remediation Plan",
+      kicker: "Prepared by Mastermind",
+      subtitle: `${d.client.name} · Prepared ${fmtDate(d.generatedAt)}`,
+      body,
+      disclaimer: DISCLAIMERS.remediation,
+    }),
+  };
+}
+
 function labelActor(role) {
   return (
     {
@@ -1092,7 +1184,11 @@ const BUILDERS = {
   training: (d) => buildTrainingReport(d),
 };
 
-const CLIENT_SELF_TYPES = new Set(["status", "update"]);
+// "remediation" is generated by its own AI-backed route (buildRemediationReport
+// consumes a different data shape and needs callClaudeText + aiLimiter), not via
+// BUILDERS / gatherReportData. It's listed here only so the type validates and
+// the list/download routes treat it as a client-owned self report.
+const CLIENT_SELF_TYPES = new Set(["status", "update", "remediation"]);
 const STAFF_TYPES = new Set(["compliance", "insurance", "legal", "training"]);
 export const REPORT_TYPES = [...CLIENT_SELF_TYPES, ...STAFF_TYPES];
 
@@ -1100,6 +1196,7 @@ export const REPORT_TYPES = [...CLIENT_SELF_TYPES, ...STAFF_TYPES];
 
 export function registerReportRoutes(app, {
   db, requireAuth, logClientAction, analystOwnsClient, analystClientIds, gate,
+  callClaudeText, aiLimiter,
 }) {
   db.data.reports ||= []; // { id, clientId, type, title, filename, html, createdBy, createdByRole, createdAt, deliveredAt }
 
@@ -1108,6 +1205,24 @@ export function registerReportRoutes(app, {
   function isStaff(actor) {
     return !!(actor && (actor.isAdmin || actor.isAnalyst));
   }
+
+  // A non-staff caller may read/download reports if their plan includes reports
+  // OR compliance — the latter is enough for the self-serve "remediation" plan,
+  // which the list/download handlers narrow to that type when reports isn't
+  // bundled. Staff always pass.
+  function reportsOrCompliance(req, res, next) {
+    if (req.isAdmin || req.isAnalyst) return next();
+    const tier = gate.tierOf(req.userId);
+    if (hasCapability(tier, "reportsAccess") || hasCapability(tier, "complianceAccess"))
+      return next();
+    return res.status(402).json({
+      error: "Your current plan doesn't include reports.",
+      code: "UPGRADE_REQUIRED",
+      capability: "reportsAccess",
+      currentTier: tier,
+    });
+  }
+  const noAiLimiter = (req, res, next) => next();
 
   // Can `actor` produce/read reports about `clientId`?
   function canAccessClient(actor, clientId) {
@@ -1138,6 +1253,11 @@ export function registerReportRoutes(app, {
       return res
         .status(400)
         .json({ error: `type must be one of: ${REPORT_TYPES.join(", ")}` });
+    }
+    if (type === "remediation") {
+      return res.status(400).json({
+        error: "Generate the remediation plan via POST /api/reports/remediation-plan.",
+      });
     }
 
     // Resolve the target client.
@@ -1216,10 +1336,83 @@ export function registerReportRoutes(app, {
     res.status(201).json(publicReport(record));
   });
 
+  // ── Generate the cross-framework remediation plan (self-serve, AI-backed) ──
+  // Its own route because it consumes a different data shape (remediationPlan.js),
+  // needs Mastermind + the AI rate limiter, and is available at Starter+
+  // (complianceAccess) rather than Growth+ like the other reports.
+  app.post(
+    "/api/reports/remediation-plan",
+    requireAuth,
+    gate.capability("complianceAccess"),
+    aiLimiter || noAiLimiter,
+    async (req, res) => {
+      const actor = uById(req.userId);
+      if (!actor) return res.status(404).json({ error: "User not found." });
+
+      let clientId = req.body?.clientId || actor.id;
+      if (!isStaff(actor) && clientId !== actor.id) {
+        return res
+          .status(403)
+          .json({ error: "You can only generate a remediation plan for your own account." });
+      }
+      if (!canAccessClient(actor, clientId)) {
+        return res.status(403).json({ error: "Not permitted for this client." });
+      }
+
+      let data;
+      try {
+        data = await buildRemediationPlanData(db, clientId, { callClaudeText });
+      } catch (e) {
+        return res
+          .status(500)
+          .json({ error: `Could not build the remediation plan: ${e.message}` });
+      }
+      if (!data) {
+        return res
+          .status(400)
+          .json({ error: "This client has no completed assessment yet." });
+      }
+
+      const built = buildRemediationReport(data);
+      const record = {
+        id: randomUUID(),
+        clientId,
+        type: "remediation",
+        title: built.filename.replace(/\.doc$/, "").replace(/_/g, " "),
+        filename: built.filename,
+        html: built.html,
+        createdBy: actor.id,
+        createdByRole: actor.isAdmin
+          ? "admin"
+          : actor.isAnalyst
+            ? "analyst"
+            : "client_admin",
+        createdAt: nowIso(),
+        deliveredAt: actor.id === clientId ? nowIso() : null,
+        aiProvider: data.aiProvider,
+        aiGenerated: data.aiGenerated,
+      };
+      db.data.reports.push(record);
+
+      if (logClientAction) {
+        logClientAction(db, {
+          clientUserId: clientId,
+          actorUserId: actor.id,
+          actorRole: record.createdByRole,
+          action: "generated_report",
+          detail: `Generated remediation plan "${record.filename}".`,
+        });
+      }
+      await db.write();
+
+      res.status(201).json(publicReport(record));
+    },
+  );
+
   // ── List reports ──
   // Staff: pass ?clientId= to scope to one client; otherwise all authorized.
   // Client: only own delivered reports (and own self-generated ones).
-  app.get("/api/reports", requireAuth, gate.capability("reportsAccess"), (req, res) => {
+  app.get("/api/reports", requireAuth, reportsOrCompliance, (req, res) => {
     const actor = uById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -1242,6 +1435,11 @@ export function registerReportRoutes(app, {
       list = list.filter(
         (r) => r.clientId === actor.id && (r.deliveredAt || r.createdBy === actor.id),
       );
+      // A client without reportsAccess reached this via complianceAccess — they
+      // may only see the self-serve remediation plan, not other report types.
+      if (!hasCapability(gate.tierOf(actor.id), "reportsAccess")) {
+        list = list.filter((r) => r.type === "remediation");
+      }
     }
 
     list = [...list].sort(
@@ -1279,7 +1477,7 @@ export function registerReportRoutes(app, {
 
   // ── Download a report's document ──
   // Returns the branded HTML with a .doc filename so it opens in Word.
-  app.get("/api/reports/:id/download", requireAuth, gate.capability("reportsAccess"), (req, res) => {
+  app.get("/api/reports/:id/download", requireAuth, reportsOrCompliance, (req, res) => {
     const actor = uById(req.userId);
     if (!actor) return res.status(404).json({ error: "User not found." });
 
@@ -1296,6 +1494,17 @@ export function registerReportRoutes(app, {
         r.clientId === actor.id && (r.deliveredAt || r.createdBy === actor.id);
       if (!ownAndVisible)
         return res.status(403).json({ error: "Not permitted." });
+      // Reached via complianceAccess without reportsAccess → remediation only.
+      if (
+        r.type !== "remediation" &&
+        !hasCapability(gate.tierOf(actor.id), "reportsAccess")
+      ) {
+        return res.status(402).json({
+          error: "Your plan doesn't include this report type.",
+          code: "UPGRADE_REQUIRED",
+          capability: "reportsAccess",
+        });
+      }
     }
 
     res.setHeader("Content-Type", "application/msword; charset=utf-8");
