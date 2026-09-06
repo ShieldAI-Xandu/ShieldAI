@@ -488,19 +488,22 @@ function PostureGauge({ score, level }) {
   );
 }
 
-function NavTab({ label, icon, active, onClick, badge }) {
+function NavTab({ label, icon, active, onClick, badge, locked }) {
   return (
     <button onClick={onClick} style={{
       display:"flex",alignItems:"center",gap:8,padding:"10px 14px",width:"100%",
       background:active?`${C.accent}15`:"none",border:"none",
       borderLeft:`3px solid ${active?C.accent:"transparent"}`,
       borderRadius:"0 6px 6px 0",color:active?C.accentText:C.textSec,
-      cursor:"pointer",fontSize:13,fontWeight:active?600:400,textAlign:"left",
+      cursor: locked ? "not-allowed" : "pointer",
+      opacity: locked ? 0.45 : 1,
+      fontSize:13,fontWeight:active?600:400,textAlign:"left",
       transition:"all 0.15s",marginBottom:2,
     }}>
       <span style={{fontSize:15}}>{icon}</span>
       <span style={{flex:1}}>{label}</span>
-      {badge && <span style={{padding:"1px 7px",borderRadius:10,background:C.accent+"22",
+      {locked && <span style={{fontSize:11}}>🔒</span>}
+      {!locked && badge && <span style={{padding:"1px 7px",borderRadius:10,background:C.accent+"22",
         color:C.accentText,fontSize:10}}>{badge}</span>}
     </button>
   );
@@ -1088,6 +1091,12 @@ async function generateFreePreview(assessmentData) {
           alternateView: preview.alternateView,
         },
       },
+      // Deterministic (zero-AI-cost) equivalents of the paid pipeline's
+      // `priorities`/`execReport` steps, shaped identically so PrioritiesSection
+      // and ExecReportSection render unchanged. generatedBy:"deterministic"
+      // marks these as score-derived, not AI-authored — see ExecReportSection.
+      priorities: { priorities: preview.priorities || [], quickWins: [], generatedBy: "deterministic" },
+      execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic" },
     },
     assessmentId,
     programId: null,
@@ -6028,7 +6037,16 @@ function ExecReportSection({ assessment, results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Executive CISO Report"/>
-        <div style={{marginLeft:"auto"}}><AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/></div>
+        <div style={{marginLeft:"auto"}}>
+          {genBy === "deterministic"
+            ? <span title="Built from your computed posture score — not AI-authored"
+                style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 10px",
+                borderRadius:20,background:C.surface,border:`1px solid ${C.border}`,
+                color:C.textSec,fontSize:10,fontWeight:600}}>
+                📊 Score-based
+              </span>
+            : <AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/>}
+        </div>
       </div>
       <Card style={{marginBottom:14,padding:"24px"}}>
         <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:16,marginBottom:16}}>
@@ -7241,7 +7259,7 @@ function PolicyLibrarySection({ assessment }) {
 function Dashboard({ assessment, results, onReset }) {
   const [section, setSection] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const { can } = useCapabilities();
+  const { can, tier } = useCapabilities();
   // Free tier's `results` only ever has riskOverview (see generateFreePreview),
   // so anything gated on buildPrograms would otherwise render silently empty
   // rather than as an intentional paywall. Every other gate below is its own
@@ -7249,7 +7267,8 @@ function Dashboard({ assessment, results, onReset }) {
   // paid, so no single flag can stand in for all of them.
   const hasPrograms = can("buildPrograms");
   const hasWorkflows = can("workflowsAccess");
-  const hasCompliance = can("complianceAccess");
+  const hasCompliance = can("complianceAccess");         // edit ability (Starter+)
+  const hasComplianceView = can("complianceView");       // read-only visibility (every tier, incl. Free)
   const hasEvidence = can("evidenceAccess");
   const hasTasks = can("remediationTasks");
   const hasThreatIntel = can("threatIntel");
@@ -7270,7 +7289,7 @@ function Dashboard({ assessment, results, onReset }) {
 
   const nav = [
     { id:"overview",    icon:"🎯", label:"Overview",          badge:null },
-    { id:"priorities",  icon:"📊", label:"Priorities",        badge:!hasPrograms?null:results?.priorities?.priorities?.length },
+    { id:"priorities",  icon:"📊", label:"Priorities",        badge:results?.priorities?.priorities?.length || null },
     { id:"policies",    icon:"📄", label:"Policies",          badge:!hasPrograms?null:(policyCount || null) },
     { id:"workflows",   icon:"🔄", label:"Workflows",         badge:!hasWorkflows?null:results?.workflows?.workflows?.length },
     { id:"compliance",  icon:"✅", label:"Compliance",        badge:!hasCompliance?null:results?.compliance?.frameworks?.length },
@@ -7288,6 +7307,17 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
     { id:"billing",     icon:"💳", label:"Plan & Billing",    badge:null },
   ];
+
+  // Free tier: assessment + a read-only Compliance view is the whole product —
+  // everything else is grayed in the sidebar and pops the upgrade modal on
+  // click instead of navigating. Priorities/Compliance/Exec Report stay live
+  // (see the sectionMap entries below for why). Every other tier's existing
+  // per-section LockedFeature fallback is untouched.
+  const FREE_LOCKED_NAV_IDS = new Set([
+    "policies", "workflows", "remediation", "evidence", "vendors", "calendar",
+    "threats", "tools", "training", "trainingmgr", "reports", "library",
+  ]);
+  const navWithLock = nav.map(n => ({ ...n, locked: tier === "free" && FREE_LOCKED_NAV_IDS.has(n.id) }));
 
   // Groups the flat tab list above into labeled clusters for the sidebar —
   // a 17-item flat list with no structure is a lot to scan for someone who
@@ -7357,7 +7387,10 @@ function Dashboard({ assessment, results, onReset }) {
 
   const sectionMap = {
     overview:   <OverviewSection assessment={assessment} results={results}/>,
-    priorities: !hasPrograms ? lockedSections.priorities : <PrioritiesSection results={results}/>,
+    // Not gated on buildPrograms: Free tier now gets a deterministic
+    // equivalent (see generateFreePreview/riskEngine.js), so this renders
+    // whenever the data exists, on any tier.
+    priorities: results?.priorities?.priorities?.length ? <PrioritiesSection results={results}/> : lockedSections.priorities,
     policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results}/>,
     workflows:  !hasWorkflows ? lockedSections.workflows : <WorkflowsSection results={results}/>,
     // The live compliance engine, not the AI's prose. ComplianceSection rendered
@@ -7366,7 +7399,10 @@ function Dashboard({ assessment, results, onReset }) {
     // /api/compliance/* directly, so what a client sees is what the deterministic
     // engine actually concluded from their answers (capped to their plan's
     // framework limit server-side — see complianceRoutes.js).
-    compliance: !hasCompliance ? lockedSections.compliance : <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}/>,
+    compliance: !hasComplianceView ? lockedSections.compliance : <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}
+      readOnly={!hasCompliance}
+      onUpgrade={() => showUpgradePrompt({ capability:"complianceAccess", currentTier:"free",
+        requiresTier:"starter", requiresTierName:"Starter", requiresPrice:"$159/mo" })}/>,
     remediation: !hasTasks ? lockedSections.remediation : <RemediationSection/>,
     evidence:    !hasEvidence ? lockedSections.evidence : <EvidenceSection/>,
     vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
@@ -7376,7 +7412,8 @@ function Dashboard({ assessment, results, onReset }) {
     tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results}/>,
     training:   !hasTrainingView ? lockedSections.training : <TrainingSection results={results} assessment={assessment} canGenerateFull={hasTrainingFull}/>,
     trainingmgr: !hasTrainingFull ? lockedSections.trainingmgr : <TrainingProgramSection/>,
-    report:     !hasPrograms ? lockedSections.report : <ExecReportSection assessment={assessment} results={results}/>,
+    // Same reasoning as `priorities` above — data-presence gated, not tier-gated.
+    report:     results?.execReport?.executiveReport ? <ExecReportSection assessment={assessment} results={results}/> : lockedSections.report,
     reports:    (!hasReports && !hasCompliance) ? lockedSections.reports : <ReportsSection hasFullReports={hasReports}/>,
     library:    !hasPrograms ? lockedSections.library : <PolicyLibrarySection assessment={assessment}/>,
     billing:    <PlanBillingSection/>,
@@ -7435,7 +7472,7 @@ function Dashboard({ assessment, results, onReset }) {
 
         <div style={{padding:"10px 6px",flex:1}}>
           {NAV_GROUPS.map((group, gi) => {
-            const items = group.ids.map(id => nav.find(n => n.id === id)).filter(Boolean);
+            const items = group.ids.map(id => navWithLock.find(n => n.id === id)).filter(Boolean);
             if (items.length === 0) return null;
             return (
               <div key={gi} style={{marginBottom: group.label ? 16 : 4}}>
@@ -7446,9 +7483,13 @@ function Dashboard({ assessment, results, onReset }) {
                   </div>
                 )}
                 {items.map(n=>(
-                  <NavTab key={n.id} label={n.label} icon={n.icon}
+                  <NavTab key={n.id} label={n.label} icon={n.icon} locked={n.locked}
                     active={section===n.id} badge={n.badge}
-                    onClick={()=>{setSection(n.id); setMobileNavOpen(false);}}/>
+                    onClick={n.locked
+                      ? () => showUpgradePrompt({ code:"UPGRADE_REQUIRED", capability:n.id,
+                          currentTier:"free", requiresTier:"starter", requiresTierName:"Starter",
+                          requiresPrice:"$159/mo" })
+                      : () => {setSection(n.id); setMobileNavOpen(false);}}/>
                 ))}
               </div>
             );
@@ -20052,6 +20093,11 @@ export default function ShieldAI() {
                     alternateView: preview.alternateView,
                   },
                 },
+                // Same shape as generateFreePreview() — this restore path must
+                // match it exactly, or a page refresh loses Priorities/Exec
+                // Report and silently re-locks them.
+                priorities: { priorities: preview.priorities || [], quickWins: [], generatedBy: "deterministic" },
+                execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic" },
               });
               setCurrentAssessmentId(resume.assessmentId);
               setCurrentProgramId(null);

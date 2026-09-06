@@ -300,7 +300,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // === LEARNERS ================================================
-  app.get("/api/training-program/learners", requireAuth, (req, res) => {
+  app.get("/api/training-program/learners", requireAuth, gateRoster, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const list = (db.data.learners || [])
@@ -367,7 +367,7 @@ export function registerTrainingProgramRoutes(app, {
 
   // === ASSIGNMENTS =============================================
   // List assignments for the scoped client (optionally filter by learnerId/status).
-  app.get("/api/training-program/assignments", requireAuth, (req, res) => {
+  app.get("/api/training-program/assignments", requireAuth, gateDelivery, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const learnerMap = new Map((db.data.learners || []).map(l => [l.id, l]));
@@ -461,7 +461,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // === QUARTERLY SCHEDULING ====================================
-  app.get("/api/training-program/quarters", requireAuth, (req, res) => {
+  app.get("/api/training-program/quarters", requireAuth, gateDelivery, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     res.json((db.data.trainingQuarters || []).filter(q => q.clientUserId === scope.clientUserId)
@@ -507,6 +507,11 @@ export function registerTrainingProgramRoutes(app, {
 
   // === REPORTS / OVERVIEW ======================================
   // Rolled-up completion stats for the scoped client — powers dashboards + export.
+  // Deliberately ungated: fetched unconditionally by the always-visible
+  // Overview tab (src/App.jsx OverviewSection) for every tier, including Free,
+  // as an optional "no data yet" widget. Gating this would 402 on every Free
+  // page load and auto-pop the upgrade modal via authFetch's global 402
+  // handler before the client has clicked anything.
   app.get("/api/training-program/overview", requireAuth, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
@@ -536,7 +541,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // Detailed per-learner report (for export / compliance evidence).
-  app.get("/api/training-program/report", requireAuth, (req, res) => {
+  app.get("/api/training-program/report", requireAuth, gateDelivery, (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const learners = (db.data.learners || []).filter(l => l.clientUserId === scope.clientUserId);

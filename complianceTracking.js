@@ -145,7 +145,7 @@ Generate specific remediation guidance to bring this control into compliance.`,
   };
 }
 
-export function registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter }) {
+export function registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter, gate }) {
   // Resolve which user we're acting for (self, or staff viewing a client).
   function resolveTarget(req, res) {
     let targetId = req.userId;
@@ -162,7 +162,7 @@ export function registerComplianceTrackingRoutes(app, { db, requireAuth, callCla
   }
 
   // Framework with every control's current status + rollup.
-  app.get("/api/compliance/:frameworkId/status", requireAuth, (req, res) => {
+  app.get("/api/compliance/:frameworkId/status", requireAuth, gate.capability("complianceView"), (req, res) => {
     const targetId = resolveTarget(req, res); if (!targetId) return;
     const result = frameworkStatusForClient(db, targetId, req.params.frameworkId);
     if (!result) return res.status(404).json({ error: "Framework not found." });
@@ -170,7 +170,7 @@ export function registerComplianceTrackingRoutes(app, { db, requireAuth, callCla
   });
 
   // Client attests a control's status.
-  app.post("/api/compliance/:frameworkId/control/:controlId/status", requireAuth, async (req, res) => {
+  app.post("/api/compliance/:frameworkId/control/:controlId/status", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
     const targetId = resolveTarget(req, res); if (!targetId) return;
     try {
       const { status, note } = req.body || {};
@@ -182,7 +182,7 @@ export function registerComplianceTrackingRoutes(app, { db, requireAuth, callCla
   });
 
   // On-demand remediation guidance for one control (live AI, grounded).
-  app.post("/api/compliance/:frameworkId/control/:controlId/remediation", requireAuth, aiLimiter, async (req, res) => {
+  app.post("/api/compliance/:frameworkId/control/:controlId/remediation", requireAuth, gate.capability("complianceAccess"), aiLimiter, async (req, res) => {
     if (!callClaudeText) return res.status(503).json({ error: "AI backend not configured." });
     const targetId = resolveTarget(req, res); if (!targetId) return;
 

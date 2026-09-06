@@ -297,7 +297,7 @@ function ResolutionFeedback({ f, onDismiss }) {
 // ── The conflict queue ────────────────────────────────────────
 // Where the agent and the questionnaire disagree. This is the decision point:
 // both values shown, three options, nothing auto-resolved.
-export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
+export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOnly }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(null);
   const [reason, setReason] = useState({});
@@ -458,6 +458,11 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
           )}
 
           {/* The decision. Rule 2: the client chooses. */}
+          {readOnly ? (
+            <div style={{ color: C.textMut, fontSize: 11.5, fontStyle: "italic" }}>
+              Resolving conflicts requires the Starter plan.
+            </div>
+          ) : (
           <div style={{ display: "grid", gap: 8 }}>
             {c.resolution.options.map(o => {
               if (o.id === "update-answer") {
@@ -498,6 +503,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved }) {
               );
             })}
           </div>
+          )}
         </div>
       ))}
     </div>
@@ -572,7 +578,7 @@ function UpdateAnswerOption({ o, c, suggested, choice, newAnswer, setChoice, set
 }
 
 // ── Scoping intake ────────────────────────────────────────────
-export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onSaved }) {
+export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onSaved, readOnly }) {
   const [data, setData] = useState(null);
   const [answers, setAnswers] = useState({});
   const [saving, setSaving] = useState(false);
@@ -634,11 +640,11 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
                 ? multiValue(qq, answers[qq.id]).includes(o.value)
                 : JSON.stringify(answers[qq.id]) === JSON.stringify(o.value);
               return (
-                <button key={i} disabled={o.locked}
+                <button key={i} disabled={o.locked || readOnly}
                   onClick={() => isMulti ? toggleMulti(qq, o) : setAnswers(s => ({ ...s, [qq.id]: o.value }))}
                   style={{
                     textAlign: "left", padding: "7px 10px", borderRadius: 6, fontSize: 12,
-                    cursor: o.locked ? "default" : "pointer",
+                    cursor: (o.locked || readOnly) ? "default" : "pointer",
                     background: sel ? `${C.accent}1A` : C.surface,
                     color: sel ? C.accent : C.textSec,
                     border: `1px solid ${sel ? C.accent + "66" : C.border}`,
@@ -667,12 +673,14 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
         </div>
       )}
 
-      <button onClick={save} disabled={saving}
-        style={{
-          padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer",
-          fontSize: 12, fontWeight: 700, color: C.bg,
-          background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
-        }}>{saving ? "Saving…" : "Save scoping"}</button>
+      {!readOnly && (
+        <button onClick={save} disabled={saving}
+          style={{
+            padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 700, color: C.bg,
+            background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
+          }}>{saving ? "Saving…" : "Save scoping"}</button>
+      )}
 
       {/* The payoff, made visible. */}
       {result?.scopeChange && result.scopeChange.scoped !== result.scopeChange.unscoped && (
@@ -691,7 +699,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
 }
 
 // ── Control-by-control walkthrough ────────────────────────────
-export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onBack }) {
+export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onBack, readOnly }) {
   const [data, setData] = useState(null);
   const [section, setSection] = useState(null);
   const [filter, setFilter] = useState("all");
@@ -737,7 +745,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
       ) : (
         <>
           <FrameworkIntake authFetch={authFetch} apiBase={apiBase} frameworkId={frameworkId}
-            clientId={clientId} onSaved={load} />
+            clientId={clientId} onSaved={load} readOnly={readOnly} />
 
           {data.agent && data.openDecisions?.length > 0 && (
             <Note tone="amber">
@@ -790,7 +798,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
           <div style={{ display: "grid", gap: 8 }}>
             {reqs.map(r => (
               <RequirementRow key={r.id} r={r} frameworkId={frameworkId} authFetch={authFetch} apiBase={apiBase}
-                clientId={clientId} onSaved={load} />
+                clientId={clientId} onSaved={load} readOnly={readOnly} />
             ))}
           </div>
 
@@ -1020,7 +1028,7 @@ export function RemediationVerifyQueue({ authFetch, apiBase, clientId }) {
   );
 }
 
-function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved }) {
+function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved, readOnly }) {
   const [open, setOpen] = useState(false);
   const color = STATUS_COLOR[r.status];
   return (
@@ -1086,14 +1094,14 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved 
                   Conflict Queue's resolution/audit path above (which is the
                   message shown in that case) — so the inline editor only offers
                   itself when there's nothing to reconcile. */}
-              {authFetch && !(c.sources?.agent?.length > 0 && !c.sources.agree) && (
+              {authFetch && !readOnly && !(c.sources?.agent?.length > 0 && !c.sources.agree) && (
                 <ControlAnswerEditor c={c} authFetch={authFetch} apiBase={apiBase}
                   clientId={clientId} onSaved={onSaved} />
               )}
             </div>
           ))}
 
-          {authFetch && (
+          {authFetch && !readOnly && (
             <RemediationAttest r={r} frameworkId={frameworkId} authFetch={authFetch}
               apiBase={apiBase} clientId={clientId} onSaved={onSaved} />
           )}
@@ -1196,7 +1204,7 @@ const CT_STATUS_COLOR = { met: C.green, partial: C.amber, not_met: C.red, unknow
 const CT_STATUS_LABEL = { met: "Met", partial: "Partial", not_met: "Not met", unknown: "Not assessed" };
 const CT_SOURCE_LABEL = { agent: "Agent-measured", client: "Self-reported", unset: "Not set" };
 
-export function CustomFrameworksSection({ authFetch, apiBase, clientId }) {
+export function CustomFrameworksSection({ authFetch, apiBase, clientId, readOnly }) {
   const [list, setList] = useState(null);
   const [openId, setOpenId] = useState(null);
 
@@ -1218,7 +1226,7 @@ export function CustomFrameworksSection({ authFetch, apiBase, clientId }) {
 
       {openId ? (
         <CustomFrameworkDetail authFetch={authFetch} apiBase={apiBase} clientId={clientId}
-          frameworkId={openId} onBack={() => setOpenId(null)} />
+          frameworkId={openId} onBack={() => setOpenId(null)} readOnly={readOnly} />
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {list.map(f => (
@@ -1249,7 +1257,7 @@ export function CustomFrameworksSection({ authFetch, apiBase, clientId }) {
   );
 }
 
-function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBack }) {
+function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBack, readOnly }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [openControl, setOpenControl] = useState(null);
@@ -1348,6 +1356,7 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                     </div>
                   )}
 
+                  {!readOnly && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                     {["met", "partial", "not_met", "unknown"].map(s => (
                       <button key={s} onClick={() => setStatus(c.id, s)} disabled={busy === c.id}
@@ -1361,14 +1370,17 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                         }}>{CT_STATUS_LABEL[s]}</button>
                     ))}
                   </div>
+                  )}
+                  {!readOnly && (
                   <input value={noteDraft[c.id] ?? c.note ?? ""} onChange={e => setNoteDraft(s => ({ ...s, [c.id]: e.target.value }))}
                     placeholder="Optional note (context for your analyst or an auditor)"
                     style={{
                       width: "100%", padding: "7px 10px", borderRadius: 6, fontSize: 12, marginBottom: 8,
                       background: C.surface, color: C.text, border: `1px solid ${C.border}`,
                     }} />
+                  )}
 
-                  {c.status !== "met" && (
+                  {!readOnly && c.status !== "met" && (
                     <div>
                       <button onClick={() => getRemediation(c.id)} disabled={remediation[c.id] === "loading"}
                         style={{
@@ -1415,21 +1427,40 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
 }
 
 // ── The workspace ─────────────────────────────────────────────
-export default function ComplianceWorkspace({ authFetch, apiBase = "", clientId = null }) {
+export default function ComplianceWorkspace({ authFetch, apiBase = "", clientId = null, readOnly = false, onUpgrade }) {
   const [view, setView] = useState(null);
   const [nonce, setNonce] = useState(0);
   return (
     <div>
+      {readOnly && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12, marginBottom: 16,
+          background: `${C.accent}0D`, border: `1px solid ${C.accent}33`, borderRadius: 10,
+          padding: "12px 16px",
+        }}>
+          <span style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.5, flex: 1 }}>
+            Read-only on the Free plan — you can see the frameworks you chose, but updating
+            answers, resolving conflicts, or marking remediation requires Starter.
+          </span>
+          {onUpgrade && (
+            <button onClick={onUpgrade} style={{
+              padding: "6px 14px", borderRadius: 7, border: "none", cursor: "pointer",
+              fontSize: 12, fontWeight: 700, color: C.bg, whiteSpace: "nowrap",
+              background: `linear-gradient(135deg, ${C.accent}, ${C.accentDm})`,
+            }}>Upgrade to Starter</button>
+          )}
+        </div>
+      )}
       <ConflictQueue key={`cq${nonce}`} authFetch={authFetch} apiBase={apiBase}
-        clientId={clientId} onResolved={() => setNonce(n => n + 1)} />
+        clientId={clientId} onResolved={() => setNonce(n => n + 1)} readOnly={readOnly} />
       {view
         ? <FrameworkDetail key={`fd${nonce}${view}`} authFetch={authFetch} apiBase={apiBase}
-            frameworkId={view} clientId={clientId} onBack={() => setView(null)} />
+            frameworkId={view} clientId={clientId} onBack={() => setView(null)} readOnly={readOnly} />
         : (
           <>
             <ComplianceOverview key={`ov${nonce}`} authFetch={authFetch} apiBase={apiBase}
               clientId={clientId} onOpen={setView} />
-            <CustomFrameworksSection key={`cf${nonce}`} authFetch={authFetch} apiBase={apiBase} clientId={clientId} />
+            <CustomFrameworksSection key={`cf${nonce}`} authFetch={authFetch} apiBase={apiBase} clientId={clientId} readOnly={readOnly} />
           </>
         )}
     </div>

@@ -153,7 +153,7 @@ export function registerComplianceRoutes(app, {
   });
 
   // ── Multi-framework overview for one client ──
-  app.get("/api/compliance/overview", requireAuth, gate.capability("complianceAccess"), (req, res) => {
+  app.get("/api/compliance/overview", requireAuth, gate.capability("complianceView"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -209,7 +209,7 @@ export function registerComplianceRoutes(app, {
   });
 
   // ── Control-by-control walkthrough for one framework ──
-  app.get("/api/compliance/framework/:id", requireAuth, gate.capability("complianceAccess"), (req, res) => {
+  app.get("/api/compliance/framework/:id", requireAuth, gate.capability("complianceView"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -608,7 +608,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   // Without this the questionnaires in frameworkIntake.js have no way to be
   // answered, and every assessment runs unscoped — 61 PCI sub-requirements for
   // a merchant responsible for 7.
-  app.get("/api/compliance/intake/:frameworkId", requireAuth, gate.capability("complianceAccess"), (req, res) => {
+  app.get("/api/compliance/intake/:frameworkId", requireAuth, gate.capability("complianceView"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
@@ -691,7 +691,12 @@ Write remediation steps to close this gap. Requirements for your answer:
   // Deduped by control across every framework, because one BitLocker
   // disagreement can touch dozens of controls and asking the client to resolve
   // it dozens of times would be worse than not detecting it.
-  app.get("/api/compliance/conflicts", requireAuth, gate.capability("complianceAccess"), (req, res) => {
+  // View-only: gated on complianceView, not complianceAccess. Left at
+  // complianceAccess this would 402 for Free the instant ComplianceWorkspace
+  // mounts (ConflictQueue fetches on load), auto-popping the upgrade modal
+  // before the client has clicked anything. Resolving a conflict (below) still
+  // requires complianceAccess.
+  app.get("/api/compliance/conflicts", requireAuth, gate.capability("complianceView"), (req, res) => {
     const targetId = req.query.clientId || req.userId;
     const actor = userById(req.userId);
     if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });

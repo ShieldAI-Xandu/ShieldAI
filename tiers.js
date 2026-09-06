@@ -51,7 +51,12 @@ export const TIERS = {
       analystSupport: false,
       mastermind: false,            // client-facing Mastermind Q&A
       mastermindChat: false,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
-      complianceAccess: false, // compliance workspace is paid-only — free sees the posture score only
+      complianceAccess: false, // compliance workspace EDITING is paid-only
+      // Viewing the frameworks you already chose (read-only) is NOT paid-only —
+      // it's part of the free lead-gen funnel. `complianceAccess` above still
+      // gates answering/resolving/attesting; this only gates visibility, and
+      // every tier has it. See complianceRoutes.js for the GET/POST split.
+      complianceView: true,
       reportsAccess: false,    // status/update/compliance/insurance/legal reports are paid-only
       vendorRegistry: false,             // ongoing vendor registry (add/track/reassess) — Starter+
       vendorQuestionnaireAssistant: false, // AI-grounded incoming-questionnaire responder — Growth+
@@ -96,6 +101,7 @@ export const TIERS = {
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
       complianceAccess: true, // capped to `limits.complianceFrameworks` additional frameworks
+      complianceView: true,
       reportsAccess: false,   // Reports are Growth+
       evidenceAccess: false,  // Evidence & audit-readiness are Growth+
       workflowsAccess: false, // Incident-response workflows are Growth+
@@ -162,6 +168,7 @@ export const TIERS = {
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
       complianceAccess: true,
+      complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,
@@ -209,6 +216,7 @@ export const TIERS = {
       mastermind: false,
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
       complianceAccess: true,
+      complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,
@@ -256,6 +264,7 @@ export const TIERS = {
       mastermind: true,             // client-facing Q&A
       mastermindChat: true,   // Starter+ can open Mastermind chat (answers are tier-scoped); Free is upgrade-gated
       complianceAccess: true,
+      complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
       workflowsAccess: true,

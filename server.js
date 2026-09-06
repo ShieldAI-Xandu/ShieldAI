@@ -87,7 +87,7 @@ import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
 import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./trainingCatalog.js";
-import { computePostureScore } from "./riskEngine.js";
+import { computePostureScore, deriveFreePriorities, deriveFreeExecSummary } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { hasCapability, getTier } from "./tiers.js";
 import { callAI, providerStatus } from "./aiProviders.js";
@@ -840,6 +840,11 @@ app.get("/api/assessments/:id/posture-preview", requireAuth, (req, res) => {
     // must stay zero-cost so a free signup never carries generation cost.
     executiveSummary: `Your business scored ${posture.postureScore}/100 (${posture.postureLevel}) on the ${posture.frameworkLens || "NIST CSF"} scale. `
       + `Your weakest areas are ${posture.weakestAreas.join(" and ")}. Upgrade to build a full, AI-generated security program — prioritized roadmap, policies, workflows, compliance mapping, and more — around this score.`,
+    // Deterministic (zero-AI-cost) priorities + exec-report equivalents so
+    // Free tier's Priorities and Exec Report tabs have something real to show
+    // — see riskEngine.js for how these are derived from the score above.
+    priorities: deriveFreePriorities(posture),
+    execSummary: deriveFreeExecSummary(posture),
   });
 });
 
@@ -1778,7 +1783,7 @@ registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, an
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
 registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
-registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter });
+registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter, gate });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate, emailSendLimiter });

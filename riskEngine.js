@@ -137,7 +137,7 @@ function scoreFromChecklist(answers) {
       name,
       score: clamp(weighted),
       factors: factors.map(f => ({
-        label: f.label, score: clamp(f.score), weight: f.weight, finding: f.finding,
+        label: f.label, factorId: f.factorId, score: clamp(f.score), weight: f.weight, finding: f.finding,
       })),
     };
   });
@@ -171,27 +171,27 @@ function scoreFromKeywords(assessment) {
   };
   return [
     mk("Identify", [
-      { label: "Data inventory awareness", weight: 0.35, score: (assessment?.company?.dataTypes||[]).length >= 2 ? 70 : 30, finding: "Inferred from intake." },
-      { label: "Prior risk assessment", weight: 0.35, score: has(t,"audit","soc 2","soc2","penetration","assessment") ? 70 : 25, finding: "Inferred from intake." },
-      { label: "Documented policies", weight: 0.30, score: (assessment?.posture?.policies||[]).length >= 1 ? 55 : 20, finding: "Inferred from intake." },
+      { label: "Data inventory awareness", factorId: "dataInventory", weight: 0.35, score: (assessment?.company?.dataTypes||[]).length >= 2 ? 70 : 30, finding: "Inferred from intake." },
+      { label: "Prior risk assessment", factorId: "priorAudit", weight: 0.35, score: has(t,"audit","soc 2","soc2","penetration","assessment") ? 70 : 25, finding: "Inferred from intake." },
+      { label: "Documented policies", factorId: "documentedPolicies", weight: 0.30, score: (assessment?.posture?.policies||[]).length >= 1 ? 55 : 20, finding: "Inferred from intake." },
     ]),
     mk("Protect", [
-      { label: "MFA", weight: 0.30, score: has(t,"mfa","multi-factor","2fa") ? 80 : 20, finding: "Inferred from intake." },
-      { label: "Endpoint protection", weight: 0.25, score: has(t,"edr","crowdstrike","defender","antivirus") ? 55 : 25, finding: "Inferred from intake." },
-      { label: "Training", weight: 0.20, score: has(t,"training","awareness") ? 70 : 25, finding: "Inferred from intake." },
-      { label: "IT management", weight: 0.25, score: has(t,"it staff","msp","managed","it team") ? 70 : 30, finding: "Inferred from intake." },
+      { label: "MFA", factorId: "mfa", weight: 0.30, score: has(t,"mfa","multi-factor","2fa") ? 80 : 20, finding: "Inferred from intake." },
+      { label: "Endpoint protection", factorId: "endpoint", weight: 0.25, score: has(t,"edr","crowdstrike","defender","antivirus") ? 55 : 25, finding: "Inferred from intake." },
+      { label: "Training", factorId: "training", weight: 0.20, score: has(t,"training","awareness") ? 70 : 25, finding: "Inferred from intake." },
+      { label: "IT management", factorId: "itManagement", weight: 0.25, score: has(t,"it staff","msp","managed","it team") ? 70 : 30, finding: "Inferred from intake." },
     ]),
     mk("Detect", [
-      { label: "Monitoring", weight: 0.55, score: has(t,"siem","monitoring","logging","soc") ? 65 : 20, finding: "Inferred from intake." },
-      { label: "Email security", weight: 0.45, score: has(t,"email security","proofpoint","microsoft 365","google workspace") ? 60 : 30, finding: "Inferred from intake." },
+      { label: "Monitoring", factorId: "monitoring", weight: 0.55, score: has(t,"siem","monitoring","logging","soc") ? 65 : 20, finding: "Inferred from intake." },
+      { label: "Email security", factorId: "emailSecurity", weight: 0.45, score: has(t,"email security","proofpoint","microsoft 365","google workspace") ? 60 : 30, finding: "Inferred from intake." },
     ]),
     mk("Respond", [
-      { label: "Incident response plan", weight: 0.55, score: has(t,"incident response","ir plan","playbook") ? 75 : 20, finding: "Inferred from intake." },
-      { label: "Response support", weight: 0.45, score: has(t,"msp","managed","retained","consultant") ? 65 : 30, finding: "Inferred from intake." },
+      { label: "Incident response plan", factorId: "incidentResponse", weight: 0.55, score: has(t,"incident response","ir plan","playbook") ? 75 : 20, finding: "Inferred from intake." },
+      { label: "Response support", factorId: "responseSupport", weight: 0.45, score: has(t,"msp","managed","retained","consultant") ? 65 : 30, finding: "Inferred from intake." },
     ]),
     mk("Recover", [
-      { label: "Backups", weight: 0.55, score: has(t,"backup","veeam","datto","cloud backup") ? 65 : 20, finding: "Inferred from intake." },
-      { label: "Disaster recovery", weight: 0.45, score: has(t,"disaster recovery","continuity","rto") ? 70 : 20, finding: "Inferred from intake." },
+      { label: "Backups", factorId: "backups", weight: 0.55, score: has(t,"backup","veeam","datto","cloud backup") ? 65 : 20, finding: "Inferred from intake." },
+      { label: "Disaster recovery", factorId: "disasterRecovery", weight: 0.45, score: has(t,"disaster recovery","continuity","rto") ? 70 : 20, finding: "Inferred from intake." },
     ]),
   ];
 }
@@ -286,6 +286,7 @@ function scoreCisFromChecklist(checklist) {
       const score = answerScore(factorId);
       return {
         label: q ? q.question : factorId,
+        factorId,
         score: clamp(score),
         weight,
         finding: findingFor(factorId, score, q ? q.question : factorId),
@@ -361,5 +362,58 @@ export function computePostureForLens(assessment, lens = "nist") {
     frameworkLens: "NIST CSF + CIS Controls",
     methodology: "NIST CSF (headline) with CIS Controls v8.1 view",
     alternateView: { lens: "cis", ...cisView },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────
+//  FREE-TIER DETERMINISTIC PRIORITIES / EXEC SUMMARY
+// ──────────────────────────────────────────────────────────────
+// Free tier never runs the paid AI pipeline (see generators.js PIPELINE), so
+// it has no AI-authored priorities or exec report. These two functions derive
+// a real, zero-AI-cost equivalent directly from the already-computed factor
+// scores/findings above — no invented statistics, costs, or timelines. Where
+// we genuinely don't have a basis to state a number (investment required,
+// ROI), we say so and point at the paid tier instead of fabricating one.
+const CATEGORY_BY_FACTOR = {
+  mfa: "Identity", endpoint: "Endpoint", training: "Awareness", itManagement: "Compliance",
+  dataInventory: "Data", priorAudit: "Compliance", documentedPolicies: "Compliance",
+  monitoring: "Network", emailSecurity: "Network",
+  incidentResponse: "Compliance", responseSupport: "Compliance",
+  backups: "Data", disasterRecovery: "Data",
+};
+const OWNER_BY_CATEGORY = {
+  Identity: "IT", Endpoint: "IT", Network: "IT",
+  Awareness: "All Staff",
+  Compliance: "Leadership", Data: "Leadership",
+};
+
+export function deriveFreePriorities(posture) {
+  const allFactors = (posture?.functions || []).flatMap(fn => fn.factors || []);
+  const weakest = [...allFactors].sort((a, b) => a.score - b.score).slice(0, 5);
+  return weakest.map((f, i) => {
+    const category = CATEGORY_BY_FACTOR[f.factorId] || "Compliance";
+    return {
+      id: `FP${i + 1}`,
+      rank: i + 1,
+      title: f.finding,
+      description: `Based on your assessment answer for: "${f.label}"`,
+      impact: f.score <= 35 ? "High" : f.score <= 60 ? "Medium" : "Low",
+      category,
+      owner: OWNER_BY_CATEGORY[category] || "Leadership",
+    };
+  });
+}
+
+export function deriveFreeExecSummary(posture) {
+  const weakest = (posture?.weakestAreas || []).join(" and ");
+  const topFindings = deriveFreePriorities(posture).slice(0, 3).map(p => p.title);
+  return {
+    headline: `${posture?.postureLevel || "Unscored"} security posture — ${posture?.postureScore ?? "–"}/100`,
+    securityPosture: `This business scored ${posture?.postureScore ?? "–"}/100 (${posture?.postureLevel || "Unscored"}) on the ${posture?.frameworkLens || "NIST CSF"} scale.`,
+    businessRisk: weakest ? `The greatest exposure today is in ${weakest}.` : "No specific area stands out as the single greatest exposure.",
+    investmentRequired: "See a full investment plan on Starter",
+    roi: "Available with a full security program on Starter",
+    keyFindings: topFindings,
+    nextSteps: topFindings.map(f => ({ action: f, owner: "Leadership", dueDate: "Ongoing", priority: "High" })),
   };
 }
