@@ -20741,7 +20741,20 @@ export default function ShieldAI() {
         <ChecklistScreen
           frameworkLens={assessment?.frameworkLens || "nist"}
           initialProgress={checklistResume}
-          onProgress={(progress) => saveResumeState({ phase: "checklist", assessment, checklistProgress: progress })}
+          onProgress={(progress) => {
+            // Keeps the in-memory seed for a fresh ChecklistScreen mount in
+            // sync too, not just sessionStorage — without this, going
+            // checklist -> framework -> checklist within the same session
+            // (no refresh) lost all in-progress answers, because a brand
+            // new ChecklistScreen re-seeds from `checklistResume`, which
+            // was otherwise only ever populated by the page-load restore
+            // effect. That's what made a sign-out/sign-in "bring it back":
+            // the full restore effect re-reads the sessionStorage snapshot
+            // (which onProgress already kept current) that the live
+            // in-memory state was missing.
+            setChecklistResume(progress);
+            saveResumeState({ phase: "checklist", assessment, checklistProgress: progress });
+          }}
           onComplete={(checklist, selectedFrameworks) => {
             setChecklistResume(null);
             const next = { ...assessment, checklist, selectedFrameworks };
