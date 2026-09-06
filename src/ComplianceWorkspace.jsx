@@ -82,6 +82,41 @@ function Pill({ text, color, title }) {
   );
 }
 
+// Small inline glossary tooltip for jargon terms ("control", "readiness") at
+// their first use — kept local (not imported from src/ui/) because this
+// module intentionally stays self-contained and uses its own dark palette
+// (`C` above), not the rest of the app's light theme.
+function Info({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span style={{ position: "relative", display: "inline-flex", verticalAlign: "middle" }}>
+      <button
+        type="button"
+        aria-label="What does this mean?"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+        onBlur={() => setOpen(false)}
+        style={{
+          width: 15, height: 15, borderRadius: "50%", marginLeft: 4,
+          border: `1px solid ${C.textMut}`, background: "none", color: C.textSec,
+          fontSize: 10, fontWeight: 700, lineHeight: 1, cursor: "pointer", padding: 0,
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+        }}
+      >i</button>
+      {open && (
+        <span role="tooltip" style={{
+          position: "absolute", bottom: "calc(100% + 6px)", left: "50%", transform: "translateX(-50%)",
+          zIndex: 50, width: 220, padding: "9px 11px", borderRadius: 8,
+          background: C.card, border: `1px solid ${C.borderHi}`, color: C.text,
+          fontSize: 12, fontWeight: 400, lineHeight: 1.5, boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+        }}>
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function DepthBadge({ depth }) {
   if (depth === "control-mapped") {
     return <Pill text="CONTROL-MAPPED" color={C.green}
@@ -126,8 +161,18 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
         )}
       </div>
       <p style={{ color: C.textSec, fontSize: 12.5, lineHeight: 1.6, margin: "0 0 16px" }}>
-        Computed from your assessment answers, control by control. Percentages are over
-        controls we've actually assessed — a dash means we haven't asked yet, not that you failed.
+        Computed from your assessment answers, control by control
+        <Info>
+          A "control" is one specific, checkable requirement — like "require MFA" or "encrypt
+          backups." Frameworks are just organized lists of these, grouped by topic.
+        </Info>
+        . Percentages are over controls we've actually assessed — a dash means we haven't
+        asked yet, not that you failed. "Readiness"
+        <Info>
+          The share of assessed controls you currently meet or partially meet for that
+          framework. It's a self-assessment snapshot, not a certification or an auditor's sign-off.
+        </Info>
+        {" "}is how close you are to fully meeting that framework.
       </p>
 
       <div style={{ display: "grid", gap: 10 }}>
@@ -983,7 +1028,12 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved 
       background: C.card, borderRadius: 8,
       border: `1px solid ${r.hasDispute ? C.amber + "66" : C.border}`,
     }}>
-      <div onClick={() => setOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer" }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", cursor: "pointer",
+          width: "100%", background: "none", border: "none", textAlign: "left", font: "inherit" }}>
         <span style={{ width: 6, height: 6, borderRadius: 3, background: color, flexShrink: 0 }} />
         <span style={{ color: C.textSec, fontSize: 11.5, fontFamily: "monospace", minWidth: 62 }}>{safeText(r.id)}</span>
         <span style={{ color: C.text, fontSize: 12.5, flex: 1 }}>{safeText(r.name)}</span>
@@ -992,7 +1042,7 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved 
         {r.remediation?.status === "pending" && <Pill text="ATTESTED" color={C.amber} title="You've marked this remediated — pending analyst verification." />}
         {r.remediation?.status === "verified" && <Pill text="VERIFIED" color={C.green} title="Remediation verified by your analyst." />}
         <Pill text={STATUS_LABEL[r.status]} color={color} />
-      </div>
+      </button>
 
       {open && (
         <div style={{ padding: "0 14px 12px", borderTop: `1px solid ${C.border}` }}>

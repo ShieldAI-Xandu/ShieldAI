@@ -8,3 +8,58 @@ html, body {
   margin: 0;
   padding: 0;
 }
+
+/* Self-hosted (not Google Fonts CDN) — see src/ui/type.js for why. Only the
+   weights actually used by the redesigned customer UI are included. */
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/atkinson-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/atkinson-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lexend";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/lexend-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lexend";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./assets/fonts/lexend-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lexend";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./assets/fonts/lexend-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Lexend";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/lexend-700.woff2") format("woff2");
+}
+
+/* Keyboard-focus ring for the shared src/ui/* components (Button, TextField,
+   Modal). Mirrors the marketing page's existing .mkt-root :focus-visible
+   rule (App.jsx) so the whole product gets the same treatment, since
+   focus-visible styling previously existed only on that one page. Color
+   must match `action` in src/ui/tokens.js. */
+.sui-focusable:focus-visible {
+  outline: 2px solid #FF6A3D;
+  outline-offset: 2px;
+}

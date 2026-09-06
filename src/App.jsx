@@ -1,80 +1,21 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
 import ComplianceWorkspace, { ConflictQueue, RemediationVerifyQueue } from "./ComplianceWorkspace.jsx";
 import { HELP_MANUAL } from "../helpManual.js";
+import { C, DARK, NAV, textSafe } from "./ui/tokens.js";
+import Modal, { ConfirmDialog } from "./ui/Modal.jsx";
+import TextField from "./ui/TextField.jsx";
+import Button from "./ui/Button.jsx";
+import { FONT_BODY, FONT_HEADING } from "./ui/type.js";
+import InfoTip from "./ui/InfoTip.jsx";
 
-// ─────────────────────────────────────────────────────────────
-//  DESIGN TOKENS
-//  Light theme (2026-08 migration). bg/surface/card/border/text
-//  tokens were remapped in place — nothing else in the file reads
-//  them by reference, so this was safe to do directly.
-//
-//  accent/green/amber/red/purple below are NEVER edited in place —
-//  SOC (search "const SOC =") holds live references to these five
-//  keys for the analyst console, which must stay on its own dark
-//  palette. Add new light-safe *Text siblings instead of touching
-//  the originals; see accentText/greenText/amberText/redText/
-//  purpleText below for the WCAG-AA-safe text/icon variants.
-// ─────────────────────────────────────────────────────────────
-const C = {
-  bg:       "#F8FAFC",
-  surface:  "#F1F5F9",
-  card:     "#FFFFFF",
-  cardHov:  "#EDF1F5",
-  border:   "#E2E8F0",
-  borderHi: "#CBD5E1",
-  accent:   "#00C8FF",
-  accentDm: "#0090BB",
-  green:    "#00E5A0",
-  amber:    "#FFB800",
-  red:      "#FF4D6A",
-  purple:   "#A855F7",
-  text:     "#080D18",
-  textSec:  "#475569",
-  textMut:  "#94A3B8",
-  // Light-safe text/icon variants — use these wherever accent/green/amber/
-  // red/purple color TEXT or an icon glyph. Backgrounds, chip fills, and
-  // progress-bar fills keep using the raw tokens above unchanged.
-  accentText: "#0369A1",
-  greenText:  "#047857",
-  amberText:  "#B45309",
-  redText:    "#DC2626",
-  // Light-safe replacement for the orphan mid-tier-severity green (#7ED957,
-  // used raw in several places). Only apply at light-bound call sites —
-  // pColor() in the analyst console intentionally keeps the raw literal.
-  midGreenText: "#4D7C0F",
-  purpleText: "#9333EA",
-  // Secondary "Trust Blue" accent — icon fill / border / secondary-button
-  // background only (2.77:1, fails as small text — never use for text).
-  trustBlue:  "#0EA5E9",
-};
-
-// Maps a raw vivid accent/green/amber/red/purple hex to its light-safe text
-// variant; anything else (already-safe colors, textSec/textMut, literal
-// hexes not in this table) passes through unchanged, so this is safe to
-// apply even when the input might already be text-safe.
-const TEXT_SAFE = {
-  [C.accent]: C.accentText,
-  [C.green]:  C.greenText,
-  [C.amber]:  C.amberText,
-  [C.red]:    C.redText,
-  [C.purple]: C.purpleText,
-};
-function textSafe(hex) { return TEXT_SAFE[hex] || hex; }
-
-// Original pre-light-theme dark palette, copy-pasted (not C-referencing) so
-// it can't drift when C changes. For standalone "product preview" style
-// components (dashboard/report mockups) that want to look like real dark
-// app UI regardless of the page they're dropped into — currently the
-// marketing page's compliance-snapshot and policy-checklist previews.
-const DARK = {
-  bg: "#080D18", card: "#101C30", surface: "#0D1526", border: "#1A2D47",
-  text: "#E2EDFF", textSec: "#7B92B2", textMut: "#2E4A6A",
-};
-
-// The top-of-page nav bar — one navy shared by the client TopBar, the admin
-// console header, the analyst console header, and the marketing site's sticky
-// nav (MarketingPage's local `navy`), so every page reads as one product.
-const NAV = { bg: "#0A1428", border: "#1A2D47", text: "#E2EDFF", textDim: "#8AA0C0" };
+// Design tokens (C, DARK, NAV, textSafe) live in src/ui/tokens.js — moved
+// there so the new customer-UI components under src/ui/ can import them
+// without App.jsx importing back from src/ui/ (circular import). Values are
+// unchanged by the move. accent/green/amber/red/purple on C are NEVER
+// edited in place — SOC (search "const SOC =" below) holds live references
+// to those five keys for the analyst console, which must stay on its own
+// dark palette. Add new light-safe *Text siblings in tokens.js instead of
+// touching the originals.
 
 // ─────────────────────────────────────────────────────────────
 //  AI ROUTER — routes tasks to the right model
@@ -458,9 +399,22 @@ function LockedFeature({ icon, title, blurb, points, capability }) {
 }
 
 function Card({ children, style={}, onClick }) {
+  // Clickable cards (onClick provided) need the same keyboard/focus support
+  // a real button gets for free — otherwise a keyboard or screen-reader user
+  // simply can't activate them. Non-clickable Cards (the vast majority of
+  // call sites) are unaffected.
+  const interactive = !!onClick;
   return (
-    <div onClick={onClick} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
-      padding:"20px 22px",...style}}>
+    <div
+      onClick={onClick}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      className={interactive ? "sui-focusable" : undefined}
+      onKeyDown={interactive ? (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(e); }
+      } : undefined}
+      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
+      padding:"20px 22px",cursor:interactive?"pointer":undefined,...style}}>
       {children}
     </div>
   );
@@ -1264,9 +1218,9 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
       <div style={{width:"100%",maxWidth:520,textAlign:"center"}}>
         <div style={{fontSize:11,color:C.textMut,marginBottom:12}}>Step 4 of 4 — Building Your Program</div>
         <div style={{fontSize:52,marginBottom:20,animation:"spin 4s linear infinite"}}>⚙️</div>
-        <h2 style={{color:C.text,marginBottom:8,fontSize:22}}>Mastermind Is Building Your Security Program</h2>
+        <h2 style={{color:C.text,marginBottom:8,fontSize:22}}>Building Your Security Program</h2>
         <p style={{color:C.textSec,marginBottom:32,fontSize:14}}>
-          3 specialized engines generating 10 components of your customized cybersecurity program
+          Reviewing your answers and putting together your policies, priorities, and reporting — customized to your business.
         </p>
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
@@ -1314,12 +1268,52 @@ function OverviewSection({ assessment, results }) {
   const quickWins = results?.priorities?.quickWins || [];
   const exec = results?.execReport?.executiveReport;
   const breakdown = risk?.breakdown;
+
+  // Live, independently-loaded data that used to live only on the separate
+  // "My Console" screen (CompanyConsole) — merged in here so there's one
+  // landing view per program instead of a confusing choice between two
+  // dashboards for the same thing. Each one defaults to an honest "no data
+  // to report" rather than a fabricated number; a failure or "nothing yet"
+  // on one doesn't block the others.
+  const [history, setHistory] = useState(null);
+  const [training, setTraining] = useState(null);
+  const [notifications, setNotifications] = useState(null);
+  const [compliance, setCompliance] = useState(null);
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/client/posture-history`)
+      .then(r => r.ok ? r.json() : null).then(setHistory).catch(() => setHistory(null));
+    authFetch(`${API_BASE}/api/training-program/overview`)
+      .then(r => r.ok ? r.json() : null).then(setTraining).catch(() => setTraining(null));
+    authFetch(`${API_BASE}/api/notifications`)
+      .then(r => r.ok ? r.json() : null).then(setNotifications).catch(() => setNotifications(null));
+    authFetch(`${API_BASE}/api/compliance/overview`)
+      .then(r => r.ok ? r.json() : null).then(setCompliance).catch(() => setCompliance(null));
+  }, []);
+  // Real trend points only — no fallback series is generated: fewer than 2
+  // points means there's no trend to draw yet, and the panel says so.
+  const trendPoints = (history?.points || []).map(p => p.score).filter(v => typeof v === "number");
+  const scoreColor = (s) => s>=80?C.greenText:s>=60?C.midGreenText:s>=40?C.amberText:C.redText;
+
   return (
     <div>
+      {/* Inline styles always win over a plain stylesheet rule, so the
+          override below needs !important — the only way to make a
+          max-width query beat the inline gridTemplateColumns without
+          rewriting every style on this grid as a class. Narrowly scoped to
+          this one class, not a broader pattern. */}
+      <style>{`@media (max-width: 640px) { .sui-ov-grid { grid-template-columns: 1fr !important; } }`}</style>
       <SectionLabel text="Security Program Overview"/>
-      <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,marginBottom:16}}>
-        <Card style={{display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div className="sui-ov-grid" style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,marginBottom:16}}>
+        <Card style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
           <PostureGauge score={risk?.postureScore||0} level={risk?.postureLevel||"Unknown"}/>
+          <div style={{marginTop:6,display:"flex",alignItems:"center",color:C.textMut,fontSize:11}}>
+            What is this?
+            <InfoTip>
+              Your posture score is a 0-100 estimate of how well-protected your business is,
+              based on your assessment answers. Higher is better. It's not a pass/fail grade —
+              it's a starting point for deciding what to fix first.
+            </InfoTip>
+          </div>
         </Card>
         <Card>
           <SectionLabel text="Executive Summary"/>
@@ -1334,11 +1328,42 @@ function OverviewSection({ assessment, results }) {
         </Card>
       </div>
 
+      {/* Posture Trend — real history only; ported from the old separate
+          "My Console" screen so the trend lives next to the score it tracks. */}
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+          <SectionLabel text="Posture Trend"/>
+          {trendPoints.length >= 2 && (() => {
+            const delta = trendPoints[trendPoints.length-1] - trendPoints[0];
+            return (
+              <span style={{marginLeft:"auto",fontSize:11,fontWeight:600,
+                color: delta>0?C.greenText:delta<0?C.redText:C.textMut}}>
+                {delta>0?"▲ improving":delta<0?"▼ declining":"— steady"}
+              </span>
+            );
+          })()}
+        </div>
+        {history === null ? (
+          <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
+        ) : trendPoints.length < 2 ? (
+          <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>
+            Not enough history yet to chart a trend. This builds up as your program is rescored over time.
+          </div>
+        ) : (
+          <TrendChartLight data={trendPoints} color={scoreColor(trendPoints[trendPoints.length-1])}/>
+        )}
+      </Card>
+
       {/* Posture breakdown — labelled by the client's chosen lens */}
       {breakdown?.functions && (
         <Card style={{marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:14}}>
             <SectionLabel text={`${breakdown.frameworkLens || "NIST CSF"} Posture Breakdown`}/>
+            <InfoTip>
+              Your overall posture score, split into the handful of categories security
+              experts use to organize a program. A category marked "priority area" is one
+              of your two weakest — fixing those moves your score the most.
+            </InfoTip>
             <span style={{marginLeft:"auto",fontSize:10,color:C.textMut}}>
               Methodology: {safeText(breakdown.methodology)}
             </span>
@@ -1400,6 +1425,98 @@ function OverviewSection({ assessment, results }) {
         </Card>
       )}
 
+      {/* Compliance / training / analyst activity — the other three panels
+          ported from the old separate "My Console" screen. */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:14,marginBottom:16}}>
+        <Card>
+          <SectionLabel text="Compliance Progress"/>
+          {compliance === null ? (
+            <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+          ) : !compliance.hasAssessment || !(compliance.frameworks||[]).length ? (
+            <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+              {compliance.note || "No assessment on file. Compliance can't be determined without answers."}
+            </div>
+          ) : (() => {
+            // Lead with the weakest framework — same convention as the
+            // analyst's rollup, so client and analyst never see conflicting
+            // "which framework needs attention" answers.
+            const rows = compliance.frameworks.filter(f => !f.notControlMapped && f.assessed > 0);
+            if (!rows.length) return (
+              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+            );
+            const worst = [...rows].sort((a,b)=>(a.readinessPct??101)-(b.readinessPct??101))[0];
+            const cur = worst.readinessPct ?? 0;
+            return (
+              <div>
+                <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{worst.short || worst.name}</div>
+                <div style={{fontSize:28,fontWeight:800,color:C.purpleText,marginBottom:8}}>{cur}%</div>
+                <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
+                  <div style={{width:`${cur}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
+                </div>
+                <div style={{fontSize:11,color:C.textMut,marginTop:6}}>
+                  {rows.length > 1 ? `Weakest of ${rows.length} tracked frameworks` : "readiness"}
+                </div>
+              </div>
+            );
+          })()}
+        </Card>
+
+        <Card>
+          <SectionLabel text="Team Training"/>
+          {training === null ? (
+            <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
+          ) : !training.learnerCount ? (
+            <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+              No learners set up yet. Add your team under Training to start tracking completion.
+            </div>
+          ) : (
+            <>
+              <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                <span style={{fontSize:28,fontWeight:800,color:C.greenText}}>{training.completionRate}%</span>
+                <span style={{fontSize:11,color:C.textMut}}>staff completed</span>
+              </div>
+              <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden",marginBottom:10}}>
+                <div style={{width:`${training.completionRate}%`,height:"100%",background:`linear-gradient(90deg,${C.accent},${C.green})`}}/>
+              </div>
+              <div style={{fontSize:11,color:C.textSec,lineHeight:1.6}}>
+                {training.assignmentCount} assignment{training.assignmentCount===1?"":"s"} ·{" "}
+                {training.overdue > 0
+                  ? <span style={{color:C.amberText}}>{training.overdue} overdue</span>
+                  : "none overdue"}
+              </div>
+            </>
+          )}
+        </Card>
+
+        <Card>
+          <SectionLabel text="Analyst Activity"/>
+          {/* Real, read-only feed of what your analyst has actually sent —
+              review decisions, notes on your program. There is no live chat
+              channel yet, so this does not simulate one; it shows what's real. */}
+          {notifications === null ? (
+            <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
+          ) : !(notifications.notifications||[]).length ? (
+            <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,padding:"10px 0"}}>
+              No activity from your analyst yet. Updates on your program and any notes they leave
+              will appear here.
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:220,overflowY:"auto"}}>
+              {notifications.notifications.slice(0,8).map(n=>(
+                <div key={n.id} style={{padding:"9px 11px",borderRadius:9,fontSize:12,lineHeight:1.5,
+                  background:C.surface,border:`1px solid ${n.read?C.border:C.accent+"55"}`}}>
+                  <div style={{color:C.text,fontWeight:600,marginBottom:2}}>{safeText(n.title)}</div>
+                  <div style={{color:C.textSec}}>{safeText(n.body)}</div>
+                  <div style={{fontSize:10,color:C.textMut,marginTop:4}}>
+                    {new Date(n.createdAt).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
       {/* Top threats */}
       {risk?.topThreats?.length > 0 && (
         <Card style={{marginBottom:16}}>
@@ -1443,6 +1560,15 @@ function OverviewSection({ assessment, results }) {
           </div>
         </Card>
       )}
+
+      <div style={{marginTop:18,padding:"11px 16px",background:`${C.accent}0A`,
+        border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
+        <span style={{color:C.textSec,fontSize:11}}>
+          Every figure on this page reflects your real data — posture score, trend, compliance,
+          training, and analyst activity. Where something hasn't been set up or scored yet, it says
+          so instead of showing a placeholder number.
+        </span>
+      </div>
     </div>
   );
 }
@@ -1785,6 +1911,14 @@ function CveExposureCard() {
                 )}
               </div>
 
+              {totalFindings > 0 && (
+                <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 14px"}}>
+                  These are known security holes in software you're running — publicly documented,
+                  so attackers already know how to use them. CRITICAL and HIGH mean an attacker
+                  could break in with little effort; fixing those first does the most good.
+                </p>
+              )}
+
               {/* Monitored software */}
               <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
                 MONITORED SOFTWARE ({data.software.length})
@@ -1957,6 +2091,14 @@ function DarkWebExposureCard({ clientId } = {}) {
               <span style={{fontSize:11,color:C.textSec}}>distinct breach{exp.distinctBreaches===1?"":"es"}</span>
             </div>
           </div>
+
+          {(exp.breachedAccounts ?? 0) > 0 && (
+            <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 14px"}}>
+              Email addresses on this domain have turned up in past data breaches — meaning
+              passwords or other details tied to those accounts may already be circulating.
+              Anyone who reused that password elsewhere is at risk until it's changed.
+            </p>
+          )}
 
           {(exp.breaches || []).length > 0 && (
             <>
@@ -2221,6 +2363,15 @@ function RemediationSection() {
               </div>
             )}
           </Card>
+
+          <div style={{display:"flex",alignItems:"center",color:C.textMut,fontSize:11,marginBottom:8}}>
+            A "gap" is a control your business doesn't yet meet
+            <InfoTip>
+              Each gap comes straight from your assessment answers — something you told us
+              isn't in place yet. Closing a gap raises your posture score and, where it applies,
+              your compliance readiness.
+            </InfoTip>
+          </div>
 
           {/* Tabs */}
           <div style={{display:"flex",gap:8,marginBottom:14}}>
@@ -2542,6 +2693,11 @@ function EvidenceSection() {
   const [note, setNote] = useState("");
   const fileRef = useRef(null);
 
+  // Attach-proof and delete confirmations (in-app modals, not window.prompt/confirm)
+  const [attachTask, setAttachTask] = useState(null); // {id, title} or null
+  const [proofDraft, setProofDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null); // evidence item or null
+
   async function loadAll() {
     setLoading(true); setError(null);
     try {
@@ -2587,25 +2743,33 @@ function EvidenceSection() {
   }
 
   // Quick-attach a note against a specific completed task that lacks proof.
-  async function attachToTask(taskId, taskTitle) {
-    const proof = window.prompt(`Describe the evidence for "${taskTitle}"\n(e.g. "MFA screenshot filed in IT drive; confirmed with admin")`);
-    if (proof == null || !proof.trim()) return;
+  // Opens the in-app modal below; submitProof() does the actual save.
+  function openAttach(taskId, taskTitle) {
+    setProofDraft("");
+    setAttachTask({ id: taskId, title: taskTitle });
+  }
+
+  async function submitProof() {
+    const proof = proofDraft.trim();
+    if (!proof || !attachTask) return;
+    const { id: taskId, title: taskTitle } = attachTask;
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/evidence`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "task", refId: taskId, title: `Evidence: ${taskTitle}`, note: proof.trim() }),
+        body: JSON.stringify({ kind: "task", refId: taskId, title: `Evidence: ${taskTitle}`, note: proof }),
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not attach evidence.");
       flash("Evidence attached to task.");
+      setAttachTask(null);
       await loadAll();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
 
   async function remove(ev) {
-    if (!window.confirm(`Delete "${ev.title}"? This cannot be undone.`)) return;
+    setConfirmDelete(null);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/evidence/${ev.id}`, { method: "DELETE" });
@@ -2677,7 +2841,7 @@ function EvidenceSection() {
                   background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
                   <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{safeText(m.title)}</span>
                   {m.completedAt && <span style={{fontSize:11,color:C.textMut}}>{new Date(m.completedAt).toLocaleDateString()}</span>}
-                  <button onClick={()=>attachToTask(m.id, m.title)} disabled={busy}
+                  <button onClick={()=>openAttach(m.id, m.title)} disabled={busy}
                     style={miniBtn(C.accent,busy)}>Attach proof</button>
                 </div>
               ))}
@@ -2733,12 +2897,40 @@ function EvidenceSection() {
                 {ev.filename && (
                   <button onClick={()=>doDownload(ev)} style={miniBtn(C.accent,false)}>Download</button>
                 )}
-                <button onClick={()=>remove(ev)} disabled={busy} style={miniBtn(C.textMut,busy)}>Delete</button>
+                <button onClick={()=>setConfirmDelete(ev)} disabled={busy} style={miniBtn(C.textMut,busy)}>Delete</button>
               </div>
             ))}
           </div>
         </>
       )}
+
+      <Modal
+        open={!!attachTask}
+        onClose={()=>setAttachTask(null)}
+        title="Attach proof"
+        footer={<>
+          <Button variant="ghost" onClick={()=>setAttachTask(null)}>Cancel</Button>
+          <Button onClick={submitProof} disabled={busy || !proofDraft.trim()}>{busy ? "Saving…" : "Save"}</Button>
+        </>}
+      >
+        <p style={{margin:"0 0 12px",fontSize:13,color:C.textSec,lineHeight:1.5}}>
+          Describe the evidence for "{safeText(attachTask?.title)}" — e.g. "MFA screenshot filed in IT drive; confirmed with admin."
+        </p>
+        <TextField label="Evidence description" multiline rows={3} value={proofDraft}
+          onChange={e=>setProofDraft(e.target.value)}
+          placeholder="What proof do you have, and where is it kept?"/>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={()=>setConfirmDelete(null)}
+        onConfirm={()=>remove(confirmDelete)}
+        title="Delete this evidence?"
+        message={`This permanently deletes "${confirmDelete?.title || ""}". This can't be undone.`}
+        confirmLabel={busy ? "Deleting…" : "Delete"}
+        confirmDisabled={busy}
+        danger
+      />
     </div>
   );
 }
@@ -3310,6 +3502,9 @@ function VendorRiskSection() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState(null); // null | "new" | vendor object being edited
+  const [reassessTarget, setReassessTarget] = useState(null); // vendor being reassessed, or null
+  const [reassessNote, setReassessNote] = useState("");
+  const [removeTarget, setRemoveTarget] = useState(null); // vendor pending removal, or null
 
   async function load() {
     setLoading(true); setError(null);
@@ -3344,24 +3539,28 @@ function VendorRiskSection() {
     finally { setBusy(false); }
   }
 
-  async function reassess(v) {
-    const note = window.prompt(`Mark "${v.name}" as reassessed today?\n\nOptionally add a note about the review (e.g. "Reviewed current SOC 2 report — no new concerns"):`);
-    if (note === null) return;
+  // Opens the in-app "Reassess" modal below; submitReassess() does the save.
+  function openReassess(v) { setReassessNote(""); setReassessTarget(v); }
+
+  async function submitReassess() {
+    const v = reassessTarget;
+    if (!v) return;
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/vendors/${v.id}/reassess`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: note || undefined }),
+        body: JSON.stringify({ note: reassessNote.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not update that vendor.");
+      setReassessTarget(null);
       await load();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
 
   async function remove(v) {
-    if (!window.confirm(`Remove "${v.name}" from your vendor registry? This cannot be undone.`)) return;
+    setRemoveTarget(null);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/vendors/${v.id}`, { method: "DELETE" });
@@ -3476,9 +3675,9 @@ function VendorRiskSection() {
                             {v.nextReassessmentDue ? new Date(v.nextReassessmentDue).toLocaleDateString() : "—"}
                           </td>
                           <td style={{padding:"9px 10px",whiteSpace:"nowrap"}}>
-                            <button onClick={()=>reassess(v)} disabled={busy} style={{...miniBtn(C.green,busy),marginRight:6}}>Reassess</button>
+                            <button onClick={()=>openReassess(v)} disabled={busy} style={{...miniBtn(C.green,busy),marginRight:6}}>Reassess</button>
                             <button onClick={()=>setModal(v)} disabled={busy} style={{...miniBtn(C.accent,busy),marginRight:6}}>Edit</button>
-                            <button onClick={()=>remove(v)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                            <button onClick={()=>setRemoveTarget(v)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
                           </td>
                         </tr>
                       );
@@ -3502,6 +3701,34 @@ function VendorRiskSection() {
           onClose={()=>setModal(null)}
         />
       )}
+
+      <Modal
+        open={!!reassessTarget}
+        onClose={()=>setReassessTarget(null)}
+        title="Mark as reassessed"
+        footer={<>
+          <Button variant="ghost" onClick={()=>setReassessTarget(null)}>Cancel</Button>
+          <Button onClick={submitReassess} disabled={busy}>{busy ? "Saving…" : "Mark reassessed"}</Button>
+        </>}
+      >
+        <p style={{margin:"0 0 12px",fontSize:13,color:C.textSec,lineHeight:1.5}}>
+          This marks "{safeText(reassessTarget?.name)}" as reviewed today and resets its next-due date.
+        </p>
+        <TextField label="Note (optional)" multiline rows={3} value={reassessNote}
+          onChange={e=>setReassessNote(e.target.value)}
+          placeholder='e.g. "Reviewed current SOC 2 report — no new concerns"'/>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onClose={()=>setRemoveTarget(null)}
+        onConfirm={()=>remove(removeTarget)}
+        title="Remove this vendor?"
+        message={`This removes "${removeTarget?.name || ""}" from your vendor registry and its review history. This can't be undone.`}
+        confirmLabel={busy ? "Removing…" : "Remove"}
+        confirmDisabled={busy}
+        danger
+      />
     </div>
   );
 }
@@ -5056,6 +5283,7 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
   const [currentProgramId, setCurrentProgramId] = useState(null);
   const [openingId, setOpeningId] = useState(null);
   const [error, setError] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null); // saved-program id pending delete, or null
 
   async function loadSaved() {
     setLoadingSaved(true);
@@ -5098,7 +5326,7 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
   }
 
   async function deleteProgram(id) {
-    if (!window.confirm("Delete this training program?")) return;
+    setDeleteTarget(null);
     try {
       const res = await authFetch(`${API_BASE}/api/training/${id}`, { method: "DELETE" });
       if (res.ok) { if (curriculum) setCurriculum(null); loadSaved(); }
@@ -5195,7 +5423,7 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
                       cursor:openingId===s.id?"wait":"pointer"}}>
                     {openingId===s.id?"Opening…":"View"}
                   </button>
-                  <button onClick={()=>deleteProgram(s.id)}
+                  <button onClick={()=>setDeleteTarget(s.id)}
                     style={{padding:"7px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
                       borderRadius:7,color:C.redText,fontSize:12,cursor:"pointer"}}>Delete</button>
                 </div>
@@ -5204,6 +5432,16 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={()=>setDeleteTarget(null)}
+        onConfirm={()=>deleteProgram(deleteTarget)}
+        title="Delete this training program?"
+        message="This deletes the saved program and its modules. This can't be undone."
+        confirmLabel="Delete"
+        danger
+      />
 
       {/* ── Auto-generated preview (from the program pipeline) ── */}
       {prog && (
@@ -6098,6 +6336,7 @@ function ReportsSection({ hasFullReports = true }) {
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
   const [since, setSince] = useState("");   // optional "changed since" date for updates
+  const [deleteTarget, setDeleteTarget] = useState(null); // report pending delete, or null
 
   async function load() {
     setLoading(true); setError(null);
@@ -6145,7 +6384,7 @@ function ReportsSection({ hasFullReports = true }) {
   }
 
   async function remove(r) {
-    if (!window.confirm(`Delete "${r.filename}"? This removes the document; your underlying data is untouched.`)) return;
+    setDeleteTarget(null);
     setBusy(r.id); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/reports/${r.id}`, { method: "DELETE" });
@@ -6247,7 +6486,7 @@ function ReportsSection({ hasFullReports = true }) {
                       {busy===r.id ? "…" : "Download"}
                     </button>
                     {mine && (
-                      <button onClick={()=>remove(r)} disabled={busy===r.id}
+                      <button onClick={()=>setDeleteTarget(r)} disabled={busy===r.id}
                         style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
                           borderRadius:7,color:C.textSec,fontSize:12.5,cursor:busy===r.id?"wait":"pointer"}}>
                         Delete
@@ -6266,6 +6505,17 @@ function ReportsSection({ hasFullReports = true }) {
         carries a review note — these documents summarize your ShieldAI data and
         are not a substitute for a licensed auditor, attorney, or signed attestation.
       </p>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={()=>setDeleteTarget(null)}
+        onConfirm={()=>remove(deleteTarget)}
+        title="Delete this report?"
+        message={`This removes "${deleteTarget?.filename || ""}". Your underlying data is untouched — you can generate a fresh report anytime.`}
+        confirmLabel={busy===deleteTarget?.id ? "Deleting…" : "Delete"}
+        confirmDisabled={busy===deleteTarget?.id}
+        danger
+      />
     </div>
   );
 }
@@ -6990,6 +7240,7 @@ function PolicyLibrarySection({ assessment }) {
 // ─────────────────────────────────────────────────────────────
 function Dashboard({ assessment, results, onReset }) {
   const [section, setSection] = useState("overview");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { can } = useCapabilities();
   // Free tier's `results` only ever has riskOverview (see generateFreePreview),
   // so anything gated on buildPrograms would otherwise render silently empty
@@ -7036,6 +7287,21 @@ function Dashboard({ assessment, results, onReset }) {
     { id:"reports",     icon:"📑", label:"Reports",           badge:null },
     { id:"library",     icon:"📚", label:"Policy Library",    badge:null },
     { id:"billing",     icon:"💳", label:"Plan & Billing",    badge:null },
+  ];
+
+  // Groups the flat tab list above into labeled clusters for the sidebar —
+  // a 17-item flat list with no structure is a lot to scan for someone who
+  // isn't already fluent in the product. Purely a rendering grouping: it
+  // doesn't change which tabs exist, their gating, or their ids/badges,
+  // which all still come from `nav` above. Overview has no header — it's
+  // pinned at the top as the always-first landing tab.
+  const NAV_GROUPS = [
+    { label: null, ids: ["overview"] },
+    { label: "Your Risk & Roadmap", ids: ["priorities", "remediation", "threats", "vendors", "tools"] },
+    { label: "Policies & Compliance", ids: ["policies", "workflows", "compliance", "library", "evidence", "calendar"] },
+    { label: "People & Training", ids: ["training", "trainingmgr"] },
+    { label: "Reports", ids: ["report", "reports"] },
+    { label: "Account", ids: ["vciso", "billing"] },
   ];
 
   // Locked teasers, shown instead of the real (or silently empty) component
@@ -7121,40 +7387,72 @@ function Dashboard({ assessment, results, onReset }) {
     <div style={{display:"flex",height:"100%",background:C.bg,
       fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
 
-      {/* Sidebar */}
-      <div style={{width:220,flexShrink:0,background:C.surface,borderRight:`1px solid ${C.border}`,
-        display:"flex",flexDirection:"column",overflowY:"auto"}}>
-        <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-            <ShieldLockup logoSize={20} textSize={15} ink={C.text}/>
-          </div>
-          <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5}}>VIRTUAL CISO PLATFORM</div>
-        </div>
+      {/* Below ~768px the sidebar becomes a slide-in drawer (hidden by
+          default) instead of squeezing into the same fixed 220px column
+          next to the content — the product previously had zero responsive
+          handling outside the marketing page, so this was unusable on a
+          phone. Scoped class names (sui-dash-*) so this doesn't collide
+          with anything else in the file. */}
+      <style>{`
+        .sui-dash-hamburger { display: none; }
+        .sui-dash-scrim { display: none; }
+        @media (max-width: 768px) {
+          .sui-dash-hamburger { display: inline-flex; }
+          .sui-dash-sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
+            transform: translateX(-100%);
+            transition: transform 0.2s ease;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.2);
+          }
+          .sui-dash-sidebar.sui-open { transform: translateX(0); }
+          .sui-dash-scrim.sui-open {
+            display: block; position: fixed; inset: 0; background: rgba(8,13,24,0.5); z-index: 39;
+          }
+        }
+      `}</style>
 
-        <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:4}}
-            title="Roadmap: Mastermind is built on these 3 models today. The long-term goal is an independent ShieldAI agent — not yet built.">
-            <span style={{fontSize:11}}>🧠</span>
-            <span style={{fontSize:10,color:C.purpleText,letterSpacing:1.5,fontWeight:700}}>MASTERMIND</span>
-          </div>
-          <div style={{fontSize:9.5,color:C.textMut,lineHeight:1.4,marginBottom:8}}>
-            3 specialized engines behind every generated section
-          </div>
-          {Object.values(MASTERMIND_ENGINES).map(e=>(
-            <div key={e.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:C.green}}/>
-              <span style={{fontSize:11,color:e.color}}>{e.label}</span>
-              <span style={{fontSize:9.5,color:C.textMut}}>· {e.specialty.split(",")[0]}</span>
+      <div className={`sui-dash-scrim${mobileNavOpen ? " sui-open" : ""}`} onClick={()=>setMobileNavOpen(false)}/>
+
+      {/* Sidebar */}
+      <nav aria-label="Dashboard sections" className={`sui-dash-sidebar${mobileNavOpen ? " sui-open" : ""}`}
+        style={{width:220,flexShrink:0,background:C.surface,borderRight:`1px solid ${C.border}`,
+        display:"flex",flexDirection:"column",overflowY:"auto"}}>
+        <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <ShieldLockup logoSize={20} textSize={15} ink={C.text}/>
             </div>
-          ))}
+            <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5}}>VIRTUAL CISO PLATFORM</div>
+          </div>
+          <button onClick={()=>setMobileNavOpen(false)} aria-label="Close menu"
+            className="sui-dash-hamburger sui-focusable"
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.textSec,fontSize:14,cursor:"pointer",width:28,height:28}}>
+            ✕
+          </button>
         </div>
 
         <div style={{padding:"10px 6px",flex:1}}>
-          {nav.map(n=>(
-            <NavTab key={n.id} label={n.label} icon={n.icon}
-              active={section===n.id} badge={n.badge}
-              onClick={()=>setSection(n.id)}/>
-          ))}
+          {NAV_GROUPS.map((group, gi) => {
+            const items = group.ids.map(id => nav.find(n => n.id === id)).filter(Boolean);
+            if (items.length === 0) return null;
+            return (
+              <div key={gi} style={{marginBottom: group.label ? 16 : 4}}>
+                {group.label && (
+                  <div style={{padding:"6px 14px 4px",fontSize:10,fontWeight:700,letterSpacing:1,
+                    color:C.textMut,textTransform:"uppercase"}}>
+                    {group.label}
+                  </div>
+                )}
+                {items.map(n=>(
+                  <NavTab key={n.id} label={n.label} icon={n.icon}
+                    active={section===n.id} badge={n.badge}
+                    onClick={()=>{setSection(n.id); setMobileNavOpen(false);}}/>
+                ))}
+              </div>
+            );
+          })}
         </div>
 
         <div style={{padding:"12px 14px",borderTop:`1px solid ${C.border}`}}>
@@ -7165,15 +7463,21 @@ function Dashboard({ assessment, results, onReset }) {
             ↩ New Assessment
           </button>
         </div>
-      </div>
+      </nav>
 
       {/* Main content */}
-      <div style={{flex:1,overflowY:"auto",padding:"24px",display:"flex",flexDirection:"column"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",marginBottom:16}}>
-          <NotificationBell onNavigate={setSection}/>
+      <main style={{flex:1,overflowY:"auto",padding:"24px",display:"flex",flexDirection:"column",minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",marginBottom:16}}>
+          <button onClick={()=>setMobileNavOpen(true)} aria-label="Open menu"
+            className="sui-dash-hamburger sui-focusable"
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.text,fontSize:16,cursor:"pointer",width:34,height:34,marginRight:12}}>
+            ☰
+          </button>
+          <div style={{marginLeft:"auto"}}><NotificationBell onNavigate={setSection}/></div>
         </div>
         {sectionMap[section]}
-      </div>
+      </main>
     </div>
   );
 }
@@ -7735,7 +8039,7 @@ function LearnerPage({ token }) {
   }
 
   return (
-    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:FONT_BODY}}>
       <div style={{borderBottom:`1px solid ${line}`,padding:"16px 24px"}}>
         <div style={{maxWidth:760,margin:"0 auto",display:"flex",alignItems:"center",gap:12}}>
           <ShieldLockup logoSize={26} textSize={18} ink={ink}/>
@@ -7749,7 +8053,7 @@ function LearnerPage({ token }) {
             borderRadius:14,color:C.redText,fontSize:14}}>{error}</div>
         ) : (
           <>
-            <h1 style={{fontSize:26,fontWeight:800,margin:"0 0 6px"}}>
+            <h1 style={{fontFamily:FONT_HEADING,fontSize:26,fontWeight:800,margin:"0 0 6px"}}>
               Welcome{data?.learner?.name ? `, ${data.learner.name.split(" ")[0]}` : ""}.
             </h1>
             <p style={{fontSize:14.5,color:dim,lineHeight:1.6,margin:"0 0 28px"}}>
@@ -7767,8 +8071,10 @@ function LearnerPage({ token }) {
                   return (
                     <div key={p.id} style={{marginBottom:10,background:C.card,
                       border:`1px solid ${line}`,borderRadius:14,overflow:"hidden"}}>
-                      <div onClick={()=>openPolicyDetail(p.id)}
-                        style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",flexWrap:"wrap"}}>
+                      <button onClick={()=>openPolicyDetail(p.id)} aria-expanded={isOpen}
+                        className="sui-focusable"
+                        style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",
+                          flexWrap:"wrap",width:"100%",background:"none",border:"none",textAlign:"left",font:"inherit"}}>
                         <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
                           alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,
                           background:p.acknowledgedAt?C.green:`${cyan}22`,color:p.acknowledgedAt?"#04121F":C.accentText}}>
@@ -7783,7 +8089,7 @@ function LearnerPage({ token }) {
                           </div>
                         </div>
                         <span style={{color:dim,fontSize:12}}>{isOpen?"▲":"▼"}</span>
-                      </div>
+                      </button>
                       {isOpen && (
                         <div style={{padding:"0 18px 18px"}}>
                           {policyLoading ? <Spinner/> : policyDetail && (
@@ -7847,10 +8153,12 @@ function LearnerPage({ token }) {
                 </div>
                 <div style={{padding:"8px 12px"}}>
                   {a.modules.map(m => (
-                    <div key={m.topicId}
+                    <button key={m.topicId}
                       onClick={()=>setOpenMod({assignmentId:a.assignmentId,topicId:m.topicId})}
+                      className="sui-focusable"
                       style={{display:"flex",alignItems:"center",gap:12,padding:"12px 12px",margin:"6px 0",
-                        cursor:"pointer",borderRadius:10,transition:"background 0.15s"}}
+                        cursor:"pointer",borderRadius:10,transition:"background 0.15s",
+                        width:"100%",background:"none",border:"none",textAlign:"left",font:"inherit"}}
                       onMouseEnter={e=>e.currentTarget.style.background=deep}
                       onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <span style={{width:24,height:24,borderRadius:"50%",flexShrink:0,display:"flex",
@@ -7870,7 +8178,7 @@ function LearnerPage({ token }) {
                         color:m.completed?dim:C.accentText,border:m.completed?`1px solid ${line}`:"none"}}>
                         {m.completed ? "Review" : "Start →"}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -7921,7 +8229,7 @@ function PhishRevealPage({ token }) {
   }, [token]);
 
   return (
-    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:"Inter,system-ui,sans-serif",
+    <div style={{minHeight:"100vh",background:deep,color:ink,fontFamily:FONT_BODY,
       display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
       <div style={{maxWidth:560,width:"100%"}}>
         {loading ? (
@@ -7935,7 +8243,7 @@ function PhishRevealPage({ token }) {
               border:`1px solid ${C.amber}44`,color:C.amberText,fontSize:11.5,fontWeight:700,letterSpacing:0.5,marginBottom:16}}>
               SIMULATED PHISHING TEST
             </div>
-            <h1 style={{fontSize:22,fontWeight:800,margin:"0 0 10px",lineHeight:1.3}}>
+            <h1 style={{fontFamily:FONT_HEADING,fontSize:22,fontWeight:800,margin:"0 0 10px",lineHeight:1.3}}>
               {data.learnerName ? `Hi ${data.learnerName.split(" ")[0]}, this` : "This"} was a security awareness test.
             </h1>
             <p style={{fontSize:14,color:dim,lineHeight:1.6,margin:"0 0 24px"}}>
@@ -9682,6 +9990,17 @@ const NIST_COLORS = {
   Respond: "#C2410C", Recover: C.greenText,
 };
 
+// One-line, jargon-free gloss for each NIST function, shown at the top of its
+// checklist step so "PROTECT" or "RESPOND" isn't just a category label the
+// client has to already know the meaning of.
+const NIST_FUNCTION_BLURBS = {
+  Identify: "Knowing what you have, and where you're exposed.",
+  Protect: "The safeguards that stop an attack before it succeeds.",
+  Detect: "Spotting trouble quickly when something does get through.",
+  Respond: "What happens the moment something goes wrong.",
+  Recover: "Getting back up and running afterward.",
+};
+
 // Compliance frameworks the user can select in the assessment. These flow
 // into the AI-generated compliance mapping. CIS Controls additionally offers
 // an Implementation Group choice (IG1/IG2/IG3).
@@ -9885,14 +10204,14 @@ function FrameworkFoundationScreen({ onComplete, onBack, initial = "nist" }) {
   );
 }
 
-function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
+function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialProgress = null, onProgress }) {
   // Live catalogue, not the stale 7-item constant.
   const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
   // All 35 questions, not the frozen 13. The 22 evidence questions are what
   // make most of the framework catalogue assessable — without them the backend
   // scores what it can and reports "not yet assessed" for the rest.
   const SECURITY_CHECKLIST = useSecurityChecklist();
-  const [answers, setAnswers] = useState({});
+  const [answers, setAnswers] = useState(initialProgress?.answers || {});
   // Foundation frameworks come from the lens the client chose on the previous
   // screen: NIST → nist-csf, CIS → cis, both → both. These are the posture
   // foundation and can't be toggled off here (that choice was already made);
@@ -9901,9 +10220,17 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
     frameworkLens === "cis" ? ["cis"]
     : frameworkLens === "both" ? ["nist-csf", "cis"]
     : ["nist-csf"];
-  const [frameworks, setFrameworks] = useState(foundationIds);
+  const [frameworks, setFrameworks] = useState(initialProgress?.frameworks || foundationIds);
   const isFoundation = (id) => foundationIds.includes(id);
-  const [cisIG, setCisIG] = useState("IG1");
+  const [cisIG, setCisIG] = useState(initialProgress?.cisIG || "IG1");
+  // Which section headers are expanded on the optional (evidence) step —
+  // collapsed by default so 22 extra questions don't read as a second wall
+  // the moment the required steps are done.
+  const [openSections, setOpenSections] = useState(() => new Set());
+  // Which step of the wizard is showing: 0 = framework/compliance picker,
+  // 1..N = one required NIST function per step, last = all optional questions.
+  const [step, setStep] = useState(initialProgress?.step || 0);
+
   // The gate is the 13 SCORING questions, not all 35.
   //
   // The posture score needs all 13 — it's normalised across them, and a missing
@@ -9918,11 +10245,47 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
   // framework catalogue assessable, and the UI says so.
   const required = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore !== false);
   const optional = SECURITY_CHECKLIST.filter(q => q.affectsPostureScore === false);
-  const total = SECURITY_CHECKLIST.length;
-  const answered = Object.keys(answers).length;
   const requiredAnswered = required.filter(q => answers[q.id] !== undefined).length;
   const optionalAnswered = optional.filter(q => answers[q.id] !== undefined).length;
-  const allAnswered = requiredAnswered === required.length;
+
+  // Required questions grouped by NIST function, optional questions grouped by
+  // their own section — built as two separate reduces (not one pass keyed by
+  // whichever field applies) so the required groups always come first
+  // regardless of how the backend interleaves the two sets in its array; the
+  // step order below depends on that.
+  const groupedRequired = required.reduce((acc, q) => {
+    (acc[q.nistFunction] = acc[q.nistFunction] || []).push(q);
+    return acc;
+  }, {});
+  const groupedOptional = optional.reduce((acc, q) => {
+    const key = q.section || "Additional detail";
+    (acc[key] = acc[key] || []).push(q);
+    return acc;
+  }, {});
+  const requiredGroups = Object.entries(groupedRequired);
+  const optionalGroups = Object.entries(groupedOptional);
+
+  const steps = [
+    { kind: "frameworks" },
+    ...requiredGroups.map(([fn, questions]) => ({ kind: "required", fn, questions })),
+    { kind: "optional" },
+  ];
+  const totalSteps = steps.length;
+  const stepInfo = steps[Math.min(step, totalSteps - 1)];
+  const stepQuestions = stepInfo.kind === "required" ? stepInfo.questions : [];
+  // Framework and optional steps never block continuing; a required step
+  // blocks until its own (small) batch of questions is answered — validating
+  // a handful at a time instead of surfacing "13 remaining" against a wall
+  // of every question in the assessment at once.
+  const stepComplete = stepInfo.kind !== "required" || stepQuestions.every(q => answers[q.id] !== undefined);
+
+  // Persists on every step change and every answer — not just step
+  // transitions — so a refresh loses at most an unsaved keystroke, not the
+  // whole assessment. Cheap: local sessionStorage only, no network call.
+  useEffect(() => {
+    onProgress?.({ step, answers, frameworks, cisIG });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, answers, frameworks, cisIG]);
 
   function selectAnswer(qId, option) {
     setAnswers(prev => ({ ...prev, [qId]: option }));
@@ -9938,6 +10301,14 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
     );
   }
 
+  function toggleSection(key) {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
   // Build the structured selection passed to onComplete alongside answers.
   function buildComplianceSelection() {
     return frameworks.map(id => {
@@ -9948,212 +10319,239 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist" }) {
     });
   }
 
-  // Scoring questions group under their NIST function; evidence questions under
-  // their own section (Access & Identity, Data Protection, Vendors, Governance,
-  // Privacy). Grouping evidence questions by nistFunction would file them all
-  // under "undefined" — they deliberately have no NIST weight.
-  const grouped = SECURITY_CHECKLIST.reduce((acc, q) => {
-    const key = q.affectsPostureScore === false
-      ? (q.section || "Additional detail")
-      : q.nistFunction;
-    (acc[key] = acc[key] || []).push(q);
-    return acc;
-  }, {});
+  function goNext() { setStep(s => Math.min(s + 1, totalSteps - 1)); }
+  function goBack() { if (step === 0) { onBack(); return; } setStep(s => s - 1); }
+
+  // One question card, shared by required steps and the optional accordion —
+  // same radio-style interaction either way, just a different accent color.
+  function renderQuestion(q, color) {
+    return (
+      <div key={q.id} style={{marginBottom:16,padding:"16px 18px",background:C.card,
+        border:`1px solid ${answers[q.id] ? color+"44" : C.border}`,
+        borderRadius:12,transition:"border-color 0.2s"}}>
+        <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:12}}>
+          {safeText(q.question)}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {q.options.map(opt => {
+            const label = optionLabel(opt);
+            const selected = answers[q.id] === label;
+            return (
+              <button key={label} onClick={() => selectAnswer(q.id, label)}
+                style={{textAlign:"left",padding:"10px 14px",borderRadius:8,cursor:"pointer",
+                  background: selected ? `${color}18` : C.surface,
+                  border:`1px solid ${selected ? color : C.border}`,
+                  color: selected ? C.text : C.textSec,
+                  fontSize:13,fontWeight: selected ? 600 : 400,
+                  fontFamily:FONT_BODY,
+                  display:"flex",alignItems:"center",gap:10,transition:"all 0.15s"}}>
+                <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
+                  border:`2px solid ${selected ? color : C.textMut}`,
+                  background: selected ? color : "transparent",
+                  display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {selected && <span style={{width:6,height:6,borderRadius:"50%",background:C.bg}}/>}
+                </span>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{flex:1,overflowY:"auto",background:C.bg,
-      fontFamily:"Inter,system-ui,sans-serif",padding:"24px"}}>
-      <div style={{maxWidth:760,margin:"0 auto"}}>
-        <div style={{marginBottom:8}}>
-          <button onClick={onBack}
-            style={{padding:"6px 14px",background:"none",border:`1px solid ${C.border}`,
-              borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
-            ← Back to Interview
-          </button>
+      fontFamily:FONT_BODY,padding:"24px"}}>
+      <div style={{maxWidth:720,margin:"0 auto"}}>
+
+        {/* Step progress — one segment per step, current step highlighted.
+            Replaces a single "13 remaining" counter with a wizard the client
+            can see the end of from the first screen. */}
+        <div style={{marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+            <span style={{color:C.textMut,fontSize:11,fontWeight:700,letterSpacing:1.2,textTransform:"uppercase"}}>
+              Step {step+1} of {totalSteps}
+            </span>
+            <span style={{color:C.textSec,fontSize:12}}>
+              {requiredAnswered} of {required.length} required answered
+            </span>
+          </div>
+          <div style={{display:"flex",gap:4}}>
+            {steps.map((_,i) => (
+              <div key={i} style={{flex:1,height:5,borderRadius:3,
+                background: i <= step ? C.accent : C.border, transition:"background 0.2s"}}/>
+            ))}
+          </div>
         </div>
 
-        <h2 style={{color:C.text,fontSize:22,margin:"8px 0 6px"}}>Security Checklist</h2>
-        <p style={{color:C.textSec,fontSize:14,lineHeight:1.6,margin:"0 0 16px"}}>
-          A few precise questions to accurately score your security posture. These map
-          directly to the NIST Cybersecurity Framework. Answer all {total} to continue.
-        </p>
+        {stepInfo.kind === "frameworks" && (
+          <>
+            <h2 style={{color:C.text,fontFamily:FONT_HEADING,fontSize:22,margin:"4px 0 6px"}}>A couple quick setup choices</h2>
+            <p style={{color:C.textSec,fontSize:14,lineHeight:1.6,margin:"0 0 20px"}}>
+              Then a handful of short questions, a few at a time — about 5 minutes total.
+            </p>
 
-        {/* ── Compliance framework selector ─────────────────────── */}
-        <div style={{marginBottom:24,padding:"18px 18px 20px",background:C.card,
-          border:`1px solid ${C.border}`,borderRadius:12}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-            <span style={{color:C.accentText,fontSize:12,fontWeight:700,letterSpacing:1.5,
-              textTransform:"uppercase"}}>Compliance Frameworks</span>
-          </div>
-          <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 14px"}}>
-            Your posture foundation is locked in from your framework choice. Add any
-            compliance frameworks your business needs to map against — we'll generate a
-            tailored gap analysis for each.
-          </p>
-
-          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-            {COMPLIANCE_FRAMEWORKS.map(fw => {
-              const on = frameworks.includes(fw.id);
-              const locked = isFoundation(fw.id);
-              return (
-                <button key={fw.id} onClick={() => toggleFramework(fw.id)}
-                  title={locked ? "Your posture foundation — chosen on the previous screen" : fw.desc}
-                  disabled={locked}
-                  style={{textAlign:"left",padding:"9px 13px",borderRadius:9,
-                    cursor: locked ? "default" : "pointer",
-                    background: on ? `${C.accent}18` : C.surface,
-                    border:`1px solid ${on ? C.accent : C.border}`,
-                    color: on ? C.text : C.textSec,
-                    fontFamily:"Inter,system-ui,sans-serif",
-                    display:"flex",alignItems:"center",gap:9,transition:"all 0.15s"}}>
-                  <span style={{width:15,height:15,borderRadius:4,flexShrink:0,
-                    border:`2px solid ${on ? C.accent : C.textMut}`,
-                    background: on ? C.accent : "transparent",
-                    display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {on && <span style={{color:"#04121F",fontSize:10,fontWeight:900,lineHeight:1}}>✓</span>}
-                  </span>
-                  <span>
-                    <span style={{fontSize:13,fontWeight:600,display:"block"}}>{safeText(fw.name)}</span>
-                    {/* What the client is actually choosing. "AI-assisted" means
-                        a contextual gap analysis, not a control-by-control
-                        walkthrough — they should know that before they pick it,
-                        not discover it in the report. */}
-                    {locked ? (
-                      <span style={{fontSize:10,color:C.accentText,fontWeight:600}}>your foundation</span>
-                    ) : fw.depth === "ai-assisted" ? (
-                      <span style={{fontSize:10,color:C.amberText}}>AI gap analysis</span>
-                    ) : typeof fw.requirementCount === "number" ? (
-                      <span style={{fontSize:10,color:C.textMut}}>{fw.requirementCount} controls</span>
-                    ) : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* CIS Implementation Group sub-selector, only when CIS is selected */}
-          {frameworks.includes("cis") && (
-            <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-              <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:4}}>
-                CIS Implementation Group
+            {/* ── Compliance framework selector ─────────────────────── */}
+            <div style={{marginBottom:8,padding:"18px 18px 20px",background:C.card,
+              border:`1px solid ${C.border}`,borderRadius:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                <span style={{color:C.accentText,fontSize:12,fontWeight:700,letterSpacing:1.5,
+                  textTransform:"uppercase"}}>Compliance Frameworks</span>
               </div>
-              <p style={{color:C.textSec,fontSize:12,lineHeight:1.5,margin:"0 0 10px"}}>
-                Implementation Groups are cumulative — IG2 includes IG1, IG3 includes all.
-                Most small businesses start at IG1.
+              <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 14px"}}>
+                Your posture foundation is locked in from your framework choice. Add any
+                compliance frameworks your business needs to map against — we'll generate a
+                tailored gap analysis for each.
               </p>
-              <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {CIS_IG_OPTIONS.map(ig => {
-                  const sel = cisIG === ig.id;
+
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {COMPLIANCE_FRAMEWORKS.map(fw => {
+                  const on = frameworks.includes(fw.id);
+                  const locked = isFoundation(fw.id);
                   return (
-                    <button key={ig.id} onClick={() => setCisIG(ig.id)}
-                      style={{textAlign:"left",padding:"10px 14px",borderRadius:8,cursor:"pointer",
-                        background: sel ? `${C.accent}18` : C.surface,
-                        border:`1px solid ${sel ? C.accent : C.border}`,
-                        color: sel ? C.text : C.textSec,
-                        fontFamily:"Inter,system-ui,sans-serif",
-                        display:"flex",alignItems:"center",gap:10,transition:"all 0.15s"}}>
-                      <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
-                        border:`2px solid ${sel ? C.accent : C.textMut}`,
-                        background: sel ? C.accent : "transparent",
+                    <button key={fw.id} onClick={() => toggleFramework(fw.id)}
+                      title={locked ? "Your posture foundation — chosen on the previous screen" : fw.desc}
+                      disabled={locked}
+                      style={{textAlign:"left",padding:"9px 13px",borderRadius:9,
+                        cursor: locked ? "default" : "pointer",
+                        background: on ? `${C.accent}18` : C.surface,
+                        border:`1px solid ${on ? C.accent : C.border}`,
+                        color: on ? C.text : C.textSec,
+                        fontFamily:FONT_BODY,
+                        display:"flex",alignItems:"center",gap:9,transition:"all 0.15s"}}>
+                      <span style={{width:15,height:15,borderRadius:4,flexShrink:0,
+                        border:`2px solid ${on ? C.accent : C.textMut}`,
+                        background: on ? C.accent : "transparent",
                         display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        {sel && <span style={{width:6,height:6,borderRadius:"50%",background:C.bg}}/>}
+                        {on && <span style={{color:"#04121F",fontSize:10,fontWeight:900,lineHeight:1}}>✓</span>}
                       </span>
                       <span>
-                        <span style={{fontSize:13,fontWeight:700}}>{ig.label}</span>
-                        <span style={{fontSize:12,color:C.textSec,marginLeft:8}}>{ig.sub}</span>
+                        <span style={{fontSize:13,fontWeight:600,display:"block"}}>{safeText(fw.name)}</span>
+                        {/* What the client is actually choosing. "AI-assisted" means
+                            a contextual gap analysis, not a control-by-control
+                            walkthrough — they should know that before they pick it,
+                            not discover it in the report. */}
+                        {locked ? (
+                          <span style={{fontSize:10,color:C.accentText,fontWeight:600}}>your foundation</span>
+                        ) : fw.depth === "ai-assisted" ? (
+                          <span style={{fontSize:10,color:C.amberText}}>AI gap analysis</span>
+                        ) : typeof fw.requirementCount === "number" ? (
+                          <span style={{fontSize:10,color:C.textMut}}>{fw.requirementCount} controls</span>
+                        ) : null}
                       </span>
                     </button>
                   );
                 })}
               </div>
-            </div>
-          )}
-        </div>
 
-        <div style={{position:"sticky",top:0,zIndex:5,background:C.bg,
-          padding:"10px 0 14px",marginBottom:6}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-            <span style={{color:C.textSec,fontSize:12}}>
-              {requiredAnswered} of {required.length} required
-              {optionalAnswered > 0 && <span style={{color:C.textMut}}> · {optionalAnswered} of {optional.length} optional</span>}
-            </span>
-            <span style={{color:C.accentText,fontSize:12,fontWeight:700}}>
-              {Math.round((requiredAnswered/required.length)*100)}%
-            </span>
-          </div>
-          <ProgressBar value={(requiredAnswered/required.length)*100} color={C.accent}/>
-        </div>
-
-        {Object.entries(grouped).map(([fn, questions]) => {
-          // Evidence sections have no NIST colour because they carry no NIST
-          // weight — that's the point. They're marked optional and told why:
-          // a client skipping them isn't failing, they're leaving controls
-          // unassessed, and they should know which trade they're making.
-          const isEvidence = questions[0]?.affectsPostureScore === false;
-          const color = isEvidence ? C.textSec : NIST_COLORS[fn];
-          return (
-          <div key={fn} style={{marginBottom:24}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-              <div style={{width:10,height:10,borderRadius:"50%",background:color}}/>
-              <span style={{color,fontSize:12,fontWeight:700,
-                letterSpacing:1.5,textTransform:"uppercase"}}>{fn}</span>
-              {isEvidence && (
-                <span style={{fontSize:10,color:C.textMut,textTransform:"none",letterSpacing:0}}>
-                  optional — doesn't change your posture score, but makes more compliance controls assessable
-                </span>
+              {/* CIS Implementation Group sub-selector, only when CIS is selected */}
+              {frameworks.includes("cis") && (
+                <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:4}}>
+                    CIS Implementation Group
+                  </div>
+                  <p style={{color:C.textSec,fontSize:12,lineHeight:1.5,margin:"0 0 10px"}}>
+                    Implementation Groups are cumulative — IG2 includes IG1, IG3 includes all.
+                    Most small businesses start at IG1.
+                  </p>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {CIS_IG_OPTIONS.map(ig => {
+                      const sel = cisIG === ig.id;
+                      return (
+                        <button key={ig.id} onClick={() => setCisIG(ig.id)}
+                          style={{textAlign:"left",padding:"10px 14px",borderRadius:8,cursor:"pointer",
+                            background: sel ? `${C.accent}18` : C.surface,
+                            border:`1px solid ${sel ? C.accent : C.border}`,
+                            color: sel ? C.text : C.textSec,
+                            fontFamily:FONT_BODY,
+                            display:"flex",alignItems:"center",gap:10,transition:"all 0.15s"}}>
+                          <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
+                            border:`2px solid ${sel ? C.accent : C.textMut}`,
+                            background: sel ? C.accent : "transparent",
+                            display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            {sel && <span style={{width:6,height:6,borderRadius:"50%",background:C.bg}}/>}
+                          </span>
+                          <span>
+                            <span style={{fontSize:13,fontWeight:700}}>{ig.label}</span>
+                            <span style={{fontSize:12,color:C.textSec,marginLeft:8}}>{ig.sub}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
+          </>
+        )}
 
-            {questions.map(q => (
-              <div key={q.id} style={{marginBottom:16,padding:"16px 18px",background:C.card,
-                border:`1px solid ${answers[q.id] ? color+"44" : C.border}`,
-                borderRadius:12,transition:"border-color 0.2s"}}>
-                <div style={{color:C.text,fontSize:14,fontWeight:600,marginBottom:12}}>
-                  {safeText(q.question)}
+        {stepInfo.kind === "required" && (
+          <>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:NIST_COLORS[stepInfo.fn]}}/>
+              <span style={{color:NIST_COLORS[stepInfo.fn],fontSize:13,fontWeight:700,
+                letterSpacing:1.2,textTransform:"uppercase"}}>{stepInfo.fn}</span>
+            </div>
+            <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+              {NIST_FUNCTION_BLURBS[stepInfo.fn]}
+            </p>
+            {stepInfo.questions.map(q => renderQuestion(q, NIST_COLORS[stepInfo.fn]))}
+          </>
+        )}
+
+        {stepInfo.kind === "optional" && (
+          <>
+            <h2 style={{color:C.text,fontFamily:FONT_HEADING,fontSize:22,margin:"4px 0 6px"}}>Optional: a bit more detail</h2>
+            <p style={{color:C.textSec,fontSize:14,lineHeight:1.6,margin:"0 0 18px"}}>
+              These don't change your posture score — but each one you answer makes more of
+              your compliance frameworks assessable instead of "not yet assessed." Answer what
+              you can, skip the rest, or come back to it later from your dashboard.
+            </p>
+            {optionalGroups.map(([section, questions]) => {
+              const open = openSections.has(section);
+              const answeredInSection = questions.filter(q => answers[q.id] !== undefined).length;
+              return (
+                <div key={section} style={{marginBottom:12,border:`1px solid ${C.border}`,
+                  borderRadius:12,overflow:"hidden"}}>
+                  <button onClick={() => toggleSection(section)}
+                    style={{width:"100%",textAlign:"left",padding:"14px 16px",background:C.card,
+                      border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:10,
+                      fontFamily:FONT_BODY}}>
+                    <span style={{color:C.text,fontSize:14,fontWeight:600,flex:1}}>{section}</span>
+                    <span style={{color:C.textMut,fontSize:12}}>{answeredInSection} of {questions.length} answered</span>
+                    <span style={{color:C.textMut,fontSize:11}}>{open ? "▲" : "▼"}</span>
+                  </button>
+                  {open && (
+                    <div style={{padding:"4px 16px 16px",background:C.card}}>
+                      {questions.map(q => renderQuestion(q, C.textSec))}
+                    </div>
+                  )}
                 </div>
-                <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                  {q.options.map(opt => {
-                    const label = optionLabel(opt);
-                    const selected = answers[q.id] === label;
-                    return (
-                      <button key={label} onClick={() => selectAnswer(q.id, label)}
-                        style={{textAlign:"left",padding:"10px 14px",borderRadius:8,cursor:"pointer",
-                          background: selected ? `${color}18` : C.surface,
-                          border:`1px solid ${selected ? color : C.border}`,
-                          color: selected ? C.text : C.textSec,
-                          fontSize:13,fontWeight: selected ? 600 : 400,
-                          fontFamily:"Inter,system-ui,sans-serif",
-                          display:"flex",alignItems:"center",gap:10,transition:"all 0.15s"}}>
-                        <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
-                          border:`2px solid ${selected ? color : C.textMut}`,
-                          background: selected ? color : "transparent",
-                          display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          {selected && <span style={{width:6,height:6,borderRadius:"50%",background:C.bg}}/>}
-                        </span>
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        ); })}
+              );
+            })}
+          </>
+        )}
 
         <div style={{position:"sticky",bottom:0,background:C.bg,padding:"16px 0",
-          borderTop:`1px solid ${C.border}`,marginTop:8}}>
-          <button onClick={() => onComplete(answers, buildComplianceSelection())} disabled={!allAnswered}
-            style={{width:"100%",padding:"14px",borderRadius:10,border:"none",
-              background: allAnswered ? `linear-gradient(135deg,${C.accent},${C.accentDm})` : C.border,
-              color: allAnswered ? "#04121F" : C.textMut,
-              fontSize:15,fontWeight:700,
-              cursor: allAnswered ? "pointer" : "not-allowed"}}>
-            {allAnswered
-              ? (optionalAnswered < optional.length
-                  ? `Generate Security Program → (${optional.length - optionalAnswered} optional left)`
-                  : "Generate Security Program →")
-              : `Answer the required questions (${required.length - requiredAnswered} remaining)`}
-          </button>
+          borderTop:`1px solid ${C.border}`,marginTop:20,display:"flex",gap:10,alignItems:"center"}}>
+          <Button variant="ghost" onClick={goBack}>← Back</Button>
+          {stepInfo.kind === "optional" ? (
+            <>
+              <Button variant="ghost" onClick={() => onComplete(answers, buildComplianceSelection())} style={{marginLeft:"auto"}}>
+                Skip — Generate my program
+              </Button>
+              <Button onClick={() => onComplete(answers, buildComplianceSelection())}>
+                Generate Security Program →
+              </Button>
+            </>
+          ) : (
+            <Button onClick={goNext} disabled={!stepComplete} style={{marginLeft:"auto"}}>
+              {stepInfo.kind === "required" && !stepComplete
+                ? `Answer to continue (${stepQuestions.filter(q=>answers[q.id]===undefined).length} left)`
+                : "Continue →"}
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -12542,294 +12940,8 @@ function SupportRequestConsole() {
 // ─────────────────────────────────────────────────────────────
 //  HOME SCREEN — returning user's dashboard of saved assessments
 // ─────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────
-//  COMPANY ADMIN CONSOLE
-//  Customer-facing overview of THEIR security program. Every figure
-//  below is real or explicitly a "no data yet" state — nothing here
-//  is invented to fill a slot. Posture score and company info come
-//  from the generated program; trend comes from the real posture-
-//  history endpoint; training comes from the real training-program
-//  overview; the analyst channel points at real notifications
-//  rather than simulating a conversation that isn't happening.
-// ─────────────────────────────────────────────────────────────
-function CompanyConsole({ assessmentId, programId, user, onClose, onOpenProgram }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [data, setData] = useState(null);   // { company, results }
-  const [history, setHistory] = useState(null);       // /api/client/posture-history — null while loading
-  const [training, setTraining] = useState(null);      // /api/training-program/overview — null while loading
-  const [notifications, setNotifications] = useState(null); // /api/notifications — null while loading
-  const [compliance, setCompliance] = useState(null);  // /api/compliance/overview — null while loading
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const aRes = await authFetch(`${API_BASE}/api/assessments/${assessmentId}`);
-        if (!aRes.ok) throw new Error("Could not load your program");
-        const assessment = await aRes.json();
-        const pRes = await authFetch(`${API_BASE}/api/programs/${programId}`);
-        if (!pRes.ok) throw new Error("Could not load your program");
-        const program = await pRes.json();
-        setData({ company: assessment.company || {}, results: program.sections || {} });
-      } catch (e) { setError(e.message); } finally { setLoading(false); }
-    })();
-    // Real trend, training, and notifications — each independently loaded so a
-    // failure or "nothing yet" on one doesn't block the others. Every one of
-    // these defaults to an explicit empty state, never a fabricated number.
-    authFetch(`${API_BASE}/api/client/posture-history`)
-      .then(r => r.ok ? r.json() : null).then(setHistory).catch(() => setHistory(null));
-    authFetch(`${API_BASE}/api/training-program/overview`)
-      .then(r => r.ok ? r.json() : null).then(setTraining).catch(() => setTraining(null));
-    authFetch(`${API_BASE}/api/notifications`)
-      .then(r => r.ok ? r.json() : null).then(setNotifications).catch(() => setNotifications(null));
-    authFetch(`${API_BASE}/api/compliance/overview`)
-      .then(r => r.ok ? r.json() : null).then(setCompliance).catch(() => setCompliance(null));
-  }, [assessmentId, programId]);
-
-  if (loading) return (
-    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <Spinner/>
-    </div>
-  );
-  if (error) return (
-    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,padding:"40px 24px",color:C.text}}>
-      <button onClick={onClose} style={{marginBottom:16,padding:"8px 16px",background:C.surface,
-        border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>← Back</button>
-      <div style={{color:C.redText}}>{error}</div>
-    </div>
-  );
-
-  const risk = data.results?.riskOverview || {};
-  const score = risk.postureScore || 0;
-  const level = risk.postureLevel || "Developing";
-  const company = data.company || {};
-  const scoreColor = score>=80?C.greenText:score>=60?C.midGreenText:score>=40?C.amberText:C.redText;
-
-  // Real trend points only — from the client's own posture-history endpoint.
-  // No fallback series is generated: fewer than 2 points means there's no
-  // trend to draw yet, and the panel says so instead of showing one.
-  const trendPoints = (history?.points || [])
-    .map(p => p.score).filter(v => typeof v === "number");
-
-  const sections = data.results || {};
-  const progItems = [
-    { label: "Risk Assessment", done: !!sections.riskOverview },
-    { label: "Security Policies", done: !!sections.policiesCore },
-    { label: "Priorities & Roadmap", done: !!sections.priorities },
-    { label: "Compliance Mapping", done: !!sections.compliance },
-    { label: "Training Program", done: !!sections.training },
-    { label: "Incident Response", done: !!sections.workflows },
-  ];
-  const progPct = Math.round(progItems.filter(p=>p.done).length / progItems.length * 100);
-
-  const Panel = ({ title, children, action, flex }) => (
-    <div style={{flex:flex||"1 1 300px",minWidth:0,background:C.card,border:`1px solid ${C.border}`,
-      borderRadius:12,padding:"16px 18px"}}>
-      <div style={{display:"flex",alignItems:"center",marginBottom:12}}>
-        <span style={{color:C.text,fontSize:12,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase"}}>{title}</span>
-        {action && <span style={{marginLeft:"auto"}}>{action}</span>}
-      </div>
-      {children}
-    </div>
-  );
-
-  return (
-    <div style={{minHeight:"calc(100vh - 56px)",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
-      <div style={{maxWidth:1080,margin:"0 auto",padding:"28px 24px"}}>
-
-        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
-          <div style={{width:46,height:46,borderRadius:11,background:`${C.accent}15`,
-            border:`1px solid ${C.accent}33`,display:"flex",alignItems:"center",justifyContent:"center"}}><ShieldLogo size={28}/></div>
-          <div style={{flex:1}}>
-            <h1 style={{fontSize:22,fontWeight:700,margin:0,color:C.text}}>{company.name || "Your"} Security Console</h1>
-            <p style={{color:C.textSec,fontSize:13,margin:"3px 0 0"}}>
-              {company.industry ? `${company.industry} · ` : ""}{company.employees ? `${company.employees} employees · ` : ""}Managed by ShieldAI
-            </p>
-          </div>
-          <button onClick={()=>onOpenProgram(assessmentId, programId)}
-            style={{padding:"9px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer"}}>
-            Open Full Program →
-          </button>
-          <button onClick={onClose} style={{padding:"9px 16px",background:C.surface,
-            border:`1px solid ${C.border}`,borderRadius:9,color:C.textSec,fontSize:13,cursor:"pointer"}}>
-            ← Home
-          </button>
-        </div>
-
-        <div style={{display:"flex",gap:14,marginBottom:14,flexWrap:"wrap"}}>
-          <Panel title="Security Posture" flex="0 0 220px">
-            <div style={{textAlign:"center",padding:"6px 0"}}>
-              <div style={{fontSize:48,fontWeight:800,color:scoreColor,lineHeight:1}}>{score}</div>
-              <div style={{fontSize:10,color:C.textMut,letterSpacing:1,marginTop:4}}>OUT OF 100</div>
-              <div style={{marginTop:10,padding:"4px 16px",borderRadius:20,background:scoreColor+"22",
-                color:scoreColor,fontSize:12,fontWeight:700,display:"inline-block"}}>{level.toUpperCase()}</div>
-            </div>
-          </Panel>
-          <Panel title="Posture Trend" flex="1 1 400px"
-            action={trendPoints.length >= 2 ? (() => {
-              const delta = trendPoints[trendPoints.length-1] - trendPoints[0];
-              return (
-                <span style={{fontSize:11,color: delta>0?C.greenText:delta<0?C.redText:C.textMut}}>
-                  {delta>0?"▲ improving":delta<0?"▼ declining":"— steady"}
-                </span>
-              );
-            })() : null}>
-            {history === null ? (
-              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
-            ) : trendPoints.length < 2 ? (
-              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>
-                Not enough history yet to chart a trend. This builds up as your program is rescored over time.
-              </div>
-            ) : (
-              <TrendChartLight data={trendPoints} color={scoreColor}/>
-            )}
-          </Panel>
-        </div>
-
-        <div style={{display:"flex",gap:14,marginBottom:14,flexWrap:"wrap"}}>
-          <Panel title="Program Status">
-            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:10}}>
-              <span style={{fontSize:28,fontWeight:800,color:C.accentText}}>{progPct}%</span>
-              <span style={{fontSize:11,color:C.textMut}}>complete</span>
-            </div>
-            {progItems.map((p,i)=>(
-              <div key={i} style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
-                <span style={{width:16,height:16,borderRadius:"50%",flexShrink:0,
-                  background:p.done?`${C.green}22`:C.surface,border:`1px solid ${p.done?C.green:C.border}`,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,
-                  color:p.done?C.greenText:C.textMut}}>{p.done?"✓":""}</span>
-                <span style={{fontSize:12,color:p.done?C.textSec:C.textMut}}>{p.label}</span>
-              </div>
-            ))}
-          </Panel>
-
-          <Panel title="Compliance Progress">
-            {compliance === null ? (
-              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
-            ) : !compliance.hasAssessment || !(compliance.frameworks||[]).length ? (
-              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
-                {compliance.note || "No assessment on file. Compliance can't be determined without answers."}
-              </div>
-            ) : (() => {
-              // Lead with the weakest framework — same convention as the
-              // analyst's rollup, so client and analyst never see conflicting
-              // "which framework needs attention" answers.
-              const rows = compliance.frameworks.filter(f => !f.notControlMapped && f.assessed > 0);
-              if (!rows.length) return (
-                <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
-              );
-              const worst = [...rows].sort((a,b)=>(a.readinessPct??101)-(b.readinessPct??101))[0];
-              const cur = worst.readinessPct ?? 0;
-              return (
-                <div>
-                  <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{worst.short || worst.name}</div>
-                  <div style={{fontSize:28,fontWeight:800,color:C.purpleText,marginBottom:8}}>{cur}%</div>
-                  <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
-                    <div style={{width:`${cur}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
-                  </div>
-                  <div style={{fontSize:11,color:C.textMut,marginTop:6}}>
-                    {rows.length > 1 ? `Weakest of ${rows.length} tracked frameworks` : "readiness"}
-                  </div>
-                </div>
-              );
-            })()}
-          </Panel>
-
-          <Panel title="Team Training">
-            {training === null ? (
-              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
-            ) : !training.learnerCount ? (
-              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
-                No learners set up yet. Add your team under Training to start tracking completion.
-              </div>
-            ) : (
-              <>
-                <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
-                  <span style={{fontSize:28,fontWeight:800,color:C.greenText}}>{training.completionRate}%</span>
-                  <span style={{fontSize:11,color:C.textMut}}>staff completed</span>
-                </div>
-                <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden",marginBottom:10}}>
-                  <div style={{width:`${training.completionRate}%`,height:"100%",background:`linear-gradient(90deg,${C.accent},${C.green})`}}/>
-                </div>
-                <div style={{fontSize:11,color:C.textSec,lineHeight:1.6}}>
-                  {training.assignmentCount} assignment{training.assignmentCount===1?"":"s"} ·{" "}
-                  {training.overdue > 0
-                    ? <span style={{color:C.amberText}}>{training.overdue} overdue</span>
-                    : "none overdue"}
-                </div>
-              </>
-            )}
-          </Panel>
-        </div>
-
-        <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
-          <Panel title="Open Action Items" flex="1 1 380px">
-            {(() => {
-              const pr = data.results?.priorities?.priorities || [];
-              const items = pr.slice(0,4);
-              if (items.length === 0) return <div style={{color:C.textSec,fontSize:13}}>No open items — you're all caught up.</div>;
-              return items.map((it,i)=>(
-                <div key={i} style={{display:"flex",gap:10,padding:"9px 0",
-                  borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
-                  <span style={{width:22,height:22,borderRadius:6,flexShrink:0,fontSize:11,fontWeight:700,
-                    background:`${C.accent}18`,color:C.accentText,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {it.rank||i+1}
-                  </span>
-                  <div style={{flex:1}}>
-                    <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(it.title)}</div>
-                    <div style={{color:C.textMut,fontSize:11,marginTop:2}}>
-                      {it.effort ? it.effort : ""}{it.impact ? ` · ${it.impact} impact` : ""}
-                    </div>
-                  </div>
-                </div>
-              ));
-            })()}
-          </Panel>
-
-          <Panel title="Analyst Activity" flex="1 1 380px">
-            {/* Real, read-only feed of what your analyst has actually sent —
-                review decisions, notes on your program. There is no live chat
-                channel yet, so this does not simulate one; it shows what's real. */}
-            {notifications === null ? (
-              <div style={{color:C.textSec,fontSize:13,padding:"20px 0",textAlign:"center"}}>No data to report</div>
-            ) : !(notifications.notifications||[]).length ? (
-              <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,padding:"10px 0"}}>
-                No activity from your analyst yet. Updates on your program and any notes they leave
-                will appear here.
-              </div>
-            ) : (
-              <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:220,overflowY:"auto"}}>
-                {notifications.notifications.slice(0,8).map(n=>(
-                  <div key={n.id} style={{padding:"9px 11px",borderRadius:9,fontSize:12,lineHeight:1.5,
-                    background:C.surface,border:`1px solid ${n.read?C.border:C.accent+"55"}`}}>
-                    <div style={{color:C.text,fontWeight:600,marginBottom:2}}>{safeText(n.title)}</div>
-                    <div style={{color:C.textSec}}>{safeText(n.body)}</div>
-                    <div style={{fontSize:10,color:C.textMut,marginTop:4}}>
-                      {new Date(n.createdAt).toLocaleString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Panel>
-        </div>
-
-        <div style={{marginTop:18,padding:"11px 16px",background:`${C.accent}0A`,
-          border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
-          <span style={{color:C.textSec,fontSize:11}}>
-            Every figure on this page reflects your real data — posture score, trend, compliance,
-            training, and analyst activity. Where something hasn't been set up or scored yet, it says
-            so instead of showing a placeholder number.
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Light-theme trend chart for the company console
+// Light-theme trend chart — used by OverviewSection's Posture Trend panel
 function TrendChartLight({ data, color }) {
   const w = 560, h = 130, pad = 8;
   const min = Math.min(...data) - 5, max = Math.max(...data) + 5;
@@ -12860,7 +12972,7 @@ function TrendChartLight({ data, color }) {
   );
 }
 
-function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, onOpenConsole, canBuildPrograms, onBuildProgram }) {
+function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, canBuildPrograms, onBuildProgram }) {
   const [assessments, setAssessments] = useState([]);
   const [programsByAssessment, setProgramsByAssessment] = useState({});
   const [loading, setLoading] = useState(true);
@@ -12868,6 +12980,8 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   const [opening, setOpening] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [deletingProgram, setDeletingProgram] = useState(null);
+  const [confirmDeleteAssessment, setConfirmDeleteAssessment] = useState(null); // assessment id, or null
+  const [confirmDeleteProgram, setConfirmDeleteProgram] = useState(null); // program id, or null
 
   async function load() {
     setLoading(true);
@@ -12903,7 +13017,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   useEffect(() => { load(); }, []);
 
   async function deleteAssessment(assessmentId) {
-    if (!window.confirm("Delete this assessment? Any program generated from it will be deleted too. This can't be undone.")) return;
+    setConfirmDeleteAssessment(null);
     setDeleting(assessmentId); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/assessments/${assessmentId}`, { method: "DELETE" });
@@ -12917,7 +13031,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
   }
 
   async function deleteProgram(programId) {
-    if (!window.confirm("Delete this program? Your assessment answers are kept, so you can regenerate a fresh one anytime.")) return;
+    setConfirmDeleteProgram(null);
     setDeletingProgram(programId); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/programs/${programId}`, { method: "DELETE" });
@@ -13027,21 +13141,13 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                     <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch"}}>
                       {complete ? (
                         <>
-                          <button onClick={() => onOpenConsole(a.id, complete.id)}
+                          <button onClick={() => openLatestProgram(a.id)} disabled={opening===a.id}
                             style={{padding:"10px 20px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
                               color:"#04121F",border:"none",borderRadius:8,fontSize:13,fontWeight:700,
-                              cursor:"pointer",whiteSpace:"nowrap"}}>
-                            📊 My Console
-                          </button>
-                          <div style={{color:C.textMut,fontSize:10,textAlign:"center",marginTop:-4}}>Quick summary view</div>
-                          <button onClick={() => openLatestProgram(a.id)} disabled={opening===a.id}
-                            style={{padding:"8px 20px",background:"none",border:`1px solid ${C.borderHi}`,
-                              borderRadius:8,color:C.accentText,fontSize:12,fontWeight:600,
                               cursor:opening===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
-                            {opening===a.id ? "Opening…" : "Open Program →"}
+                            {opening===a.id ? "Opening…" : "Open Dashboard →"}
                           </button>
-                          <div style={{color:C.textMut,fontSize:10,textAlign:"center",marginTop:-4}}>Full program & tools</div>
-                          <button onClick={() => deleteProgram(complete.id)} disabled={deletingProgram===complete.id}
+                          <button onClick={() => setConfirmDeleteProgram(complete.id)} disabled={deletingProgram===complete.id}
                             style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
                               borderRadius:8,color:deletingProgram===complete.id?C.textMut:C.redText,fontSize:12,fontWeight:600,
                               cursor:deletingProgram===complete.id?"wait":"pointer",whiteSpace:"nowrap"}}>
@@ -13070,7 +13176,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
                           cursor:"pointer",whiteSpace:"nowrap"}}>
                         ✎ Edit
                       </button>
-                      <button onClick={() => deleteAssessment(a.id)} disabled={deleting===a.id}
+                      <button onClick={() => setConfirmDeleteAssessment(a.id)} disabled={deleting===a.id}
                         style={{padding:"8px 20px",background:"none",border:`1px solid ${C.border}`,
                           borderRadius:8,color:deleting===a.id?C.textMut:C.redText,fontSize:12,fontWeight:600,
                           cursor:deleting===a.id?"wait":"pointer",whiteSpace:"nowrap"}}>
@@ -13084,6 +13190,28 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, on
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDeleteAssessment}
+        onClose={()=>setConfirmDeleteAssessment(null)}
+        onConfirm={()=>deleteAssessment(confirmDeleteAssessment)}
+        title="Delete this assessment?"
+        message="Any program generated from it will be deleted too. This can't be undone."
+        confirmLabel={deleting===confirmDeleteAssessment ? "Deleting…" : "Delete"}
+        confirmDisabled={deleting===confirmDeleteAssessment}
+        danger
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteProgram}
+        onClose={()=>setConfirmDeleteProgram(null)}
+        onConfirm={()=>deleteProgram(confirmDeleteProgram)}
+        title="Delete this program?"
+        message="Your assessment answers are kept, so you can regenerate a fresh one anytime."
+        confirmLabel={deletingProgram===confirmDeleteProgram ? "Deleting…" : "Delete"}
+        confirmDisabled={deletingProgram===confirmDeleteProgram}
+        danger
+      />
     </div>
   );
 }
@@ -19721,7 +19849,6 @@ export default function ShieldAI() {
   const [phase, setPhase] = useState("home");        // home | landing | intake | checklist | analysis | dashboard
   const [assessment, setAssessment] = useState(null);
   const [results, setResults] = useState(null);
-  const [consoleTarget, setConsoleTarget] = useState(null); // {assessmentId, programId}
   const [currentAssessmentId, setCurrentAssessmentId] = useState(null);
   const [currentProgramId, setCurrentProgramId] = useState(null);
   // True until the mount-time session-restore check finishes. Prevents a
@@ -19756,6 +19883,10 @@ export default function ShieldAI() {
   const [showHelp, setShowHelp] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [regenAssessmentId, setRegenAssessmentId] = useState(null);
+  // Restored checklist wizard progress (step/answers/frameworks/cisIG) when a
+  // refresh mid-onboarding is resumed — see the session-restoration effect
+  // below. Null on a fresh assessment.
+  const [checklistResume, setChecklistResume] = useState(null);
   // "View as Client": staff acting as a client with a short-lived impersonation
   // token (see /api/staff/clients/:id/impersonate). Holds the staff member's
   // own session so exitClientView() can restore it. Every write made while
@@ -19827,9 +19958,6 @@ export default function ShieldAI() {
       applyNavOverlays(s);
       if (s.phase === "dashboard" && s.assessmentId) {
         openProgram(s.assessmentId, s.programId).catch(() => setPhase("home"));
-      } else if (s.phase === "console" && s.assessmentId && s.programId) {
-        setConsoleTarget({ assessmentId: s.assessmentId, programId: s.programId });
-        setPhase("console");
       } else {
         // Mid-onboarding phases (intake/checklist/framework/edit/analysis)
         // can't be safely rebuilt without their in-progress draft data, so
@@ -19930,15 +20058,36 @@ export default function ShieldAI() {
               setPhase("dashboard");
             }
           }
-        } else if (resume?.phase === "console" && resume.assessmentId && resume.programId) {
-          setConsoleTarget({ assessmentId: resume.assessmentId, programId: resume.programId });
-          setPhase("console");
+        } else if (
+          (resume?.phase === "framework" || resume?.phase === "checklist" || resume?.phase === "analysis")
+          && resume.assessment
+        ) {
+          // A refresh mid-assessment used to always drop back to Home,
+          // discarding whatever the client had already answered — the single
+          // biggest drop-off risk in the onboarding funnel. "analysis" is
+          // treated as "checklist": generation hadn't finished, so there's
+          // nothing to resume into except re-clicking Generate.
+          setAssessment(resume.assessment);
+          if (resume.phase === "framework") {
+            setPhase("framework");
+          } else {
+            // A refresh during "analysis" has no per-step progress saved (the
+            // wizard was already finished) — seed just the answers so nothing
+            // already answered is lost; they re-click through the (now
+            // instantly-valid) steps rather than re-answering from scratch.
+            const progress = resume.phase === "analysis"
+              ? { answers: resume.assessment.checklist || {} }
+              : (resume.checklistProgress || null);
+            setChecklistResume(progress);
+            setPhase("checklist");
+          }
         }
-        // Any other saved phase (intake/checklist/framework/edit/analysis) is
-        // mid-onboarding and not worth resuming — those default back to Home,
-        // which is already a safe, sensible landing spot. Overlay panels
-        // (admin/analyst/threat intel/help/mastermind) don't depend on any
-        // in-flight wizard data though, so those restore unconditionally.
+        // "intake" isn't restored — the interview is a live chat with no
+        // saved transcript, so there's nothing meaningful to resume into;
+        // falling back to Home (a fresh "+ New Assessment") is the honest
+        // option there. Overlay panels (admin/analyst/threat intel/help/
+        // mastermind) don't depend on any in-flight wizard data, so those
+        // restore unconditionally regardless of phase.
         applyNavOverlays(resume);
       } catch {
         // Token invalid/expired — clear it rather than looping on a dead session.
@@ -20144,12 +20293,6 @@ export default function ShieldAI() {
     setPhase("dashboard");
   }
 
-  function openConsole(assessmentId, programId) {
-    setConsoleTarget({ assessmentId, programId });
-    saveResumeState({ phase: "console", assessmentId, programId });
-    setPhase("console");
-  }
-
   // Called by EditAssessmentScreen when user chooses Save & Regenerate
   async function handleRegenerate(assessmentId, replaceOld) {
     setRegenAssessmentId({ assessmentId, replaceOld });
@@ -20316,10 +20459,17 @@ export default function ShieldAI() {
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
     <div style={{padding:"10px 20px",background:NAV.bg,borderBottom:`1px solid ${NAV.border}`,
       display:"flex",alignItems:"center",gap:10}}>
-      <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex"}}>
+      <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex",flexShrink:0}}>
         <ShieldLockup logoSize={22} textSize={15} ink={NAV.text} instanceKey="topbar"/>
       </span>
-      <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
+      {/* minWidth:0 lets this flex item shrink below its content's natural
+          width (the flex default is min-width:auto, which is exactly what
+          was pushing the whole page into horizontal scroll on narrow
+          screens — this bar has up to ~9 buttons). overflowX scrolls the
+          button row itself instead. */}
+      <style>{`.sui-topbar-actions > * { flex-shrink: 0; }`}</style>
+      <div className="sui-topbar-actions" style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14,
+        minWidth:0,overflowX:"auto",flexWrap:"nowrap",WebkitOverflowScrolling:"touch"}}>
         <span style={{fontSize:12,color:NAV.textDim}}>
           {user.companyName || user.email}
         </span>
@@ -20447,7 +20597,7 @@ export default function ShieldAI() {
     // Wrapped in CapabilityContext so CveExposureCard/DarkWebExposureCard (which
     // read useCapabilities() to gate the real CVE/breach data behind threatIntel,
     // Growth+) resolve the caller's actual tier here too — this overlay sits
-    // outside the "console" phase's own Provider. Domain registration/verification
+    // outside the "dashboard" phase's own Provider. Domain registration/verification
     // and the plain email-security lookup stay reachable for every tier; only the
     // exposure data itself is gated, inside those two cards.
     return (
@@ -20522,28 +20672,10 @@ export default function ShieldAI() {
           onNewAssessment={() => setPhase("intake")}
           onOpenProgram={openProgram}
           onEditAssessment={(id) => { setEditingId(id); setPhase("edit"); }}
-          onOpenConsole={openConsole}
           canBuildPrograms={can("buildPrograms")}
           onBuildProgram={(id) => handleRegenerate(id, true)}
         />
       </div>
-    );
-  }
-
-  if (phase === "console" && consoleTarget) {
-    return (
-      <CapabilityContext.Provider value={{ can, tier: user.tier, capabilities: user.capabilities || {} }}>
-      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
-        <TopBar/>
-        <CompanyConsole
-          assessmentId={consoleTarget.assessmentId}
-          programId={consoleTarget.programId}
-          user={user}
-          onClose={() => { setConsoleTarget(null); setPhase("home"); }}
-          onOpenProgram={openProgram}
-        />
-      </div>
-      </CapabilityContext.Provider>
     );
   }
 
@@ -20562,7 +20694,11 @@ export default function ShieldAI() {
           </button>
         </div>
         <div style={{flex:1,overflow:"hidden"}}>
-          <IntakeChat onComplete={data => { setAssessment(data); setPhase("framework"); }}/>
+          <IntakeChat onComplete={data => {
+            setAssessment(data);
+            saveResumeState({ phase: "framework", assessment: data });
+            setPhase("framework");
+          }}/>
         </div>
       </div>
     );
@@ -20582,7 +20718,9 @@ export default function ShieldAI() {
           onComplete={(frameworkLens) => {
             // The lens rides on the assessment; riskEngine reads it when scoring,
             // so every downstream consumer gets the chosen framing for free.
-            setAssessment(prev => ({ ...prev, frameworkLens }));
+            const next = { ...assessment, frameworkLens };
+            setAssessment(next);
+            saveResumeState({ phase: "checklist", assessment: next });
             setPhase("checklist");
           }}
           onBack={() => setPhase("intake")}
@@ -20602,8 +20740,13 @@ export default function ShieldAI() {
         </div>
         <ChecklistScreen
           frameworkLens={assessment?.frameworkLens || "nist"}
+          initialProgress={checklistResume}
+          onProgress={(progress) => saveResumeState({ phase: "checklist", assessment, checklistProgress: progress })}
           onComplete={(checklist, selectedFrameworks) => {
-            setAssessment(prev => ({ ...prev, checklist, selectedFrameworks }));
+            setChecklistResume(null);
+            const next = { ...assessment, checklist, selectedFrameworks };
+            setAssessment(next);
+            saveResumeState({ phase: "analysis", assessment: next });
             setPhase("analysis");
           }}
           onBack={() => setPhase("framework")}
