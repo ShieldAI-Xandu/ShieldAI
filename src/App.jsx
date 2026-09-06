@@ -2611,6 +2611,23 @@ async function downloadReport(report) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
+// Submission packets (framework-packet) also offer a ZIP bundling the report
+// document with the real evidence files — same blob-download pattern.
+async function downloadEvidenceBundle(report) {
+  const res = await authFetch(`${API_BASE}/api/reports/${report.id}/bundle.zip`);
+  if (!res.ok) {
+    let msg = "Download failed.";
+    try { msg = (await res.json()).error || msg; } catch { /* non-json */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `${(report.filename || "ShieldAI_Report").replace(/\.doc$/, "")}_bundle.zip`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 // Download the ShieldAI monitoring-agent installer package (a small zip of
 // read-only collector scripts) for the given OS. Auth-protected like the
 // other downloads above, so fetch as a blob rather than a bare href.
@@ -2686,6 +2703,7 @@ const REPORT_TYPE_META = {
   legal:      { icon: "⚖️", label: "Legal Record",       blurb: "Defensible record of what was assessed, advised, and acted on." },
   training:   { icon: "🎓", label: "Training Report",    blurb: "Full learner roster, status, and grades — for compliance, insurance, or legal." },
   remediation:{ icon: "🧠", label: "Remediation Plan",   blurb: "Mastermind's step-by-step guide to closing every gap and conflict across your frameworks." },
+  "framework-packet": { icon: "📦", label: "Submission Packet", blurb: "One framework's control status, remediation history, and evidence — ready for an insurer or regulator." },
 };
 
 function EvidenceSection() {
@@ -6347,7 +6365,7 @@ function ChatMarkdown({ text, color, mutedColor }) {
 //  Clients self-generate Status and Update reports, and see/download any
 //  Compliance / Insurance / Legal reports their analyst has delivered.
 // ─────────────────────────────────────────────────────────────
-function ReportsSection({ hasFullReports = true }) {
+function ReportsSection({ hasFullReports = true, hasEvidenceAccess = false }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null);   // which action is running
@@ -6355,6 +6373,11 @@ function ReportsSection({ hasFullReports = true }) {
   const [toast, setToast] = useState(null);
   const [since, setSince] = useState("");   // optional "changed since" date for updates
   const [deleteTarget, setDeleteTarget] = useState(null); // report pending delete, or null
+
+  // Submission-packet inputs: which framework, and who it's for.
+  const [packetFrameworks, setPacketFrameworks] = useState([]);
+  const [packetFrameworkId, setPacketFrameworkId] = useState("");
+  const [packetPurpose, setPacketPurpose] = useState("regulatory");
 
   async function load() {
     setLoading(true); setError(null);
@@ -6367,6 +6390,22 @@ function ReportsSection({ hasFullReports = true }) {
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  // A submission packet is per-framework, so the picker needs the client's
+  // own control-mapped frameworks — same overview endpoint and filter the
+  // Compliance tab already uses.
+  useEffect(() => {
+    if (!hasEvidenceAccess) return;
+    authFetch(`${API_BASE}/api/compliance/overview`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const list = (d?.frameworks || []).filter(f => !f.notControlMapped);
+        setPacketFrameworks(list);
+        if (list.length && !packetFrameworkId) setPacketFrameworkId(list[0].id);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasEvidenceAccess]);
 
   function flash(msg, tone = C.greenText) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
 
@@ -6398,6 +6437,30 @@ function ReportsSection({ hasFullReports = true }) {
     setBusy(r.id); setError(null);
     try { await downloadReport(r); }
     catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function doBundleDownload(r) {
+    setBusy(`${r.id}-bundle`); setError(null);
+    try { await downloadEvidenceBundle(r); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function generateFrameworkPacket() {
+    if (!packetFrameworkId) { setError("Pick a framework first."); return; }
+    setBusy("framework-packet"); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports/framework-packet`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frameworkId: packetFrameworkId, purpose: packetPurpose }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not generate the submission packet.");
+      flash("Submission packet generated — draft until your analyst finalizes it.");
+      await load();
+      try { await downloadReport(d); } catch { /* user can click Download */ }
+    } catch (e) { setError(e.message); }
     finally { setBusy(null); }
   }
 
@@ -6466,6 +6529,45 @@ function ReportsSection({ hasFullReports = true }) {
         })}
       </div>
 
+      {hasEvidenceAccess && (
+        <Card style={{padding:"18px 20px",marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+            <span style={{fontSize:22}}>{REPORT_TYPE_META["framework-packet"].icon}</span>
+            <span style={{color:C.text,fontWeight:700,fontSize:15}}>{REPORT_TYPE_META["framework-packet"].label}</span>
+          </div>
+          <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.55,margin:"0 0 14px"}}>
+            {REPORT_TYPE_META["framework-packet"].blurb} A ShieldAI analyst reviews and finalizes it before it's
+            marked ready to submit — you can generate and preview a draft anytime.
+          </p>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+            <div>
+              <label style={{display:"block",color:C.textMut,fontSize:11,marginBottom:4}}>Framework</label>
+              <select value={packetFrameworkId} onChange={e=>setPacketFrameworkId(e.target.value)}
+                style={{padding:"7px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12.5,fontFamily:"Inter,system-ui,sans-serif",minWidth:180}}>
+                {packetFrameworks.length === 0 && <option value="">No control-mapped frameworks yet</option>}
+                {packetFrameworks.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{display:"block",color:C.textMut,fontSize:11,marginBottom:4}}>For</label>
+              <select value={packetPurpose} onChange={e=>setPacketPurpose(e.target.value)}
+                style={{padding:"7px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12.5,fontFamily:"Inter,system-ui,sans-serif"}}>
+                <option value="regulatory">Regulator / auditor</option>
+                <option value="insurance">Insurance application</option>
+              </select>
+            </div>
+          </div>
+          <button onClick={generateFrameworkPacket} disabled={busy==="framework-packet" || !packetFrameworkId}
+            style={{padding:"9px 18px",background:(busy==="framework-packet"||!packetFrameworkId)?C.border:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:(busy==="framework-packet"||!packetFrameworkId)?C.textMut:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+              cursor:(busy==="framework-packet"||!packetFrameworkId)?"wait":"pointer"}}>
+            {busy==="framework-packet" ? "Generating…" : `Generate ${REPORT_TYPE_META["framework-packet"].label}`}
+          </button>
+        </Card>
+      )}
+
       {error && <div style={{margin:"12px 0",color:C.redText,fontSize:13}}>{error}</div>}
 
       <SectionLabel text={`Your Reports (${reports.length})`}/>
@@ -6491,6 +6593,11 @@ function ReportsSection({ hasFullReports = true }) {
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                       <span style={{color:C.text,fontWeight:600,fontSize:14}}>{m.label}</span>
                       {!mine && <Badge label="From your analyst" color={C.purple}/>}
+                      {r.type === "framework-packet" && (
+                        r.finalizedAt
+                          ? <Badge label="Finalized ✓" color={C.greenText}/>
+                          : <Badge label="Draft — pending analyst review" color={C.amberText}/>
+                      )}
                     </div>
                     <div style={{color:C.textMut,fontSize:11.5,marginTop:3}}>
                       {new Date(r.createdAt).toLocaleString(undefined,{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})}
@@ -6503,6 +6610,13 @@ function ReportsSection({ hasFullReports = true }) {
                         borderRadius:7,color:C.accentText,fontSize:12.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
                       {busy===r.id ? "…" : "Download"}
                     </button>
+                    {r.type === "framework-packet" && (
+                      <button onClick={()=>doBundleDownload(r)} disabled={busy===`${r.id}-bundle`}
+                        style={{padding:"7px 15px",background:"none",border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.textSec,fontSize:12.5,fontWeight:600,cursor:busy===`${r.id}-bundle`?"wait":"pointer"}}>
+                        {busy===`${r.id}-bundle` ? "…" : "Download evidence (.zip)"}
+                      </button>
+                    )}
                     {mine && (
                       <button onClick={()=>setDeleteTarget(r)} disabled={busy===r.id}
                         style={{padding:"7px 12px",background:"none",border:`1px solid ${C.border}`,
@@ -7414,7 +7528,7 @@ function Dashboard({ assessment, results, onReset }) {
     trainingmgr: !hasTrainingFull ? lockedSections.trainingmgr : <TrainingProgramSection/>,
     // Same reasoning as `priorities` above — data-presence gated, not tier-gated.
     report:     results?.execReport?.executiveReport ? <ExecReportSection assessment={assessment} results={results}/> : lockedSections.report,
-    reports:    (!hasReports && !hasCompliance) ? lockedSections.reports : <ReportsSection hasFullReports={hasReports}/>,
+    reports:    (!hasReports && !hasCompliance) ? lockedSections.reports : <ReportsSection hasFullReports={hasReports} hasEvidenceAccess={hasEvidence}/>,
     library:    !hasPrograms ? lockedSections.library : <PolicyLibrarySection assessment={assessment}/>,
     billing:    <PlanBillingSection/>,
   };
@@ -14304,6 +14418,22 @@ function ClientReportsPanel({ clientId }) {
     finally { setBusy(null); }
   }
 
+  // Client-generated submission packets sit in the same list, already
+  // visible to the client — this certifies one as reviewed and safe to
+  // actually submit; it doesn't gate visibility (deliver() does that job for
+  // staff-authored types instead).
+  async function finalize(r) {
+    setBusy(r.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/reports/${r.id}/finalize`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Finalize failed.");
+      flash("Marked ready to submit.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
   async function doDownload(r) {
     setBusy(r.id); setError(null);
     try { await downloadReport(r); }
@@ -14369,11 +14499,19 @@ function ClientReportsPanel({ clientId }) {
                 <div style={{flex:"1 1 200px",minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                     <span style={{color:SOC.text,fontSize:13,fontWeight:600}}>{m.label}</span>
-                    <span style={{padding:"1px 7px",borderRadius:5,fontSize:9.5,fontWeight:700,
-                      background: delivered ? `${SOC.green}22` : `${SOC.amber}22`,
-                      color: delivered ? SOC.green : SOC.amber}}>
-                      {delivered ? "DELIVERED" : "DRAFT"}
-                    </span>
+                    {r.type === "framework-packet" ? (
+                      <span style={{padding:"1px 7px",borderRadius:5,fontSize:9.5,fontWeight:700,
+                        background: r.finalizedAt ? `${SOC.green}22` : `${SOC.amber}22`,
+                        color: r.finalizedAt ? SOC.green : SOC.amber}}>
+                        {r.finalizedAt ? "FINALIZED" : "DRAFT — CLIENT-GENERATED"}
+                      </span>
+                    ) : (
+                      <span style={{padding:"1px 7px",borderRadius:5,fontSize:9.5,fontWeight:700,
+                        background: delivered ? `${SOC.green}22` : `${SOC.amber}22`,
+                        color: delivered ? SOC.green : SOC.amber}}>
+                        {delivered ? "DELIVERED" : "DRAFT"}
+                      </span>
+                    )}
                   </div>
                   <div style={{color:SOC.textMut,fontSize:10.5,marginTop:2}}>
                     {new Date(r.createdAt).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
@@ -14386,7 +14524,14 @@ function ClientReportsPanel({ clientId }) {
                       borderRadius:6,color:SOC.cyan,fontSize:11.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
                     Download
                   </button>
-                  {!delivered && (
+                  {r.type === "framework-packet" && !r.finalizedAt && (
+                    <button onClick={()=>finalize(r)} disabled={busy===r.id}
+                      style={{padding:"6px 12px",background:`${SOC.green}15`,border:`1px solid ${SOC.green}44`,
+                        borderRadius:6,color:SOC.green,fontSize:11.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>
+                      Finalize ✓
+                    </button>
+                  )}
+                  {r.type !== "framework-packet" && !delivered && (
                     <button onClick={()=>deliver(r)} disabled={busy===r.id}
                       style={{padding:"6px 12px",background:`${SOC.green}15`,border:`1px solid ${SOC.green}44`,
                         borderRadius:6,color:SOC.green,fontSize:11.5,fontWeight:600,cursor:busy===r.id?"wait":"pointer"}}>

@@ -48,6 +48,67 @@ function checklistOf(assessment) {
   return assessment?.data?.checklist || assessment?.data?.securityChecklist || {};
 }
 
+// "Only the frameworks this client selected, capped to their plan's limit" —
+// the rule the walkthrough route enforces before showing a framework's
+// detail. Extracted so the submission-packet report builder
+// (submissionPacket.js) enforces the exact same rule rather than a second
+// copy that could drift from this one.
+export function checkFrameworkAccess(gate, clientId, frameworkDef, assessment) {
+  const selectedIds = Array.isArray(assessment?.data?.selectedFrameworks)
+    ? assessment.data.selectedFrameworks.map(f => f.id)
+    : null;
+  if (selectedIds && selectedIds.length > 0 && !selectedIds.includes(frameworkDef.id)) {
+    return { ok: false, status: 403, body: { error: "This framework wasn't selected for this assessment." } };
+  }
+  const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
+  if (selectedIds && !FOUNDATION_FRAMEWORK_IDS.has(frameworkDef.id)) {
+    const tierId = gate.tierOf(clientId);
+    const frameworkLimit = complianceFrameworkLimit(tierId);
+    if (frameworkLimit != null) {
+      const allowedAdditional = selectedIds
+        .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
+        .slice(0, frameworkLimit);
+      if (!allowedAdditional.includes(frameworkDef.id)) {
+        return {
+          ok: false, status: 402,
+          body: {
+            error: "This framework is beyond your plan's compliance-framework limit. Upgrade to view it.",
+            code: "UPGRADE_REQUIRED", capability: "complianceAccess", currentTier: tierId,
+          },
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+// Attach each requirement's latest non-rejected remediation attestation (if
+// any) as `.remediation` — badges "pending verification"/"verified" without a
+// second round-trip. Extracted for the same reason as checkFrameworkAccess
+// above: the submission-packet report builder needs the identical join.
+export function annotateWithAttestations(db, requirements, clientId, frameworkId) {
+  const attByReq = {};
+  for (const rec of (db.data.remediationAttestations || [])) {
+    if (rec.clientUserId !== clientId || rec.frameworkId !== frameworkId) continue;
+    if (rec.status === "rejected") continue;
+    const prev = attByReq[rec.requirementId];
+    if (!prev || new Date(rec.attestedAt) > new Date(prev.attestedAt)) attByReq[rec.requirementId] = rec;
+  }
+  if (Array.isArray(requirements)) {
+    for (const r of requirements) {
+      const rec = attByReq[r.id];
+      if (rec) {
+        r.remediation = {
+          id: rec.id, status: rec.status, note: rec.note,
+          evidenceId: rec.evidenceId, attestedAt: rec.attestedAt,
+          verifiedAt: rec.verifiedAt || null,
+        };
+      }
+    }
+  }
+  return requirements;
+}
+
 /**
  * Compliance summary for Mastermind's snapshot.
  * Read-only, compact: how each client stands against each framework.
@@ -225,35 +286,12 @@ export function registerComplianceRoutes(app, {
         note: "No assessment on file.",
       });
     }
-    // Same "only what they selected" rule as the overview — a client shouldn't
-    // be able to open a framework's detail walkthrough by guessing the id if
-    // they never selected it. Older assessments with no selectedFrameworks
-    // recorded fall through to the old, unrestricted behavior.
-    const selectedIds = Array.isArray(a.data?.selectedFrameworks)
-      ? a.data.selectedFrameworks.map(f => f.id)
-      : null;
-    if (selectedIds && selectedIds.length > 0 && !selectedIds.includes(def.id)) {
-      return res.status(403).json({ error: "This framework wasn't selected for this assessment." });
-    }
-    // Same tier-count cap as the overview — a client can't reach a framework
-    // beyond their plan's limit by opening it directly, even if they selected
-    // it at intake (e.g. they downgraded, or picked more than their plan allows).
-    const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
-    if (selectedIds && !FOUNDATION_FRAMEWORK_IDS.has(def.id)) {
-      const tierId = gate.tierOf(targetId);
-      const frameworkLimit = complianceFrameworkLimit(tierId);
-      if (frameworkLimit != null) {
-        const allowedAdditional = selectedIds
-          .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
-          .slice(0, frameworkLimit);
-        if (!allowedAdditional.includes(def.id)) {
-          return res.status(402).json({
-            error: "This framework is beyond your plan's compliance-framework limit. Upgrade to view it.",
-            code: "UPGRADE_REQUIRED", capability: "complianceAccess", currentTier: tierId,
-          });
-        }
-      }
-    }
+    // Same "only what they selected, capped to their plan's limit" rule as
+    // the overview — a client shouldn't be able to open a framework's detail
+    // walkthrough by guessing the id if they never selected it, or reach one
+    // beyond their plan's limit even if they selected it at intake.
+    const access = checkFrameworkAccess(gate, targetId, def, a);
+    if (!access.ok) return res.status(access.status).json(access.body);
     // evaluateWithAgent, not evaluateFramework: the walkthrough is exactly where
     // a client needs to see both sources on the control itself. Falls back to a
     // plain report when no agent is reporting — most clients won't have one, and
@@ -267,24 +305,8 @@ export function registerComplianceRoutes(app, {
     // Attach any client remediation attestation to its requirement so the
     // walkthrough can badge "pending verification" / "verified" without a
     // second round-trip. Latest non-rejected record per requirement wins.
-    const attByReq = {};
-    for (const rec of (db.data.remediationAttestations || [])) {
-      if (rec.clientUserId !== targetId || rec.frameworkId !== def.id) continue;
-      if (rec.status === "rejected") continue;
-      const prev = attByReq[rec.requirementId];
-      if (!prev || new Date(rec.attestedAt) > new Date(prev.attestedAt)) attByReq[rec.requirementId] = rec;
-    }
     if (Array.isArray(report?.requirements)) {
-      for (const r of report.requirements) {
-        const rec = attByReq[r.id];
-        if (rec) {
-          r.remediation = {
-            id: rec.id, status: rec.status, note: rec.note,
-            evidenceId: rec.evidenceId, attestedAt: rec.attestedAt,
-            verifiedAt: rec.verifiedAt || null,
-          };
-        }
-      }
+      annotateWithAttestations(db, report.requirements, targetId, def.id);
     }
 
     res.json({

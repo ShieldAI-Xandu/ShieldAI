@@ -29,9 +29,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { randomUUID } from "crypto";
+import fs from "fs/promises";
+import JSZip from "jszip";
 import { computePostureScore } from "./riskEngine.js";
 import { evaluateAllFrameworks } from "./complianceBridge.js";
 import { buildRemediationPlanData } from "./remediationPlan.js";
+import { buildSubmissionPacketData } from "./submissionPacket.js";
 import { hasCapability } from "./tiers.js";
 import { listVendors } from "./vendorRiskService.js";
 import { clientPhishingSummary } from "./phishingRoutes.js";
@@ -657,6 +660,10 @@ const DISCLAIMERS = {
     "This training-completion report reflects learner records and assignment status on file within ShieldAI as of the generation date. Completion and quiz scores are self-reported by the learner at the time each module was marked complete and are not independently proctored or verified. This document is a readiness aid for compliance, insurance, or legal review — not a certified attestation — and should be verified against your own personnel records before submission to a third party.",
   remediation:
     "This remediation plan is generated from the client's self-reported assessment answers and ShieldAI's deterministic control-mapping engines. Gaps and conflicts reflect the information on file at the time of generation. The remediation steps are AI-drafted advisory guidance produced by ShieldAI Mastermind, not a certification path or an audit opinion. Effort estimates and tooling suggestions are indicative only. Verify each step against your own environment and have a qualified assessor review before relying on this for certification or regulatory submission.",
+  frameworkPacketInsurance:
+    "This packet summarizes control status, remediation history, and evidence for the framework named above, for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI; they are not independently audited or verified by ShieldAI. Until a ShieldAI analyst has reviewed and finalized this packet, treat it as a draft. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
+  frameworkPacketRegulatory:
+    "This packet summarizes control status, remediation history, and evidence for the framework named above, for regulatory or audit submission. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI; they are not a certified audit or a formal attestation. Until a ShieldAI analyst has reviewed and finalized this packet, treat it as a draft. Have a qualified assessor or regulator's own reviewer confirm this before relying on it for certification or a regulatory filing.",
 };
 
 function frameworksTable(frameworks) {
@@ -1152,6 +1159,77 @@ function buildRemediationReport(d) {
   };
 }
 
+const PACKET_STATUS_LABEL = { compliant: "Met", partial: "Partial", gap: "Gap", unknown: "Not assessed" };
+const PACKET_STATUS_COLOR = { compliant: BRAND.green, partial: BRAND.amber, gap: BRAND.red, unknown: BRAND.muted };
+
+// 8) FRAMEWORK SUBMISSION PACKET — one framework's control status,
+// remediation attestation history, and itemized evidence (client self-serve,
+// its own dedicated route because it needs a frameworkId/purpose, not the
+// generic gatherReportData shape — same reasoning as remediation-plan above).
+function buildFrameworkPacketReport(d, purpose) {
+  const rows = d.requirements
+    .map((r) => {
+      const rem = r.remediation
+        ? `${r.remediation.status === "verified" ? "Verified" : r.remediation.status === "pending" ? "Pending verification" : "Attested"}${r.remediation.attestedAt ? ` (${fmtDate(r.remediation.attestedAt)})` : ""}`
+        : "—";
+      return `<tr>
+      <td style="font-family:monospace;">${esc(r.id)}</td>
+      <td><b>${esc(r.name)}</b>${r.text ? `<div class="meta">${esc(r.text)}</div>` : ""}</td>
+      <td><span style="color:${PACKET_STATUS_COLOR[r.status] || BRAND.muted};font-weight:700;">${esc(PACKET_STATUS_LABEL[r.status] || r.status)}</span></td>
+      <td>${esc(rem)}</td>
+      <td>${r.evidence.length || "—"}</td>
+    </tr>`;
+    })
+    .join("");
+
+  const evidenceRows = d.requirements
+    .flatMap((r) => r.evidence.map((e) => ({ ...e, requirementId: r.id, requirementName: r.name })))
+    .map(
+      (e) => `<tr>
+      <td>${esc(e.title || e.filename || "Evidence")}</td>
+      <td>${esc(e.requirementId)} — ${esc(e.requirementName)}</td>
+      <td>${e.uploadedAt ? fmtDate(e.uploadedAt) : "—"}</td>
+    </tr>`,
+    )
+    .join("");
+
+  const purposeLabel = purpose === "insurance" ? "Insurance Application" : "Regulatory / Audit Submission";
+
+  const body = `
+  <h2>Scope</h2>
+  <p><b>${esc(d.client.name)}</b>${d.client.industry ? ` · ${esc(d.client.industry)}` : ""}</p>
+  <p class="meta">Framework: <b>${esc(d.frameworkName)}</b>${d.frameworkCitation ? ` (${esc(d.frameworkCitation)})` : ""} · Assessed ${fmtDate(d.assessedAt)}</p>
+  <div>
+    ${kpi(`${d.posture.score}/100`, "Posture score")}
+    ${kpi(d.summary.compliant, "Met")}
+    ${kpi(d.summary.partial, "Partial")}
+    ${kpi(d.summary.gap, "Gap")}
+    ${kpi(pct(d.summary.compliancePct), "Compliant")}
+  </div>
+
+  <h2>Control status &amp; remediation history</h2>
+  <table class="content">
+    <tr><th>ID</th><th>Requirement</th><th>Status</th><th>Remediation</th><th>Evidence</th></tr>
+    ${rows}
+  </table>
+  <p class="meta">"Remediation" reflects a client attestation that a gap was fixed — "Verified" means a ShieldAI analyst confirmed it against the attached evidence; "Pending verification" means the client attested but an analyst hasn't reviewed it yet.</p>
+
+  <h2>Evidence on file</h2>
+  ${evidenceRows ? `<table class="content"><tr><th>Item</th><th>Requirement</th><th>Uploaded</th></tr>${evidenceRows}</table>` : `<div class="note">No evidence has been attached to this framework yet.</div>`}
+  <p class="meta">The underlying evidence files accompany this report as a separate ZIP download — file contents are not reproduced in this document.</p>`;
+
+  return {
+    filename: `ShieldAI_SubmissionPacket_${slug(d.frameworkName)}_${slug(d.client.name)}_${dateStamp()}.doc`,
+    html: wrapDoc({
+      title: `${d.frameworkName} Submission Packet`,
+      kicker: purposeLabel,
+      subtitle: `${d.client.name} · Prepared ${fmtDate(d.generatedAt)}`,
+      body,
+      disclaimer: purpose === "insurance" ? DISCLAIMERS.frameworkPacketInsurance : DISCLAIMERS.frameworkPacketRegulatory,
+    }),
+  };
+}
+
 function labelActor(role) {
   return (
     {
@@ -1184,11 +1262,13 @@ const BUILDERS = {
   training: (d) => buildTrainingReport(d),
 };
 
-// "remediation" is generated by its own AI-backed route (buildRemediationReport
-// consumes a different data shape and needs callClaudeText + aiLimiter), not via
-// BUILDERS / gatherReportData. It's listed here only so the type validates and
-// the list/download routes treat it as a client-owned self report.
-const CLIENT_SELF_TYPES = new Set(["status", "update", "remediation"]);
+// "remediation" and "framework-packet" are each generated by their own
+// dedicated route (buildRemediationReport needs callClaudeText + aiLimiter;
+// buildFrameworkPacketReport needs a frameworkId/purpose) — neither goes
+// through BUILDERS / gatherReportData. Both are listed here only so the type
+// validates and the list/download routes treat them as client-owned self
+// reports.
+const CLIENT_SELF_TYPES = new Set(["status", "update", "remediation", "framework-packet"]);
 const STAFF_TYPES = new Set(["compliance", "insurance", "legal", "training"]);
 export const REPORT_TYPES = [...CLIENT_SELF_TYPES, ...STAFF_TYPES];
 
@@ -1253,6 +1333,11 @@ export function registerReportRoutes(app, {
       return res
         .status(400)
         .json({ error: `type must be one of: ${REPORT_TYPES.join(", ")}` });
+    }
+    if (type === "framework-packet") {
+      return res.status(400).json({
+        error: "Generate a submission packet via POST /api/reports/framework-packet.",
+      });
     }
     if (type === "remediation") {
       return res.status(400).json({
@@ -1409,6 +1494,101 @@ export function registerReportRoutes(app, {
     },
   );
 
+  // ── Generate a framework submission packet (self-serve, deterministic) ──
+  // Its own route because it consumes a per-framework data shape
+  // (submissionPacket.js), not the generic gatherReportData. Gated on
+  // evidenceAccess (Growth+) rather than reportsAccess — the whole point of
+  // this report is itemized evidence, so the tier that unlocks real evidence
+  // tracking is the one that unlocks this.
+  app.post("/api/reports/framework-packet", requireAuth, gate.capability("evidenceAccess"), async (req, res) => {
+    const actor = uById(req.userId);
+    if (!actor) return res.status(404).json({ error: "User not found." });
+
+    const { frameworkId, purpose } = req.body || {};
+    if (!frameworkId) return res.status(400).json({ error: "frameworkId is required." });
+    const normalizedPurpose = purpose === "insurance" ? "insurance" : "regulatory";
+
+    let clientId = req.body?.clientId || actor.id;
+    if (!isStaff(actor) && clientId !== actor.id) {
+      return res
+        .status(403)
+        .json({ error: "You can only generate a submission packet for your own account." });
+    }
+    if (!canAccessClient(actor, clientId)) {
+      return res.status(403).json({ error: "Not permitted for this client." });
+    }
+
+    const data = buildSubmissionPacketData(db, gate, clientId, frameworkId);
+    if (data.error) return res.status(data.error.status).json(data.error.body);
+
+    const built = buildFrameworkPacketReport(data, normalizedPurpose);
+    const record = {
+      id: randomUUID(),
+      clientId,
+      type: "framework-packet",
+      frameworkId: data.frameworkId,
+      purpose: normalizedPurpose,
+      evidenceIds: data.evidenceIds,
+      title: built.filename.replace(/\.doc$/, "").replace(/_/g, " "),
+      filename: built.filename,
+      html: built.html,
+      createdBy: actor.id,
+      createdByRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+      createdAt: nowIso(),
+      // Visible to the client immediately — they generated it. "Finalized" is
+      // a separate concept (see /finalize below): a staff sign-off that the
+      // packet is reviewed and safe to actually submit, not a visibility gate.
+      deliveredAt: actor.id === clientId ? nowIso() : null,
+      finalizedAt: null,
+      finalizedBy: null,
+    };
+    db.data.reports.push(record);
+
+    if (logClientAction) {
+      logClientAction(db, {
+        clientUserId: clientId,
+        actorUserId: actor.id,
+        actorRole: record.createdByRole,
+        action: "generated_report",
+        detail: `Generated ${data.frameworkName} submission packet (${normalizedPurpose}) "${record.filename}".`,
+      });
+    }
+    await db.write();
+
+    res.status(201).json(publicReport(record));
+  });
+
+  // ── Finalize a submission packet: staff sign-off that it's safe to submit ──
+  // The client can already see and download their own draft the moment they
+  // generate it (see above) — finalizing doesn't change that. It just removes
+  // the DRAFT banner from the downloaded document and flips the badge the
+  // client sees, certifying a ShieldAI analyst reviewed it first.
+  app.post("/api/reports/:id/finalize", requireAuth, gate.capability("reportsAccess"), async (req, res) => {
+    const actor = uById(req.userId);
+    if (!isStaff(actor)) return res.status(403).json({ error: "Only staff can finalize a submission packet." });
+
+    const r = (db.data.reports || []).find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Report not found." });
+    if (r.type !== "framework-packet") return res.status(400).json({ error: "Only submission packets can be finalized." });
+    if (!canAccessClient(actor, r.clientId)) return res.status(403).json({ error: "Not permitted for this client." });
+
+    if (!r.finalizedAt) {
+      r.finalizedAt = nowIso();
+      r.finalizedBy = actor.id;
+      if (logClientAction) {
+        logClientAction(db, {
+          clientUserId: r.clientId,
+          actorUserId: actor.id,
+          actorRole: actor.isAdmin ? "admin" : "analyst",
+          action: "finalized_report",
+          detail: `Finalized submission packet "${r.filename}" as ready to submit.`,
+        });
+      }
+      await db.write();
+    }
+    res.json(publicReport(r));
+  });
+
   // ── List reports ──
   // Staff: pass ?clientId= to scope to one client; otherwise all authorized.
   // Client: only own delivered reports (and own self-generated ones).
@@ -1435,10 +1615,11 @@ export function registerReportRoutes(app, {
       list = list.filter(
         (r) => r.clientId === actor.id && (r.deliveredAt || r.createdBy === actor.id),
       );
-      // A client without reportsAccess reached this via complianceAccess — they
-      // may only see the self-serve remediation plan, not other report types.
+      // A client without reportsAccess reached this via complianceAccess or
+      // evidenceAccess — they may only see the specific self-serve type their
+      // capability grants (remediation / framework-packet), not every type.
       if (!hasCapability(gate.tierOf(actor.id), "reportsAccess")) {
-        list = list.filter((r) => r.type === "remediation");
+        list = list.filter((r) => allowedWithoutReportsAccess(actor, r.type));
       }
     }
 
@@ -1475,6 +1656,27 @@ export function registerReportRoutes(app, {
     res.json(publicReport(r));
   });
 
+  // A framework-packet a staff member hasn't finalized yet is a draft — make
+  // that unmistakable the moment anyone actually opens the document, not just
+  // in the app's badge. No stored second copy: the banner is spliced in at
+  // serve time and disappears the instant finalizedAt is set, with nothing to
+  // regenerate.
+  function withDraftBanner(html) {
+    const banner = `<div style="background:#FFF4E5;border:2px solid ${BRAND.amber};border-radius:8px;padding:10px 14px;margin-bottom:16pt;font-weight:700;color:#7A4A00;">⚠ DRAFT — not yet reviewed by a ShieldAI analyst. Do not submit to an insurer or regulator until this has been finalized.</div>`;
+    return html.replace("<body>", `<body>${banner}`);
+  }
+
+  // Non-staff callers who lack reportsAccess still reach these two routes via
+  // reportsOrCompliance (complianceAccess or evidenceAccess is enough) — but
+  // they may only touch the specific self-serve type their capability grants,
+  // same principle as the remediation-plan carve-out below.
+  function allowedWithoutReportsAccess(actor, type) {
+    const tier = gate.tierOf(actor.id);
+    if (type === "remediation") return true;
+    if (type === "framework-packet") return hasCapability(tier, "evidenceAccess");
+    return false;
+  }
+
   // ── Download a report's document ──
   // Returns the branded HTML with a .doc filename so it opens in Word.
   app.get("/api/reports/:id/download", requireAuth, reportsOrCompliance, (req, res) => {
@@ -1494,10 +1696,9 @@ export function registerReportRoutes(app, {
         r.clientId === actor.id && (r.deliveredAt || r.createdBy === actor.id);
       if (!ownAndVisible)
         return res.status(403).json({ error: "Not permitted." });
-      // Reached via complianceAccess without reportsAccess → remediation only.
       if (
-        r.type !== "remediation" &&
-        !hasCapability(gate.tierOf(actor.id), "reportsAccess")
+        !hasCapability(gate.tierOf(actor.id), "reportsAccess") &&
+        !allowedWithoutReportsAccess(actor, r.type)
       ) {
         return res.status(402).json({
           error: "Your plan doesn't include this report type.",
@@ -1507,12 +1708,78 @@ export function registerReportRoutes(app, {
       }
     }
 
+    const html = r.type === "framework-packet" && !r.finalizedAt ? withDraftBanner(r.html) : r.html;
     res.setHeader("Content-Type", "application/msword; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${r.filename}"`,
     );
-    res.send(r.html);
+    res.send(html);
+  });
+
+  // ── Download a submission packet's evidence ZIP ──
+  // The report document above never reproduces evidence file contents (no
+  // outside recipient has a ShieldAI login to fetch them by link) — this is
+  // where the actual files travel, bundled with the report doc itself and a
+  // manifest, ready to attach to one application or filing.
+  app.get("/api/reports/:id/bundle.zip", requireAuth, reportsOrCompliance, async (req, res) => {
+    const actor = uById(req.userId);
+    if (!actor) return res.status(404).json({ error: "User not found." });
+
+    const r = (db.data.reports || []).find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Report not found." });
+    if (r.type !== "framework-packet")
+      return res.status(400).json({ error: "Only submission packets have an evidence bundle." });
+
+    if (isStaff(actor)) {
+      if (!canAccessClient(actor, r.clientId))
+        return res.status(403).json({ error: "Not permitted for this client." });
+    } else {
+      const ownAndVisible = r.clientId === actor.id && (r.deliveredAt || r.createdBy === actor.id);
+      if (!ownAndVisible) return res.status(403).json({ error: "Not permitted." });
+      if (!hasCapability(gate.tierOf(actor.id), "evidenceAccess")) {
+        return res.status(402).json({
+          error: "Your plan doesn't include evidence bundling.",
+          code: "UPGRADE_REQUIRED",
+          capability: "evidenceAccess",
+        });
+      }
+    }
+
+    const zip = new JSZip();
+    const html = !r.finalizedAt ? withDraftBanner(r.html) : r.html;
+    zip.file(r.filename, html);
+
+    const manifestLines = [`ShieldAI submission packet — ${r.filename}`, `Generated: ${r.createdAt}`, ""];
+    for (const evidenceId of r.evidenceIds || []) {
+      const ev = (db.data.evidence || []).find((e) => e.id === evidenceId);
+      if (!ev) {
+        manifestLines.push(`- [missing] evidence ${evidenceId} (no longer on file)`);
+        continue;
+      }
+      if (!ev.storagePath) {
+        manifestLines.push(`- [note only, no file] ${ev.title || ev.id}`);
+        continue;
+      }
+      try {
+        const buf = await fs.readFile(ev.storagePath);
+        // Evidence filenames aren't unique across controls; prefix with the
+        // evidence id so two same-named uploads never collide in the zip.
+        zip.file(`evidence/${ev.id}_${ev.filename || "evidence"}`, buf);
+        manifestLines.push(`- evidence/${ev.id}_${ev.filename || "evidence"} — ${ev.title || ""}`);
+      } catch {
+        manifestLines.push(`- [missing] ${ev.title || ev.id} (file no longer available on disk)`);
+      }
+    }
+    zip.file("manifest.txt", manifestLines.join("\n"));
+
+    const zipBuf = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${r.filename.replace(/\.doc$/, "")}_bundle.zip"`,
+    );
+    res.send(zipBuf);
   });
 
   // ── Delete a report (staff, or the client for its own self-made report) ──
