@@ -39,6 +39,8 @@ import { PIPELINE } from "./generators.js";
 import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerDirectoryRoutes } from "./directoryRoutes.js";
+import { registerCloudRoutes } from "./cloudRoutes.js";
+import { registerTrustRoutes } from "./trustRoutes.js";
 import { registerProductivityRoutes } from "./productivityRoutes.js";
 import { registerTaskTrackerRoutes } from "./taskTrackerRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
@@ -1833,6 +1835,7 @@ registerDemoRoutes(app, db, { redeemLimiter: demoCodeLimiter });
 registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter });
 registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
+registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, express });
 registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
 registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction });
@@ -1857,6 +1860,7 @@ registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate, callClaudeText, aiLimiter });
+registerTrustRoutes(app, { db, requireAuth, gate });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

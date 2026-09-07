@@ -6628,6 +6628,175 @@ function ChatMarkdown({ text, color, mutedColor }) {
 //  Clients self-generate Status and Update reports, and see/download any
 //  Compliance / Insurance / Legal reports their analyst has delivered.
 // ─────────────────────────────────────────────────────────────
+// Self-contained — fetches its own data and checks its own capability via
+// context, so ReportsSection doesn't need a new prop threaded through just
+// for this one card. Renders nothing below Growth, same as a LockedFeature
+// tab would, but as a quiet omission rather than a teaser — this is one
+// card inside an already-visible screen, not a whole gated tab.
+function TrustPageCard() {
+  const { can } = useCapabilities();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [draftShown, setDraftShown] = useState(new Set());
+
+  const hasTrustPage = can("trustPage");
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/trust/mine`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load your trust page.");
+      setData(d);
+      setDraftShown(new Set(d.frameworksShown || []));
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { if (hasTrustPage) load(); else setLoading(false); }, [hasTrustPage]);
+
+  function flash(msg, tone = C.greenText) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
+
+  function toggleFramework(id) {
+    setDraftShown(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function save(nextEnabled) {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/trust/mine`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: nextEnabled, frameworksShown: [...draftShown] }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save your trust page.");
+      setData(d);
+      flash(nextEnabled ? "Trust page is live." : "Trust page turned off.");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function regenerate() {
+    setConfirmRegen(false);
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/trust/mine/regenerate`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not regenerate the link.");
+      setData(d);
+      flash("Link regenerated — the old link no longer works.");
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  function copyLink() {
+    const url = `${window.location.origin}/trust/${data.token}`;
+    navigator.clipboard?.writeText(url).then(() => flash("Link copied.")).catch(() => flash("Could not copy — copy it from the field instead.", C.amberText));
+  }
+
+  if (!hasTrustPage || loading) return null;
+
+  const publicUrl = data?.token ? `${window.location.origin}/trust/${data.token}` : null;
+
+  return (
+    <Card style={{padding:"18px 20px",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+        <span style={{fontSize:22}}>🌐</span>
+        <span style={{color:C.text,fontWeight:700,fontSize:15}}>Trust Page</span>
+        {data?.enabled && <Badge label="Live" color={C.greenText}/>}
+      </div>
+      <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.55,margin:"0 0 14px"}}>
+        A public, read-only page you can share with prospects or customers showing your security
+        posture and the compliance frameworks you choose — no login required to view it, and it
+        never shows anything more specific than an overall score and readiness percentage.
+      </p>
+
+      {toast && (
+        <div style={{marginBottom:12,padding:"9px 12px",borderRadius:8,fontSize:12.5,
+          background:`${toast.tone}18`,border:`1px solid ${toast.tone}44`,color:toast.tone}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:12,color:C.redText,fontSize:13}}>{error}</div>}
+
+      {data?.availableFrameworks?.length > 0 ? (
+        <div style={{marginBottom:14}}>
+          <label style={{display:"block",color:C.textMut,fontSize:11,marginBottom:6}}>Show these frameworks</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {data.availableFrameworks.map(f => (
+              <button key={f.id} onClick={()=>toggleFramework(f.id)}
+                style={{padding:"6px 12px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:draftShown.has(f.id)?`${C.accent}22`:C.surface,
+                  border:`1px solid ${draftShown.has(f.id)?C.accent+"66":C.border}`,
+                  color:draftShown.has(f.id)?C.accentText:C.textSec}}>
+                {f.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p style={{color:C.textMut,fontSize:12.5,margin:"0 0 14px"}}>
+          Select at least one compliance framework on your assessment to include it here — your
+          overall posture score can still be shown on its own.
+        </p>
+      )}
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+        <button onClick={()=>save(!data?.enabled)} disabled={busy}
+          style={{padding:"9px 18px",background:busy?C.border:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:busy?C.textMut:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+            cursor:busy?"wait":"pointer"}}>
+          {busy ? "Saving…" : data?.enabled ? "Turn off" : "Turn on"}
+        </button>
+        {data?.enabled && (
+          <button onClick={()=>save(true)} disabled={busy}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Save framework selection
+          </button>
+        )}
+        {publicUrl && (
+          <>
+            <input readOnly value={publicUrl} onClick={e=>e.target.select()}
+              style={{flex:"1 1 220px",minWidth:180,padding:"8px 10px",background:C.surface,
+                border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,fontSize:12.5}}/>
+            <button onClick={copyLink}
+              style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.text,fontSize:12.5,fontWeight:600,cursor:"pointer"}}>
+              Copy
+            </button>
+            <button onClick={()=>setConfirmRegen(true)} disabled={busy}
+              style={{padding:"8px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:8,color:C.amberText,fontSize:12.5,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Regenerate link
+            </button>
+          </>
+        )}
+      </div>
+      {data?.enabled && (
+        <div style={{marginTop:10,fontSize:11.5,color:C.textMut}}>
+          {data.viewCount || 0} view{data.viewCount === 1 ? "" : "s"}
+          {data.lastViewedAt ? ` · last viewed ${timeAgo(data.lastViewedAt)}` : ""}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmRegen}
+        onClose={()=>setConfirmRegen(false)}
+        onConfirm={regenerate}
+        title="Regenerate this link?"
+        message="Anyone with the current link — including a prospect you already sent it to — will no longer be able to view the page. You'll need to share the new link."
+        confirmLabel="Regenerate"
+        danger
+      />
+    </Card>
+  );
+}
+
 function ReportsSection({ hasFullReports = true, hasEvidenceAccess = false }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6830,6 +6999,8 @@ function ReportsSection({ hasFullReports = true, hasEvidenceAccess = false }) {
           </button>
         </Card>
       )}
+
+      <TrustPageCard/>
 
       {error && <div style={{margin:"12px 0",color:C.redText,fontSize:13}}>{error}</div>}
 
@@ -8721,6 +8892,115 @@ function PhishRevealPage({ token }) {
         <div style={{marginTop:24,textAlign:"center",fontSize:11,color:C.textMut}}>
           Powered by ShieldAI
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Public, shareable "trust page" — a client's own prospects/customers land
+// here with no ShieldAI login, via a link the client shares themselves. See
+// trustRoutes.js's header for exactly what's shown and why (deliberately
+// trimmed — overall posture score/level and per-framework readiness only,
+// never a control-level or vulnerability-specific detail). White-labeled
+// using the client's own branding, not ShieldAI's.
+function TrustPage({ token }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/trust/${encodeURIComponent(token)}`);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "This page isn't available.");
+        setData(d);
+      } catch (e) { setError(e.message); }
+      finally { setLoading(false); }
+    })();
+  }, [token]);
+
+  const accent = data?.branding?.accentColor || C.accent;
+  // The DISCLAIMER names whose posture this is — the client's own company
+  // name (data.companyName), never data.branding.companyName, which is the
+  // reseller/platform's own white-label name (e.g. an MSP's brand), a
+  // different thing entirely.
+  const disclaimerName = data?.companyName || "This company";
+
+  const levelColor = (level) => {
+    if (level === "Strong") return C.green;
+    if (level === "Moderate") return C.accent;
+    if (level === "Developing") return C.amber;
+    return C.red;
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:FONT_BODY,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{maxWidth:640,width:"100%"}}>
+        {loading ? (
+          <div style={{display:"flex",justifyContent:"center"}}><Spinner/></div>
+        ) : error ? (
+          <div style={{textAlign:"center",color:C.textSec,fontSize:14,padding:"40px 20px"}}>
+            <div style={{fontSize:32,marginBottom:12}}>🔒</div>
+            {error}
+          </div>
+        ) : (
+          <>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"32px 30px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+                {data.branding?.logoUrl ? (
+                  <img src={data.branding.logoUrl} alt="" style={{height:36,maxWidth:120,objectFit:"contain"}}/>
+                ) : (
+                  <div style={{fontSize:28}}>🛡️</div>
+                )}
+                <div>
+                  <div style={{fontFamily:FONT_HEADING,fontSize:20,fontWeight:800,color:C.text}}>{safeText(data.companyName)}</div>
+                  <div style={{fontSize:12,color:C.textMut}}>Security &amp; compliance posture{data.industry ? ` · ${safeText(data.industry)}` : ""}</div>
+                </div>
+              </div>
+
+              {data.posture && (
+                <div style={{display:"flex",alignItems:"center",gap:18,padding:"18px 20px",
+                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:20}}>
+                  <div style={{fontSize:34,fontWeight:800,color:accent,fontFamily:FONT_HEADING}}>{data.posture.score}</div>
+                  <div>
+                    <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,fontWeight:700,textTransform:"uppercase"}}>Security posture</div>
+                    <Badge label={data.posture.level} color={levelColor(data.posture.level)}/>
+                  </div>
+                </div>
+              )}
+
+              {data.frameworks?.length > 0 && (
+                <>
+                  <div style={{fontSize:11,color:C.textMut,letterSpacing:0.5,fontWeight:700,textTransform:"uppercase",marginBottom:10}}>
+                    Compliance frameworks
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {data.frameworks.map(f => (
+                      <div key={f.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                        padding:"11px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+                        <span style={{fontSize:13.5,color:C.text,fontWeight:600}}>{safeText(f.name)}</span>
+                        {f.notControlMapped || f.compliancePct == null ? (
+                          <Badge label="In progress" color={C.textMut}/>
+                        ) : (
+                          <Badge label={`${f.compliancePct}% addressed`} color={f.compliancePct >= 80 ? C.green : f.compliancePct >= 50 ? C.amber : C.red}/>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {data.updatedAt && (
+                <div style={{fontSize:11,color:C.textMut,marginTop:20}}>Last updated {timeAgo(data.updatedAt)}</div>
+              )}
+            </div>
+            <div style={{marginTop:20,textAlign:"center",fontSize:11,color:C.textMut}}>
+              This page reflects {safeText(disclaimerName)}'s self-reported security posture and is not an independent audit or certification.
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -18270,6 +18550,318 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  CLOUD INTEGRATIONS — AWS, Azure
+//  (pull-based cloud-resource posture reads: IAM/MFA hygiene, public
+//  storage exposure, wide-open network rules, audit-logging coverage.
+//  Both providers connect via a pasted read-only credential, not OAuth —
+//  see cloudAdapters.js's header for why.)
+// ─────────────────────────────────────────────────────────────
+
+const CLOUD_PROVIDER_OPTIONS = [
+  { id: "aws", label: "AWS" },
+  { id: "azure", label: "Azure" },
+];
+
+const CLOUD_SETUP_NOTES = {
+  aws: "Create an IAM user with AWS's own managed \"SecurityAudit\" policy attached, then generate an access key for it — that policy is read-only by AWS's design. ShieldAI only ever makes read calls with it.",
+  azure: "Create an Entra ID app registration (a service principal), then grant it the built-in \"Reader\" role at your subscription scope — that role is read-only by Azure's design. ShieldAI only ever makes read calls with it.",
+};
+
+function AddCloudConnectionModal({ onClose }) {
+  const [provider, setProvider] = useState("aws");
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+  const [label, setLabel] = useState("");
+  const [accessKeyId, setAccessKeyId] = useState("");
+  const [secretAccessKey, setSecretAccessKey] = useState("");
+  const [region, setRegion] = useState("");
+  const [tenantId, setTenantId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [subscriptionId, setSubscriptionId] = useState("");
+
+  async function connect() {
+    const body = provider === "aws"
+      ? { label: label.trim() || "AWS", accessKeyId: accessKeyId.trim(), secretAccessKey: secretAccessKey.trim(), region: region.trim() || undefined }
+      : { label: label.trim() || "Azure", tenantId: tenantId.trim(), clientId: clientId.trim(), clientSecret: clientSecret.trim(), subscriptionId: subscriptionId.trim() };
+    const missing = provider === "aws"
+      ? !body.accessKeyId || !body.secretAccessKey
+      : !body.tenantId || !body.clientId || !body.clientSecret || !body.subscriptionId;
+    if (missing) { setError("All fields (except the AWS region) are required."); return; }
+
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/cloud/connect/${provider}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Could not connect to ${CLOUD_PROVIDER_OPTIONS.find(p=>p.id===provider)?.label}.`);
+      onClose(true);
+    } catch (e) { setError(e.message); } finally { setConnecting(false); }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={()=>onClose(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:560,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect Cloud Infrastructure</h2>
+          <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+          Read-only, always. ShieldAI never changes anything in your cloud account — it only reads
+          IAM/MFA hygiene, storage exposure, network rules, and audit-logging status to surface as
+          recommendations.
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Provider</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {CLOUD_PROVIDER_OPTIONS.map(p=>(
+              <button key={p.id} onClick={()=>{ setProvider(p.id); setError(null); }}
+                style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                  background:provider===p.id?`${C.accent}22`:C.surface,
+                  border:`1px solid ${provider===p.id?C.accent+"66":C.border}`,
+                  color:provider===p.id?C.accentText:C.textSec}}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+          border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+          {CLOUD_SETUP_NOTES[provider]}
+        </div>
+
+        <div style={{marginBottom:12}}>
+          <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
+          <input value={label} onChange={e=>setLabel(e.target.value)} placeholder={provider === "aws" ? "e.g. Production AWS account" : "e.g. Production Azure subscription"}
+            style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+        </div>
+
+        {provider === "aws" ? (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Access Key ID</label>
+              <input value={accessKeyId} onChange={e=>setAccessKeyId(e.target.value)} placeholder="AKIA…"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Secret Access Key</label>
+              <input type="password" value={secretAccessKey} onChange={e=>setSecretAccessKey(e.target.value)} placeholder="Paste your secret access key"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Region <span style={{fontWeight:400,color:C.textMut}}>(optional — defaults to us-east-1)</span></label>
+              <input value={region} onChange={e=>setRegion(e.target.value)} placeholder="us-east-1"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Tenant ID</label>
+              <input value={tenantId} onChange={e=>setTenantId(e.target.value)} placeholder="Directory (tenant) ID"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Client (Application) ID</label>
+              <input value={clientId} onChange={e=>setClientId(e.target.value)} placeholder="Application (client) ID"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Client Secret</label>
+              <input type="password" value={clientSecret} onChange={e=>setClientSecret(e.target.value)} placeholder="Paste your client secret value"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Subscription ID</label>
+              <input value={subscriptionId} onChange={e=>setSubscriptionId(e.target.value)} placeholder="Azure subscription ID"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+          </>
+        )}
+
+        {error && <div style={{marginBottom:12,color:C.redText,fontSize:13}}>{error}</div>}
+        <button onClick={connect} disabled={connecting}
+          style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:"#04121F",border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+            cursor:connecting?"wait":"pointer"}}>
+          {connecting ? "Connecting…" : `Connect ${CLOUD_PROVIDER_OPTIONS.find(p=>p.id===provider)?.label}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CloudConnectionDetail({ connectionId, onBack }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/cloud/${connectionId}`);
+      if (!res.ok) throw new Error("Could not load this connection.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [connectionId]);
+
+  function flash(msg, tone = C.greenText) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function sync() {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/cloud/${connectionId}/sync`, { method: "POST" });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Sync failed.");
+      flash(`Synced — ${result.findingCount} signal(s), ${result.draftsCreated} new recommendation(s) drafted.`);
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function revoke() {
+    setConfirmRevoke(false);
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/cloud/${connectionId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    setConfirmRemove(false);
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/cloud/${connectionId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !data) return <div style={{padding:24,color:C.redText}}>{error}</div>;
+
+  const c = data;
+  const providerLabel = CLOUD_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+  const summary = c.lastSyncSummary;
+  const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
+  const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status === "active" && (
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:14,color:C.redText,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+              <Badge label={statusLabel} color={statusColor}/>
+            </div>
+            <div style={{color:C.textSec,fontSize:13}}>
+              {providerLabel} · {c.accountLabel} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
+            </div>
+          </div>
+          <button onClick={sync} disabled={busy || c.status === "revoked"}
+            style={{padding:"9px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+              cursor:(busy||c.status==="revoked")?"not-allowed":"pointer",opacity:c.status==="revoked"?0.5:1}}>
+            {busy ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      </Card>
+
+      <SectionLabel text="Posture signals"/>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {summary?.findings?.length > 0 ? summary.findings.map(f=>{
+          const sm = SEV_META[f.severity] || SEV_META.info;
+          return (
+            <Card key={f.externalId} style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <Badge label={sm.label} color={sm.color}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(f.title)}</div>
+                  {f.message && <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{safeText(f.message)}</div>}
+                </div>
+              </div>
+            </Card>
+          );
+        }) : (
+          <div style={{color:C.textMut,fontSize:13}}>
+            {c.status === "revoked" ? "This connection is revoked." : 'Not synced yet — click "Sync now" to pull posture data.'}
+          </div>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message="ShieldAI will stop using the stored credential. Rotate or delete the underlying access key/secret in your cloud account too, if you're removing access entirely."
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeConnection}
+        title="Remove this connection?"
+        message="Its finding history will be deleted. This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
+    </div>
+  );
+}
+
 const PRODUCTIVITY_PROVIDER_OPTIONS = [
   { id: "slack", label: "Slack", kind: "oauth" },
   { id: "teams", label: "Microsoft Teams", kind: "webhook" },
@@ -19012,6 +19604,7 @@ function IntegrationsScreen({ onBack }) {
   const [productivityConnections, setProductivityConnections] = useState([]);
   const [taskTrackerConnections, setTaskTrackerConnections] = useState([]);
   const [schedulingConnections, setSchedulingConnections] = useState([]);
+  const [cloudConnections, setCloudConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -19019,27 +19612,30 @@ function IntegrationsScreen({ onBack }) {
   const [showAddDirectory, setShowAddDirectory] = useState(false);
   const [showAddProductivity, setShowAddProductivity] = useState(false);
   const [showAddTaskTracker, setShowAddTaskTracker] = useState(false);
-  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker"|"scheduling", id }
+  const [showAddCloud, setShowAddCloud] = useState(false);
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker"|"scheduling"|"cloud", id }
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [wRes, dRes, pRes, tRes, sRes] = await Promise.all([
+      const [wRes, dRes, pRes, tRes, sRes, cRes] = await Promise.all([
         authFetch(`${API_BASE}/api/integrations`),
         authFetch(`${API_BASE}/api/directory`),
         authFetch(`${API_BASE}/api/productivity`),
         authFetch(`${API_BASE}/api/tasktracker`),
         authFetch(`${API_BASE}/api/scheduling`),
+        authFetch(`${API_BASE}/api/cloud`),
       ]);
       if (!wRes.ok) throw new Error("Could not load integrations.");
       setIntegrations(await wRes.json());
-      // Directory/productivity/task-tracker/scheduling connections are newer,
-      // tier-gated endpoints — don't let a 402/404 on any of them block the
-      // webhook list from rendering.
+      // Directory/productivity/task-tracker/scheduling/cloud connections are
+      // newer, tier-gated endpoints — don't let a 402/404 on any of them
+      // block the webhook list from rendering.
       setDirectoryConnections(dRes.ok ? await dRes.json() : []);
       setProductivityConnections(pRes.ok ? await pRes.json() : []);
       setTaskTrackerConnections(tRes.ok ? await tRes.json() : []);
       setSchedulingConnections(sRes.ok ? await sRes.json() : []);
+      setCloudConnections(cRes.ok ? await cRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -19125,6 +19721,13 @@ function IntegrationsScreen({ onBack }) {
       </div>
     );
   }
+  if (selected?.kind === "cloud") {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <CloudConnectionDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
 
   const items = [
     ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
@@ -19132,6 +19735,7 @@ function IntegrationsScreen({ onBack }) {
     ...productivityConnections.map(c => ({ kind: "productivity", id: c.id, sortAt: c.lastNotifiedAt || c.connectedAt })),
     ...taskTrackerConnections.map(c => ({ kind: "tasktracker", id: c.id, sortAt: c.connectedAt })),
     ...schedulingConnections.map(c => ({ kind: "scheduling", id: c.id, sortAt: c.connectedAt })),
+    ...cloudConnections.map(c => ({ kind: "cloud", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
   ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
 
   return (
@@ -19140,6 +19744,7 @@ function IntegrationsScreen({ onBack }) {
       {showAddDirectory && <AddDirectoryConnectionModal onClose={(didConnect)=>{ setShowAddDirectory(false); if (didConnect) load(); }}/>}
       {showAddProductivity && <AddProductivityConnectionModal onClose={(didConnect)=>{ setShowAddProductivity(false); if (didConnect) load(); }}/>}
       {showAddTaskTracker && <AddTaskTrackerConnectionModal onClose={(didConnect)=>{ setShowAddTaskTracker(false); if (didConnect) load(); }}/>}
+      {showAddCloud && <AddCloudConnectionModal onClose={(didConnect)=>{ setShowAddCloud(false); if (didConnect) load(); }}/>}
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
         <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
@@ -19153,6 +19758,11 @@ function IntegrationsScreen({ onBack }) {
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
             + Connect Directory
+          </button>
+          <button onClick={()=>setShowAddCloud(true)}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Connect Cloud
           </button>
           <button onClick={()=>setShowAddTaskTracker(true)}
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
@@ -19168,11 +19778,12 @@ function IntegrationsScreen({ onBack }) {
       </div>
       <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
         Connect a vulnerability scanner/EDR/SIEM's outbound webhook, a directory (Microsoft 365,
-        Google Workspace, Okta, Zoom), a chat tool (Slack, Teams), or a task tracker (Jira, Asana,
-        Trello) to feed real findings into ShieldAI, get notified about new security work, and sync
-        remediation tasks. Read-only where it matters — ShieldAI never changes anything on your
-        systems or in your directory, only ever posts messages to your chat tool, and only ever
-        creates the exact tickets you send to your tracker.
+        Google Workspace, Okta, Zoom), cloud infrastructure (AWS, Azure), a chat tool (Slack, Teams),
+        or a task tracker (Jira, Asana, Trello) to feed real findings into ShieldAI, get notified
+        about new security work, and sync remediation tasks. Read-only where it matters — ShieldAI
+        never changes anything on your systems, in your directory, or in your cloud account, only
+        ever posts messages to your chat tool, and only ever creates the exact tickets you send to
+        your tracker.
       </p>
 
       {notice && (
@@ -19200,6 +19811,11 @@ function IntegrationsScreen({ onBack }) {
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
               + Connect Directory
+            </button>
+            <button onClick={()=>setShowAddCloud(true)}
+              style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Connect Cloud
             </button>
             <button onClick={()=>setShowAddTaskTracker(true)}
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
@@ -19299,6 +19915,29 @@ function IntegrationsScreen({ onBack }) {
                       </div>
                       <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
                         {providerLabel} · connected {timeAgo(c.connectedAt)}
+                      </div>
+                    </div>
+                    <span style={{color:C.accentText,fontSize:12,fontWeight:600}}>View →</span>
+                  </div>
+                </Card>
+              );
+            }
+            if (item.kind === "cloud") {
+              const c = cloudConnections.find(x => x.id === item.id);
+              const providerLabel = CLOUD_PROVIDER_OPTIONS.find(p=>p.id===c.provider)?.label || c.provider;
+              const statusColor = c.status === "active" ? C.green : c.status === "error" ? C.amber : C.textMut;
+              const statusLabel = c.status === "active" ? "Connected" : c.status === "error" ? "Needs reconnect" : "Revoked";
+              return (
+                <Card key={`c:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"cloud", id:c.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>☁️</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                        <Badge label={statusLabel} color={statusColor}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {providerLabel} · {c.accountLabel} · last synced {c.lastSyncAt ? timeAgo(c.lastSyncAt) : "never"}
                       </div>
                     </div>
                     <span style={{color:C.accentText,fontSize:12,fontWeight:600}}>View →</span>
@@ -21066,6 +21705,13 @@ export default function ShieldAI() {
   const phishMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/phish\/([^/?#]+)/);
   if (phishMatch) {
     return <PhishRevealPage token={decodeURIComponent(phishMatch[1])}/>;
+  }
+
+  // Public trust page — a client's own prospect/customer, no login, no app
+  // chrome. Same standalone-page scaffold as training/phishing above.
+  const trustMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/trust\/([^/?#]+)/);
+  if (trustMatch) {
+    return <TrustPage token={decodeURIComponent(trustMatch[1])}/>;
   }
 
   // Password-reset link — the token alone authorizes this, regardless of any

@@ -137,7 +137,7 @@ export const HELP_MANUAL = [
 
   {
     id: "integrations",
-    title: "Security Tool, Directory & Productivity Integrations",
+    title: "Security Tool, Directory, Cloud & Productivity Integrations",
     icon: "🔌",
     tier: "Growth and above (3 connections on Growth, 10 on Guided, unlimited on Managed)",
     articles: [
@@ -169,6 +169,22 @@ export const HELP_MANUAL = [
         notes: [
           "This never changes your posture score directly — your score stays based on your assessment answers. Directory findings show up as recommendations so you or your analyst can act on them, not as a silent second score.",
           "If a connection shows \"Needs reconnect,\" access has expired or was revoked on the provider's side (for example, an admin removed consent) — reconnect it the same way you connected it the first time.",
+        ],
+      },
+      {
+        id: "connect-cloud",
+        title: "Connect AWS or Azure",
+        intro: "Cloud connections pull infrastructure security-posture facts — IAM/MFA hygiene, publicly exposed storage, network rules open to the internet, and whether audit logging is on — straight from your AWS account or Azure subscription. Read-only, always: ShieldAI can see this data but can never change anything in your cloud account.",
+        steps: [
+          "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Cloud.\"",
+          "Pick AWS or Azure. Both ask for a credential you paste in, not a sign-in-and-approve screen — for AWS, an Access Key ID and Secret Access Key from an IAM user with AWS's own \"SecurityAudit\" policy attached; for Azure, a Tenant ID, Client ID, Client Secret, and Subscription ID from an app registration granted the built-in \"Reader\" role.",
+          "Once connected, open the connection and click \"Sync now\" to pull the latest posture data. Syncing isn't automatic yet — run it again any time you want a fresh check.",
+          "Findings like \"root account has no MFA,\" \"3 S3 buckets don't fully block public access,\" or \"no CloudTrail trail configured\" appear on the connection page, and medium-or-above findings are drafted into a recommendation the same way directory/webhook findings are.",
+        ],
+        notes: [
+          "This never changes your posture score directly — your score stays based on your assessment answers. Cloud findings show up as recommendations so you or your analyst can act on them, not as a silent second score.",
+          "AWS's checks run against one region (whichever you provide when connecting, or us-east-1 by default) — full multi-region coverage isn't in this pass yet.",
+          "If a connection shows \"Needs reconnect,\" the credential has stopped working (for example, the access key or client secret was rotated on the provider's side) — reconnect it the same way you connected it the first time.",
         ],
       },
       {

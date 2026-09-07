@@ -1,6 +1,6 @@
 # ShieldAI Integrations — Setup
 
-This covers five integration families, all reachable from the client's
+This covers six integration families, all reachable from the client's
 **🔌 Integrations** screen (scheduling is the one exception, reachable from
 the Support Center instead):
 
@@ -12,26 +12,30 @@ the Support Center instead):
    — Microsoft 365/Entra ID, Google Workspace, Okta, Zoom. Okta is live
    today; the other three need an OAuth app registered with each vendor
    first (steps below).
-3. **Productivity notifications** (`productivityRoutes.js` /
+3. **Cloud infrastructure connections** (`cloudRoutes.js` /
+   `cloudAdapters.js`) — AWS, Azure. Both are **live today, nothing to
+   configure server-side** — a pasted read-only credential, same model as
+   Okta.
+4. **Productivity notifications** (`productivityRoutes.js` /
    `productivityAdapters.js` / `notificationDispatch.js`) — Slack and
    Microsoft Teams. Slack needs an app created first; Teams needs no app
    registration at all (paste-in webhook URL).
-4. **Task trackers** (`taskTrackerRoutes.js` / `taskTrackerAdapters.js`) —
+5. **Task trackers** (`taskTrackerRoutes.js` / `taskTrackerAdapters.js`) —
    Jira, Asana, Trello. Jira/Asana need an OAuth app each; Trello needs no
    app registration (paste-in API key + token).
-5. **Scheduling** (`schedulingRoutes.js` / `schedulingAdapters.js`) — Zoom,
+6. **Scheduling** (`schedulingRoutes.js` / `schedulingAdapters.js`) — Zoom,
    Google Meet. "Schedule a call" from the Support Center. Reuses the same
    Zoom/Google OAuth apps directory connections use, requesting a different
    (write) scope on a separate, personal connection.
 
-All five are gated behind the same `integrations` tier capability (Growth
+All six are gated behind the same `integrations` tier capability (Growth
 and above — see `tiers.js`'s `FEATURE_CATALOG`, 3/10/unlimited connections
-on Growth/Guided/Managed). Parts 1, 2, and 4 (as a read source) feed the
+on Growth/Guided/Managed). Parts 1, 2, 3, and 5 (as a read source) feed the
 same place: findings/synced tickets surface as recommendations or task
 metadata, never a second posture score — that engine (`riskEngine.js`) is a
 closed, fixed set of assessment-driven factors by design (see `CLAUDE.md`).
-Part 3 is the other direction: telling a client's team, via chat, once
-something actually reaches them. Part 5 is the only WRITE capability in
+Part 4 is the other direction: telling a client's team, via chat, once
+something actually reaches them. Part 6 is the only WRITE capability in
 this whole framework — see its own section below for why that's a
 deliberate, bounded exception rather than a relaxation of anything.
 
@@ -47,6 +51,13 @@ deliberate, bounded exception rather than a relaxation of anything.
   `account:read:admin`). Okta's token is validated against a read-only API
   call before it's ever stored. ShieldAI cannot change anything in a
   connected directory — there's no write path anywhere in `directoryAdapters.js`.
+- **Cloud connections are read-only by the cloud provider's own design**,
+  not just ShieldAI's convention. AWS's credential is scoped to AWS's
+  managed `SecurityAudit` policy; Azure's service principal is scoped to
+  the built-in `Reader` role — both are purpose-built, read-only grants the
+  provider itself maintains. Every call `cloudAdapters.js` makes is a read
+  (`Get*`/`List*`/`Describe*` on AWS; ARM `GET` on Azure) — there's no write
+  path anywhere in the file.
 - **Task trackers only ever create the one ticket you send, then read its
   status back on request.** No inbound webhooks from any tracker (each
   signs differently — Asana HMAC-SHA256, Trello HMAC-SHA1, Jira Cloud not
@@ -148,7 +159,53 @@ No setup required. To test end-to-end:
 4. Set `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET`. This same app is reused for
    Part 5's scheduling connection, requesting `meeting:write` instead.
 
-## Part 3 — Slack and Microsoft Teams
+## Part 3 — Cloud infrastructure (AWS, Azure)
+
+Both live now, no ShieldAI-side app registration — a pasted, long-lived
+read-only credential, same model as Okta above (not the M365/Google/Zoom
+OAuth-redirect model, since neither AWS nor Azure offers a per-end-user
+consent flow for these APIs).
+
+### AWS — no app registration needed
+
+1. In the AWS account to monitor: IAM → Users → **Add users** → name it
+   (e.g. `shieldai-readonly`) → access type: Access key.
+2. Attach the AWS-managed policy **`SecurityAudit`** directly (Attach
+   policies directly → search "SecurityAudit") — a purpose-built,
+   read-only policy AWS itself maintains for exactly this use case.
+3. Create the user → copy the **Access Key ID** and **Secret Access Key**
+   immediately (the secret is shown once).
+4. In ShieldAI: Integrations → **+ Connect Cloud** → AWS → paste both
+   (region is optional, defaults to `us-east-1`) → Connect.
+5. Open the connection → **Sync now** → confirm posture findings appear.
+
+**v1 scope note**: the security-group/CloudTrail checks run against one
+region (the one you provide, or `us-east-1`) — full multi-region coverage
+is a later iteration.
+
+### Azure — needs an Entra ID app registration first (no vendor approval wait)
+
+1. [portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID** →
+   App registrations → New registration (single tenant is fine — this
+   isn't a multi-customer OAuth app like M365's).
+2. Certificates & secrets → New client secret → copy the **value**
+   immediately (not the secret ID).
+3. Copy the **Application (client) ID** and **Directory (tenant) ID** from
+   the app's Overview page.
+4. Subscriptions → (your subscription) → Access control (IAM) → Add role
+   assignment → role **Reader** → assign to the app registration you just
+   created → copy the **Subscription ID**.
+5. In ShieldAI: Integrations → **+ Connect Cloud** → Azure → paste Tenant
+   ID, Client ID, Client Secret, Subscription ID → Connect.
+6. Open the connection → **Sync now** → confirm posture findings appear.
+   Unlike an OAuth app, there's no separate admin-consent wait — the Reader
+   role assignment takes effect immediately.
+
+**v1 scope note**: the Defender for Cloud secure-score check degrades to
+an honest "not available" finding if Defender for Cloud isn't enabled on
+the subscription — it doesn't fabricate a score.
+
+## Part 4 — Slack and Microsoft Teams
 
 ### Slack — needs a Slack app created first
 
@@ -174,7 +231,7 @@ Workflows/Power Automate — both are URL-based so `sendTeamsMessage`'s
 POST-to-URL approach adapts to either, but verify current guidance since
 this has been in flux.
 
-## Part 4 — Task trackers
+## Part 5 — Task trackers
 
 ### Trello — no app registration needed
 
@@ -212,7 +269,7 @@ between those two chosen lists **is** the status signal.
    without a paid custom field — priority sync is simply omitted, not
    guessed.
 
-## Part 5 — Scheduling ("Schedule a call")
+## Part 6 — Scheduling ("Schedule a call")
 
 Reachable from the **Support Center**, not the Integrations screen — this
 is a personal connection, not an org-admin one. Reuses the same
@@ -243,8 +300,9 @@ recurring grant beyond the single create call each time.
 | `ASANA_CLIENT_ID` / `ASANA_CLIENT_SECRET` | Asana | Asana developer console |
 | `APP_URL` | Every OAuth provider | Already used by billing/phishing/training links — must exactly match every redirect URI registered above |
 
-Teams and Trello need no env vars at all (paste-in credentials, no OAuth
-app). Set these in Railway → Variables in production, `.env` locally (never
+Teams, Trello, AWS, and Azure need no env vars at all (paste-in
+credentials, no ShieldAI-side OAuth app). Set these in Railway → Variables
+in production, `.env` locally (never
 commit real values — see `SECRETS_RUNBOOK.md`). Without
 `CREDENTIAL_ENCRYPTION_KEY`, connecting anything fails with a clear error at
 connect time — the rest of the app keeps running normally. Without a
@@ -256,6 +314,7 @@ provider's client id+secret, that provider's "Connect" button returns
 You should see these lines in the server logs:
 ```
 ShieldAI directory integration routes registered.
+ShieldAI cloud integration routes registered.
 ShieldAI productivity integration routes registered.
 ShieldAI task tracker integration routes registered.
 ShieldAI scheduling routes registered.
@@ -265,10 +324,10 @@ it doesn't mean any provider is actually configured yet.
 
 ## How it flows
 
-- **Read connections (directory/webhooks):** posture facts or findings →
-  deterministic severity mapping → medium+ findings deduped and drafted
-  into `db.data.recommendations` (`origin: "ai"`, `status: "suggested"`) —
-  a human always reviews before a client sees it.
+- **Read connections (directory/cloud/webhooks):** posture facts or
+  findings → deterministic severity mapping → medium+ findings deduped and
+  drafted into `db.data.recommendations` (`origin: "ai"`,
+  `status: "suggested"`) — a human always reviews before a client sees it.
 - **Task trackers:** "Sync to Jira/Asana/Trello" creates a ticket once,
   storing `task.externalRef`. "Sync status" pulls current
   status/priority back into that same field — informational only, never
@@ -297,6 +356,7 @@ it doesn't mean any provider is actually configured yet.
 ## Routes summary
 
 - `GET/POST /api/directory[...]` — list/detail/oauth/sync/revoke/delete (M365, Google Workspace, Okta, Zoom)
+- `GET/POST /api/cloud[...]` — list/detail/connect/sync/revoke/delete (AWS, Azure)
 - `GET/POST /api/productivity[...]` — list/detail/oauth/connect/interactivity/apply-action/revoke/delete (Slack, Teams)
 - `GET/POST /api/tasktracker[...]` — list/detail/oauth/connect/picker/sync-task/revoke/delete (Jira, Asana, Trello)
 - `GET/POST /api/scheduling[...]` — list/oauth/create-meeting/revoke/delete (Zoom, Google Meet)
@@ -307,8 +367,8 @@ high-level; read the source for the authoritative contract.
 
 ## Without a provider configured (today's default state)
 
-Everything else keeps working. Okta, Teams, and Trello connect normally
-with no env vars at all. The webhook integrations in Part 1 are entirely
+Everything else keeps working. Okta, AWS, Azure, Teams, and Trello connect
+normally with no env vars at all. The webhook integrations in Part 1 are entirely
 unaffected. Clicking "Connect" on any unconfigured OAuth provider returns a
 clear "isn't configured on this server yet" error instead of a broken
 redirect.

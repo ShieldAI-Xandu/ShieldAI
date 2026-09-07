@@ -58,6 +58,7 @@ export const TIERS = {
       // every tier has it. See complianceRoutes.js for the GET/POST split.
       complianceView: true,
       reportsAccess: false,    // status/update/compliance/insurance/legal reports are paid-only
+      trustPage: false,        // public, shareable posture/compliance page for prospects — Growth+
       vendorRegistry: false,             // ongoing vendor registry (add/track/reassess) — Starter+
       vendorQuestionnaireAssistant: false, // AI-grounded incoming-questionnaire responder — Growth+
       employeeRoster: false,             // a roster of who works here — Starter+ (separate from paid training delivery)
@@ -104,6 +105,7 @@ export const TIERS = {
       complianceView: true,
       reportsAccess: false,   // Reports are Growth+
       evidenceAccess: false,  // Evidence & audit-readiness are Growth+
+      trustPage: false,       // Trust page is Growth+
       workflowsAccess: false, // Incident-response workflows are Growth+
       // Split from a single flag (2026-07-25): the registry costs nothing to run
       // (a DB record) and makes Starter feel like a complete program rather than
@@ -171,6 +173,7 @@ export const TIERS = {
       complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
+      trustPage: true,
       workflowsAccess: true,
       vendorRegistry: true,                // uncapped from Growth up
       vendorQuestionnaireAssistant: true,   // BUNDLED from Growth up
@@ -219,6 +222,7 @@ export const TIERS = {
       complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
+      trustPage: true,
       workflowsAccess: true,
       vendorRegistry: true,
       vendorQuestionnaireAssistant: true, // plus periodic analyst review of anything flagged needsHumanInput
@@ -267,6 +271,7 @@ export const TIERS = {
       complianceView: true,
       reportsAccess: true,
       evidenceAccess: true,
+      trustPage: true,
       workflowsAccess: true,
       vendorRegistry: true,
       vendorQuestionnaireAssistant: true, // engineer owns the registry and drafts/delivers responses white-glove
@@ -317,6 +322,7 @@ export const FEATURE_CATALOG = [
   { key: "trainingDelivery", capability: "trainingDelivery", name: "Full training generation & delivery (assign & track)", minTier: "growth", addon: "training_delivery" },
   { key: "reportsAccess",    capability: "reportsAccess",    name: "Status, compliance & insurance reports", minTier: "growth" },
   { key: "evidenceAccess",   capability: "evidenceAccess",   name: "Evidence & audit readiness", minTier: "growth" },
+  { key: "trustPage",        capability: "trustPage",        name: "Public trust page (shareable posture & compliance page)", minTier: "growth" },
   { key: "remediationTasks", capability: "remediationTasks", name: "Prioritized remediation tasks & gap tracking", minTier: "growth" },
   { key: "workflowsAccess",  capability: "workflowsAccess",   name: "Incident response workflows", minTier: "growth" },
   { key: "vendorRegistry", capability: "vendorRegistry", name: "Vendor risk registry (add/track/reassess vendors)", minTier: "starter" },

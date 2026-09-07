@@ -111,13 +111,15 @@ export const counters = {
   endpoints: (db, userId) => (db.data.agents || []).filter(a => a.ownerUserId === userId && a.status !== "revoked").length,
   // Counts webhook integrations, directory connections (M365/Google
   // Workspace/Okta/Zoom), productivity connections (Slack/Teams), task
-  // tracker connections (Jira/Asana/Trello), and scheduling connections
-  // (Zoom/Google Meet) toward the same "integrations" entitlement — one
-  // coherent "connect your tools" limit, not five separate caps.
+  // tracker connections (Jira/Asana/Trello), scheduling connections
+  // (Zoom/Google Meet), and cloud connections (AWS/Azure) toward the same
+  // "integrations" entitlement — one coherent "connect your tools" limit,
+  // not six separate caps.
   integrations: (db, userId) =>
     (db.data.integrations || []).filter(i => i.ownerUserId === userId && i.status !== "revoked").length +
     (db.data.directoryConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
     (db.data.productivityConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
     (db.data.taskTrackerConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
-    (db.data.schedulingConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length,
+    (db.data.schedulingConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
+    (db.data.cloudConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length,
 };
