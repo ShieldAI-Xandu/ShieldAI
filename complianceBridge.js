@@ -47,8 +47,9 @@
 import {
   FRAMEWORKS as REGISTRY, getFramework, isControlMapped, DEPTH,
 } from "./frameworks.js";
-import { SECURITY_CHECKLIST, toEvidence } from "./securityChecklist.js";
+import { SECURITY_CHECKLIST, SCORING_CHECKLIST, toEvidence } from "./securityChecklist.js";
 import { corroborate, corroborationSummary } from "./agentEvidence.js";
+import { computePostureScore } from "./riskEngine.js";
 
 export const STATUS = {
   COMPLIANT: "compliant",
@@ -211,13 +212,24 @@ export function getFrameworkDef(id) {
  */
 export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
   const rid = toRegistryId(frameworkId);
+
+  // NIST CSF: presentational only, never reaches isControlMapped/assess()
+  // below. CLAUDE.md documents why NIST CSF has no independent assess() —
+  // its five functions are the same labels already driving the one posture
+  // score everywhere else, and a second computed percentage under those
+  // same labels could disagree with it. evaluateNistCsfPresentational()
+  // builds a real per-control view entirely from that same posture-engine
+  // output (see its own comment) rather than computing anything new, so
+  // this stays inside that rule while giving NIST CSF a real walkthrough.
+  if (rid === "nist-csf") return evaluateNistCsfPresentational(checklist);
+
   const f = getFramework(rid);
   if (!f) return null;
 
   const def = getFrameworkDef(frameworkId);
 
-  // Not control-mapped (GDPR, or NIST CSF / CIS which score elsewhere):
-  // report honestly rather than fabricating a control walkthrough.
+  // Not control-mapped (GDPR, which scores via an AI-assisted gap analysis
+  // instead): report honestly rather than fabricating a control walkthrough.
   if (!isControlMapped(rid)) {
     return {
       framework: def,
@@ -398,6 +410,57 @@ export function evaluateRequirement(req, checklist = {}) {
     minScore: req.minScore ?? 80, status,
     score: answered.length ? Math.round(answered.reduce((s, c) => s + c.score, 0) / answered.length) : 0,
     controls, failingControls: controls.filter(c => !c.meets).map(c => c.controlId),
+  };
+}
+
+// NIST CSF's real per-control walkthrough — called from evaluateFramework()
+// above instead of a registry assess(). One requirement per SCORING_CHECKLIST
+// question (the same 13 answers computePostureScore() already weighs into
+// the headline posture score), built through the same evaluateRequirement()
+// every other framework's controls go through — no new scoring logic.
+//
+// Deliberately NEVER computes compliancePct/readinessPct: an aggregate
+// percentage here would be a second, differently-computed number under
+// NIST's own function names — exactly what CLAUDE.md's "no assess() for
+// NIST CSF" rule exists to prevent. Individual control status/score is fine
+// (it's the same raw per-question score already feeding that weighted
+// formula, just displayed rather than re-aggregated) — pctSuppressedReason
+// is the same real, existing mechanism the state-privacy module uses to
+// decline a percentage for its own reasons.
+function evaluateNistCsfPresentational(checklist) {
+  const def = getFrameworkDef("nist-csf");
+  const posture = computePostureScore({ checklist });
+
+  const requirements = SCORING_CHECKLIST.map(q => evaluateRequirement(
+    { id: q.id, name: q.question, section: q.nistFunction, minScore: 80, controls: [q.id] },
+    checklist,
+  ));
+
+  const counts = requirements.reduce((m, r) => { m[r.status] = (m[r.status] || 0) + 1; return m; }, {});
+  const total = requirements.length;
+  const sections = {};
+  for (const r of requirements) (sections[r.section] ||= []).push(r);
+
+  return {
+    framework: def,
+    depth: def.depth,
+    groupedBy: "function",
+    summary: {
+      total,
+      compliant: counts[STATUS.COMPLIANT] || 0,
+      partial: counts[STATUS.PARTIAL] || 0,
+      gap: counts[STATUS.GAP] || 0,
+      unknown: counts[STATUS.UNKNOWN] || 0,
+      assessed: total - (counts[STATUS.UNKNOWN] || 0),
+      compliancePct: null,
+      readinessPct: null,
+      pctSuppressedReason: `NIST CSF doesn't compute a separate percentage here — these are the same answers behind your overall posture score (${posture.postureScore}/100, ${posture.postureLevel}), shown control by control.`,
+    },
+    sectionNames: Object.keys(sections),
+    requirements,
+    excluded: [],
+    excludedCount: 0,
+    detail: { methodology: posture.methodology },
   };
 }
 

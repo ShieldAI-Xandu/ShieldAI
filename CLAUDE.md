@@ -55,7 +55,11 @@ while fixing something else:
 ## Known "do not fix" items
 - **NIST CSF scoring has no `assess()` by design.** Do not add one — a parallel score
   could disagree with the headline number. There's an in-code comment marking this
-  intentional; leave it as-is.
+  intentional; leave it as-is. (NIST CSF *does* have a real per-control walkthrough,
+  in `complianceBridge.js`'s `evaluateNistCsfPresentational()` — it's a pure
+  presentation of the same posture-engine answers, with no independent scoring and
+  no `compliancePct` of its own. That's not an exception to this rule; it's how the
+  rule and a real walkthrough coexist.)
 - **`unbackedClaims()` CI guard** — any control-mapped framework without an `assess()` or
   documented `scoredBy` fails CI on purpose. This is intentional integrity enforcement,
   not a bug. Extend this pattern to new frameworks rather than routing around it.
