@@ -39,6 +39,38 @@ export function providerStatus() {
   };
 }
 
+// ── Health tracking (admin System Health tab) ────────────────────
+// In-memory only — a live record of what actually happened on real calls
+// through callAI() below, not just whether a key is present. "Configured"
+// and "working" are different claims; this is how the admin view tells them
+// apart. Updated on every attempt, whichever provider actually ran —
+// including Claude running as another provider's silent fallback.
+const health = {
+  claude: { lastSuccessAt: null, lastErrorAt: null, lastError: null },
+  gemini: { lastSuccessAt: null, lastErrorAt: null, lastError: null },
+  openai: { lastSuccessAt: null, lastErrorAt: null, lastError: null },
+};
+// Exported (not just used internally by callAI below) because server.js's
+// callClaude() — a separate, older direct-to-Anthropic implementation that
+// callClaudeText/the Mastermind tool-use loop actually run through, and the
+// higher-traffic of the two Claude call sites — records into this same
+// shared state, so the health view reflects both rather than only the one
+// that happens to be a genuinely unified path.
+export function recordProviderSuccess(provider) {
+  health[provider].lastSuccessAt = new Date().toISOString();
+}
+export function recordProviderFailure(provider, err) {
+  health[provider].lastErrorAt = new Date().toISOString();
+  health[provider].lastError = err?.message || String(err);
+}
+
+export function getProviderHealth() {
+  const status = providerStatus();
+  return Object.fromEntries(
+    Object.entries(status).map(([id, s]) => [id, { ...s, ...health[id] }])
+  );
+}
+
 // ── Anthropic (Claude) ──────────────────────────────────────────
 async function callClaudeRaw({ system, messages, max_tokens = 1500 }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -132,9 +164,22 @@ async function callOpenAIRaw({ system, messages, max_tokens = 1500 }) {
 export async function callAI({ provider, system, messages, max_tokens = 1500 }) {
   const want = normalizeProvider(provider);
 
+  // Wraps callClaudeRaw purely for health tracking — behavior (including
+  // what it throws) is unchanged; this only records the outcome.
+  async function runClaude() {
+    try {
+      const text = await callClaudeRaw({ system, messages, max_tokens });
+      recordProviderSuccess("claude");
+      return text;
+    } catch (err) {
+      recordProviderFailure("claude", err);
+      throw err;
+    }
+  }
+
   // Claude path (also the fallback target).
   if (want === "claude") {
-    const text = await callClaudeRaw({ system, messages, max_tokens });
+    const text = await runClaude();
     return { text, provider: "claude", fallback: false };
   }
 
@@ -143,17 +188,19 @@ export async function callAI({ provider, system, messages, max_tokens = 1500 }) 
 
   // No key → silent fallback to Claude (by design).
   if (!keyPresent) {
-    const text = await callClaudeRaw({ system, messages, max_tokens });
+    const text = await runClaude();
     return { text, provider: "claude", fallback: true };
   }
 
   // Key present → try the real provider; on ANY failure, silently fall back.
   try {
     const text = await runner({ system, messages, max_tokens });
+    recordProviderSuccess(want);
     return { text, provider: want, fallback: false };
   } catch (err) {
+    recordProviderFailure(want, err);
     console.warn(`[aiProviders] ${want} failed, falling back to Claude: ${err.message}`);
-    const text = await callClaudeRaw({ system, messages, max_tokens });
+    const text = await runClaude();
     return { text, provider: "claude", fallback: true };
   }
 }

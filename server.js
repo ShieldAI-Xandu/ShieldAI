@@ -25,6 +25,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import db, { storeBinder } from "./db.js";
+import { serverErrorTracker } from "./healthMonitor.js";
 import {
   isDemoRequest,
   demoSessionId,
@@ -90,7 +91,7 @@ import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./t
 import { computePostureScore, deriveFreePriorities, deriveFreeExecSummary } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { hasCapability, getTier } from "./tiers.js";
-import { callAI, providerStatus } from "./aiProviders.js";
+import { callAI, providerStatus, recordProviderSuccess, recordProviderFailure } from "./aiProviders.js";
 import {
   registerUser,
   loginUser,
@@ -168,6 +169,12 @@ app.use((req, res, next) => {
   if (RAW_BODY_PATHS.has(req.originalUrl)) return next();
   return express.json({ limit: "5mb" })(req, res, next);
 });
+
+// Feeds the admin System Health tab — records every 5xx response regardless
+// of how it was produced (most in this app are already caught locally
+// per-route and turned into res.status(500).json(...), so this hooks the
+// response lifecycle rather than Express's error-handling path).
+app.use(serverErrorTracker());
 
 // ── Rate limiting ────────────────────────────────────────────
 // Baseline floor for every /api/* route — catches anything not covered by
@@ -271,28 +278,44 @@ const progressStore = {};
 // ─────────────────────────────────────────────────────────────
 async function callClaude({ system, messages, max_tokens = 1500, stream = false }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
+  if (!apiKey) {
+    const err = new Error("ANTHROPIC_API_KEY not set in .env");
+    recordProviderFailure("claude", err);
+    throw err;
+  }
 
-  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens,
-      system,
-      messages,
-      stream,
-    }),
-  });
+  let anthropicRes;
+  try {
+    anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens,
+        system,
+        messages,
+        stream,
+      }),
+    });
+  } catch (err) {
+    recordProviderFailure("claude", err);
+    throw err;
+  }
 
   if (!anthropicRes.ok) {
     const errBody = await anthropicRes.text();
-    throw new Error(`Anthropic API error ${anthropicRes.status}: ${errBody}`);
+    const err = new Error(`Anthropic API error ${anthropicRes.status}: ${errBody}`);
+    recordProviderFailure("claude", err);
+    throw err;
   }
+  // Streamed responses aren't a completed call yet from the caller's
+  // perspective (the body hasn't been read) — only record success for the
+  // plain-JSON path here; callClaudeText below is what most callers use.
+  if (!stream) recordProviderSuccess("claude");
   return anthropicRes;
 }
 
@@ -319,30 +342,46 @@ async function callClaudeText({ system, messages, max_tokens }) {
 // model can see and explain, not a broken response.
 async function callClaudeWithTools({ system, messages, tools, runTool, max_tokens = 1500, maxTurns = 6 }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in .env");
+  if (!apiKey) {
+    const err = new Error("ANTHROPIC_API_KEY not set in .env");
+    recordProviderFailure("claude", err);
+    throw err;
+  }
 
   let convo = messages.map(m => ({ role: m.role, content: m.content }));
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens,
-        system,
-        messages: convo,
-        tools,
-      }),
-    });
+    let res;
+    try {
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens,
+          system,
+          messages: convo,
+          tools,
+        }),
+      });
+    } catch (err) {
+      recordProviderFailure("claude", err);
+      throw err;
+    }
     if (!res.ok) {
       const errBody = await res.text();
-      throw new Error(`Anthropic API error ${res.status}: ${errBody}`);
+      const err = new Error(`Anthropic API error ${res.status}: ${errBody}`);
+      recordProviderFailure("claude", err);
+      throw err;
     }
+    // This is a real, successful Anthropic call regardless of whether it's
+    // the final turn or one that comes back with more tool_use blocks — the
+    // request itself succeeded, which is what "is Claude working" tracks.
+    recordProviderSuccess("claude");
     const data = await res.json();
     const blocks = data?.content || [];
     const toolCalls = blocks.filter(b => b.type === "tool_use");

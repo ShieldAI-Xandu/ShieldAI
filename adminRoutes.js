@@ -18,6 +18,10 @@
 import { randomUUID } from "crypto";
 import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier } from "./tiers.js";
 import { isSuperAdminEmail, accountCategory } from "./auth.js";
+import { getProviderHealth } from "./aiProviders.js";
+import { getEmailHealth } from "./emailService.js";
+import { serverErrorSummary } from "./healthMonitor.js";
+import { sandboxStats } from "./db.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -284,6 +288,23 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     if (req.query.targetUserId) rows = rows.filter(r => r.targetUserId === req.query.targetUserId);
     rows.sort((a, b) => new Date(b.at) - new Date(a.at));
     res.json(rows.slice(0, 500));
+  });
+
+  // ── System Health ─────────────────────────────────────────────
+  // "Is anything actually broken right now" without leaving the product for
+  // Railway's own dashboard/logs. Everything here is in-memory (see
+  // healthMonitor.js's header) — a live snapshot of the current process, not
+  // a durable log; a redeploy or restart clearing it is expected. Threat-intel
+  // service status (NVD/HIBP) has its own established tab/endpoint
+  // (/api/admin/threat-intel/status) and isn't duplicated here.
+  app.get("/api/admin/system-health", requireAdmin, (req, res) => {
+    res.json({
+      aiProviders: getProviderHealth(),
+      email: getEmailHealth(),
+      serverErrors: serverErrorSummary(),
+      demoSandboxes: sandboxStats(),
+      checkedAt: new Date().toISOString(),
+    });
   });
 
   console.log("ShieldAI admin account-control routes registered.");

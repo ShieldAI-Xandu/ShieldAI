@@ -11256,6 +11256,159 @@ function IntelStat({ label, value, color, mono }) {
   );
 }
 
+// Relative "how long ago" for a health timestamp, or an honest "Never" —
+// null must never read as "just now."
+function healthAgo(iso) {
+  if (!iso) return "Never";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "Just now";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "Just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+// "Is anything actually broken right now" for staff, without leaving the
+// product for Railway's own dashboard/logs. Everything here is a live,
+// in-memory snapshot of the current server process (see healthMonitor.js) —
+// a restart clears it, which is expected, not a bug.
+function AdminSystemHealth() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/system-health`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load system health.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <Spinner/>;
+
+  const providers = Object.entries(data?.aiProviders || {});
+  const email = data?.email || {};
+  const errs = data?.serverErrors || {};
+  const sandboxes = data?.demoSandboxes || {};
+
+  return (
+    <div>
+      {error && (
+        <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>{error}</div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style={{fontSize:11,color:C.textMut}}>
+          {data?.checkedAt && `As of ${new Date(data.checkedAt).toLocaleTimeString()} — live process state, not a historical log.`}
+        </div>
+        <button onClick={load} disabled={loading}
+          style={{padding:"7px 14px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+            borderRadius:7,color:C.accentText,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          ↻ Refresh
+        </button>
+      </div>
+
+      <SectionLabel text="AI Providers"/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,marginBottom:20}}>
+        {providers.map(([id, p]) => {
+          const broken = p.configured && p.lastErrorAt && (!p.lastSuccessAt || new Date(p.lastErrorAt) > new Date(p.lastSuccessAt));
+          const tone = !p.configured ? C.textMut : broken ? C.red : p.lastSuccessAt ? C.green : C.amber;
+          return (
+            <Card key={id} style={{borderColor:`${tone}33`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                <span style={{fontSize:13.5,fontWeight:700,color:C.text,textTransform:"capitalize"}}>{id}</span>
+                <Badge label={p.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
+                {broken && <Badge label="LAST CALL FAILED" color={C.red}/>}
+              </div>
+              <div style={{fontSize:11,color:C.textMut,marginBottom:8}}>{p.model}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <IntelStat label="Last success" value={healthAgo(p.lastSuccessAt)}
+                  color={p.lastSuccessAt ? C.green : C.textMut}/>
+                <IntelStat label="Last error" value={healthAgo(p.lastErrorAt)}
+                  color={p.lastErrorAt ? C.red : C.textMut}/>
+              </div>
+              {p.lastError && (
+                <div style={{marginTop:8,padding:"7px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:6,fontSize:11,color:C.textSec,lineHeight:1.5,wordBreak:"break-word"}}>
+                  {safeText(p.lastError)}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+
+      <SectionLabel text="Outbound Email"/>
+      <Card style={{marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+          <span style={{fontSize:13.5,fontWeight:700,color:C.text,textTransform:"capitalize"}}>{email.provider}</span>
+          <Badge label={email.configured ? "CONFIGURED" : "NOT CONFIGURED"}
+            color={email.configured ? C.green : C.textMut}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+          <IntelStat label="Last success" value={healthAgo(email.lastSuccessAt)}
+            color={email.lastSuccessAt ? C.green : C.textMut}/>
+          <IntelStat label="Last error" value={healthAgo(email.lastErrorAt)}
+            color={email.lastErrorAt ? C.red : C.textMut}/>
+        </div>
+        {email.lastError && (
+          <div style={{marginTop:8,padding:"7px 9px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:6,fontSize:11,color:C.textSec,lineHeight:1.5,wordBreak:"break-word"}}>
+            {safeText(email.lastError)}
+          </div>
+        )}
+      </Card>
+
+      <SectionLabel text="Server Errors (5xx)"/>
+      <Card style={{marginBottom:20}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom: errs.recent?.length ? 12 : 0}}>
+          <IntelStat label="Last hour" value={errs.lastHourCount ?? 0}
+            color={errs.lastHourCount ? C.red : C.green}/>
+          <IntelStat label="Tracked this process" value={errs.totalTracked ?? 0}/>
+        </div>
+        {(errs.recent || []).length === 0 ? (
+          <div style={{fontSize:12,color:C.textMut}}>No 5xx responses recorded since the server last started.</div>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {errs.recent.map((e,i) => (
+              <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 10px",
+                background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,fontSize:11.5,flexWrap:"wrap"}}>
+                <Badge label={String(e.status)} color={C.red}/>
+                <span style={{color:C.textSec,fontFamily:"monospace"}}>{e.method} {e.path}</span>
+                <span style={{marginLeft:"auto",color:C.textMut}}>{healthAgo(e.at)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <SectionLabel text="Demo Sandboxes"/>
+      <Card>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8}}>
+          <IntelStat label="Active" value={`${sandboxes.active ?? 0} / ${sandboxes.max ?? "—"}`}/>
+          <IntelStat label="TTL" value={`${sandboxes.ttlHours ?? "—"}h`}/>
+          <IntelStat label="Oldest active" value={sandboxes.active ? `${sandboxes.oldestAgeMin}m` : "—"}/>
+        </div>
+      </Card>
+
+      <div style={{fontSize:11,color:C.textMut,lineHeight:1.6,marginTop:16}}>
+        Everything above is in-memory for the current server process — a redeploy
+        or restart resets it. This is a live-tail for triage, not a durable audit
+        trail (see the Audit Log tab for that). Threat-intelligence service
+        status (NVD/HIBP) has its own tab.
+      </div>
+    </div>
+  );
+}
+
 function AdminDomainQueue() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -12653,6 +12806,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind 
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"support", label:"Support" },
             { id:"audit", label:"Audit Log" },
+            { id:"health", label:"System Health" },
           ].map(t => {
             const on = listTab === t.id;
             return (
@@ -12803,6 +12957,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind 
         {listTab === "domains" && <AdminDomainQueue/>}
 
         {listTab === "intel" && <AdminThreatIntelStatus/>}
+        {listTab === "health" && <AdminSystemHealth/>}
 
         {listTab === "training" && <AdminTrainingOverview/>}
         {listTab === "frameworks" && <AdminCustomFrameworksPanel/>}

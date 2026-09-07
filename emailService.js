@@ -121,6 +121,15 @@ export function emailConfigured() {
   return configured;
 }
 
+// ── Health tracking (admin System Health tab) ────────────────────
+// In-memory only — see healthMonitor.js's header for why this doesn't
+// persist to db.json.
+const health = { lastSuccessAt: null, lastErrorAt: null, lastError: null };
+
+export function getEmailHealth() {
+  return { provider: PROVIDER, configured, ...health };
+}
+
 /**
  * Send one email. Returns { ok: true, id } on success, or { ok: false, error }
  * — never throws, so a single failed send in a batch (e.g. a phishing
@@ -137,8 +146,11 @@ export async function sendEmail({ to, subject, html, text, fromName, fromLocal, 
   const from = `${fromName || "ShieldAI"} <${fromLocal || "notifications"}@${FROM_DOMAIN}>`;
   try {
     const result = await sendImpl({ to, from, subject, html, text, replyTo });
+    health.lastSuccessAt = new Date().toISOString();
     return { ok: true, id: result.id };
   } catch (err) {
+    health.lastErrorAt = new Date().toISOString();
+    health.lastError = err.message;
     console.error("Email send failed:", err.message);
     return { ok: false, error: err.message };
   }
