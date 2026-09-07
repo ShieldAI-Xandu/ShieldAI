@@ -103,6 +103,8 @@ import {
   accountCategory,
   isSuperAdminEmail,
   MAX_USERS,
+  requestPasswordReset,
+  resetPassword,
 } from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -530,6 +532,31 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(401).json({ error: err.message, code: err.code });
+  }
+});
+
+// Self-serve password reset — request. Always 200 with the same generic
+// message regardless of whether the email matches an account (see
+// requestPasswordReset's own comment): the response must never let a caller
+// tell registered addresses from unregistered ones.
+app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
+  try {
+    const result = await requestPasswordReset(req.body?.email);
+    res.json(result);
+  } catch (err) {
+    // requestPasswordReset itself never throws for a bad/missing email — this
+    // only catches a genuine unexpected failure, so it's fine to be generic.
+    res.status(500).json({ error: "Could not process that request." });
+  }
+});
+
+// Self-serve password reset — complete. body: { token, newPassword }
+app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
+  try {
+    const result = await resetPassword(req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: err.code });
   }
 });
 

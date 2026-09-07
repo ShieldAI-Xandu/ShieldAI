@@ -876,13 +876,14 @@ const inputStyle = {
 //  AUTH SCREEN
 // ─────────────────────────────────────────────────────────────
 function AuthScreen({ onAuthenticated, onBack, sessionExpiredNotice }) {
-  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [mode, setMode] = useState("login"); // "login" | "register" | "forgot"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [capacity, setCapacity] = useState(null);
+  const [forgotSent, setForgotSent] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/auth/capacity`)
@@ -918,6 +919,28 @@ function AuthScreen({ onAuthenticated, onBack, sessionExpiredNotice }) {
     }
   }
 
+  async function submitForgotPassword() {
+    if (!email.trim()) { setError("Enter your email first."); return; }
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      // The backend always returns the same generic success shape regardless
+      // of whether the email matches an account — never branch UI copy on
+      // whether it "found" the address.
+      await res.json().catch(() => ({}));
+      setForgotSent(true);
+    } catch {
+      // Even a network failure gets the same generic message — see above.
+      setForgotSent(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const slotsFull = !!capacity?.isFull;
   const registerBlocked = mode === "register" && slotsFull;
 
@@ -940,76 +963,239 @@ function AuthScreen({ onAuthenticated, onBack, sessionExpiredNotice }) {
         </div>
 
         <Card style={{padding:"28px 26px"}}>
-          {sessionExpiredNotice && (
+          {sessionExpiredNotice && mode !== "forgot" && (
             <div style={{marginBottom:18,padding:"10px 14px",background:`${C.accent}15`,
               border:`1px solid ${C.accent}33`,borderRadius:8,color:C.accentText,fontSize:13}}>
               Your session has expired. Please sign in again.
             </div>
           )}
-          <div style={{display:"flex",gap:4,marginBottom:22,background:C.surface,
-            borderRadius:10,padding:4}}>
-            {["login","register"].map(m => (
-              <button key={m} onClick={() => { setMode(m); setError(null); }}
-                style={{flex:1,padding:"9px",borderRadius:8,border:"none",cursor:"pointer",
-                  background: mode===m ? C.accent : "transparent",
-                  color: mode===m ? "#04121F" : C.textSec,
-                  fontSize:13,fontWeight:600,transition:"all 0.2s"}}>
-                {m === "login" ? "Sign In" : "Create Account"}
+
+          {mode === "forgot" ? (
+            forgotSent ? (
+              <div>
+                <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:10}}>Check your email</div>
+                <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 20px"}}>
+                  If an account exists for <strong style={{color:C.text}}>{email}</strong>, we've sent a link to
+                  reset your password. It expires in 1 hour and works once.
+                </p>
+                <button onClick={() => { setMode("login"); setForgotSent(false); setError(null); }}
+                  style={{background:"none",border:"none",color:C.accentText,fontSize:13,
+                    fontWeight:600,cursor:"pointer",padding:0}}>
+                  ← Back to sign in
+                </button>
+              </div>
+            ) : (
+              <>
+                <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:6}}>Reset your password</div>
+                <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+                  Enter the email on your account and we'll send you a link to choose a new password.
+                </p>
+                <div style={{marginBottom:18}}>
+                  <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
+                    Email
+                  </label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && submitForgotPassword()}
+                    placeholder="you@company.com" style={inputStyle}/>
+                </div>
+
+                {error && (
+                  <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+                    border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>
+                    {error}
+                  </div>
+                )}
+
+                <button onClick={submitForgotPassword} disabled={loading}
+                  style={{width:"100%",padding:"12px",borderRadius:10,border:"none",
+                    background: loading ? C.border : `linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                    color: loading ? C.textMut : "#04121F",
+                    fontSize:14,fontWeight:700,marginBottom:14,
+                    cursor: loading ? "not-allowed" : "pointer"}}>
+                  {loading ? "Sending…" : "Send reset link"}
+                </button>
+                <button onClick={() => { setMode("login"); setError(null); }}
+                  style={{background:"none",border:"none",color:C.textSec,fontSize:13,cursor:"pointer",padding:0}}>
+                  ← Back to sign in
+                </button>
+              </>
+            )
+          ) : (
+            <>
+              <div style={{display:"flex",gap:4,marginBottom:22,background:C.surface,
+                borderRadius:10,padding:4}}>
+                {["login","register"].map(m => (
+                  <button key={m} onClick={() => { setMode(m); setError(null); }}
+                    style={{flex:1,padding:"9px",borderRadius:8,border:"none",cursor:"pointer",
+                      background: mode===m ? C.accent : "transparent",
+                      color: mode===m ? "#04121F" : C.textSec,
+                      fontSize:13,fontWeight:600,transition:"all 0.2s"}}>
+                    {m === "login" ? "Sign In" : "Create Account"}
+                  </button>
+                ))}
+              </div>
+
+              {mode === "register" && (
+                <div style={{marginBottom:14}}>
+                  <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
+                    Company Name
+                  </label>
+                  <input value={companyName} onChange={e=>setCompanyName(e.target.value)}
+                    placeholder="Acme Consulting" style={inputStyle}/>
+                </div>
+              )}
+
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
+                  Email
+                </label>
+                <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+                  placeholder="you@company.com" style={inputStyle}/>
+              </div>
+
+              <div style={{marginBottom:mode==="login"?8:18}}>
+                <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
+                  Password
+                </label>
+                <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && !registerBlocked && submit()}
+                  placeholder={mode === "register" ? "At least 8 characters" : "••••••••"}
+                  style={inputStyle}/>
+              </div>
+
+              {mode === "login" && (
+                <div style={{marginBottom:18,textAlign:"right"}}>
+                  <button onClick={() => { setMode("forgot"); setError(null); }}
+                    style={{background:"none",border:"none",color:C.textMut,fontSize:12,
+                      cursor:"pointer",padding:0}}>
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+
+              {error && (
+                <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+                  border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>
+                  {error}
+                </div>
+              )}
+
+              {registerBlocked && (
+                <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}15`,
+                  border:`1px solid ${C.amber}33`,borderRadius:8,color:C.amberText,fontSize:13}}>
+                  Testing accounts are currently full. Please sign in to an existing account.
+                </div>
+              )}
+
+              <button onClick={submit} disabled={loading || registerBlocked}
+                style={{width:"100%",padding:"12px",borderRadius:10,border:"none",
+                  background: loading || registerBlocked ? C.border :
+                    `linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color: loading || registerBlocked ? C.textMut : "#04121F",
+                  fontSize:14,fontWeight:700,
+                  cursor: loading || registerBlocked ? "not-allowed" : "pointer"}}>
+                {loading ? "Please wait…" : mode === "login" ? "Sign In →" : "Create Account →"}
               </button>
-            ))}
-          </div>
-
-          {mode === "register" && (
-            <div style={{marginBottom:14}}>
-              <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
-                Company Name
-              </label>
-              <input value={companyName} onChange={e=>setCompanyName(e.target.value)}
-                placeholder="Acme Consulting" style={inputStyle}/>
-            </div>
+            </>
           )}
+        </Card>
+      </div>
+    </div>
+  );
+}
 
-          <div style={{marginBottom:14}}>
-            <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
-              Email
-            </label>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
-              placeholder="you@company.com" style={inputStyle}/>
-          </div>
+// Reached via a ?resetToken=... link from the password-reset email
+// (see requestPasswordReset in auth.js) — shown in place of the normal
+// marketing/login flow regardless of whether anyone is currently signed in,
+// since the token alone is what authorizes this, not the current session.
+function ResetPasswordScreen({ token, onDone }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
 
-          <div style={{marginBottom:18}}>
-            <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>
-              Password
-            </label>
-            <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && !registerBlocked && submit()}
-              placeholder={mode === "register" ? "At least 8 characters" : "••••••••"}
-              style={inputStyle}/>
-          </div>
+  async function submit() {
+    setError(null);
+    if (password.length < 8) { setError("New password must be at least 8 characters."); return; }
+    if (password !== confirm) { setError("Passwords don't match."); return; }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, newPassword: password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not reset your password.");
+      setDone(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
-          {error && (
-            <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
-              border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>
-              {error}
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",
+      justifyContent:"center",fontFamily:"Inter,system-ui,sans-serif",padding:24}}>
+      <div style={{width:"100%",maxWidth:420}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:12}}><ShieldLogo size={48} glow/></div>
+          <ShieldWordmark size={24} ink={C.text}/>
+        </div>
+        <Card style={{padding:"28px 26px"}}>
+          {done ? (
+            <div>
+              <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:10}}>Password updated</div>
+              <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 20px"}}>
+                Your password has been changed. Sign in with your new password.
+              </p>
+              <button onClick={onDone}
+                style={{width:"100%",padding:"12px",borderRadius:10,border:"none",
+                  background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color:"#04121F",fontSize:14,fontWeight:700,cursor:"pointer"}}>
+                Go to sign in →
+              </button>
             </div>
-          )}
+          ) : (
+            <>
+              <div style={{color:C.text,fontWeight:700,fontSize:16,marginBottom:6}}>Choose a new password</div>
+              <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+                This link works once and expires an hour after it was sent.
+              </p>
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>New password</label>
+                <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+                  placeholder="At least 8 characters" style={inputStyle}/>
+              </div>
+              <div style={{marginBottom:18}}>
+                <label style={{display:"block",color:C.textSec,fontSize:12,marginBottom:6}}>Confirm new password</label>
+                <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && submit()}
+                  placeholder="••••••••" style={inputStyle}/>
+              </div>
 
-          {registerBlocked && (
-            <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}15`,
-              border:`1px solid ${C.amber}33`,borderRadius:8,color:C.amberText,fontSize:13}}>
-              Testing accounts are currently full. Please sign in to an existing account.
-            </div>
-          )}
+              {error && (
+                <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
+                  border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>
+                  {error}
+                </div>
+              )}
 
-          <button onClick={submit} disabled={loading || registerBlocked}
-            style={{width:"100%",padding:"12px",borderRadius:10,border:"none",
-              background: loading || registerBlocked ? C.border :
-                `linear-gradient(135deg,${C.accent},${C.accentDm})`,
-              color: loading || registerBlocked ? C.textMut : "#04121F",
-              fontSize:14,fontWeight:700,
-              cursor: loading || registerBlocked ? "not-allowed" : "pointer"}}>
-            {loading ? "Please wait…" : mode === "login" ? "Sign In →" : "Create Account →"}
-          </button>
+              <button onClick={submit} disabled={loading}
+                style={{width:"100%",padding:"12px",borderRadius:10,border:"none",
+                  background: loading ? C.border : `linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                  color: loading ? C.textMut : "#04121F",
+                  fontSize:14,fontWeight:700,marginBottom:14,
+                  cursor: loading ? "not-allowed" : "pointer"}}>
+                {loading ? "Saving…" : "Reset password"}
+              </button>
+              <button onClick={onDone}
+                style={{background:"none",border:"none",color:C.textSec,fontSize:13,cursor:"pointer",padding:0}}>
+                ← Back to sign in
+              </button>
+            </>
+          )}
         </Card>
       </div>
     </div>
@@ -20239,6 +20425,21 @@ export default function ShieldAI() {
   // flash of the marketing page (or Home) before we've had a chance to
   // restore an existing login + the page the user was actually on.
   const [restoringSession, setRestoringSession] = useState(true);
+  // Captured once, before anything else — a password-reset link
+  // (?resetToken=...) must work regardless of whatever session state is
+  // already in play, so this is checked ahead of the restoringSession/user
+  // branches below rather than folded into publicView. Cleared from the URL
+  // immediately so a refresh doesn't re-trigger it or resubmit a used token.
+  const [resetToken, setResetToken] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("resetToken");
+    if (t) {
+      params.delete("resetToken");
+      const qs = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+    }
+    return t;
+  });
   const [publicView, setPublicView] = useState("marketing"); // marketing | investor | auth | about | support | faq (when logged out)
   const [pendingCodeEntry, setPendingCodeEntry] = useState(false); // open the code modal on marketing mount
   const [showAdmin, setShowAdmin] = useState(false);
@@ -20710,6 +20911,12 @@ export default function ShieldAI() {
   const phishMatch = typeof window !== "undefined" && window.location.pathname.match(/^\/phish\/([^/?#]+)/);
   if (phishMatch) {
     return <PhishRevealPage token={decodeURIComponent(phishMatch[1])}/>;
+  }
+
+  // Password-reset link — the token alone authorizes this, regardless of any
+  // existing session, so it's checked before restoringSession/user below.
+  if (resetToken) {
+    return <ResetPasswordScreen token={resetToken} onDone={() => { setResetToken(null); setPublicView("auth"); }}/>;
   }
 
   // Checking for a persisted login + resumable page (see the mount effect

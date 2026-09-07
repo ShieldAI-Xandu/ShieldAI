@@ -10,6 +10,7 @@ import db from "./db.js";
 import { TIERS, DEFAULT_TIER } from "./tiers.js";
 import { verifyDemoToken, signDemoToken } from "./demoGateway.js";
 import { logClientAction } from "./assignmentRoutes.js";
+import { sendEmail } from "./emailService.js";
 
 // No hardcoded fallback. This used to be
 //   process.env.JWT_SECRET || "shieldai-test-secret-change-in-production"
@@ -421,4 +422,96 @@ export async function adminDeleteUser(targetUserId) {
   db.data.policyDocs = (db.data.policyDocs || []).filter(p => p.userId !== targetUserId);
   await db.write();
   return { deleted: targetUserId };
+}
+
+// ── Self-serve password reset ──────────────────────────────────
+// Before this, a locked-out client had no path back into their own account
+// except contacting support and waiting for a staff member to run
+// adminResetPassword on their behalf. This closes that gap.
+//
+// The reset link carries a JWT (same signing mechanism as a session token,
+// short-lived — RESET_TOKEN_EXPIRY) rather than a token stored in the
+// database, so there's nothing new to persist or clean up on expiry. The
+// one thing a stateless JWT can't do on its own is single-use: `resetNonce`
+// on the user record supplies that — it's regenerated on every request
+// (invalidating any earlier unused link for that user) and cleared the
+// moment a reset actually succeeds (so the same link can't be replayed).
+const RESET_TOKEN_EXPIRY = "1h";
+
+function passwordResetAppUrl() {
+  return process.env.APP_URL || "https://shieldai-production-627e.up.railway.app";
+}
+
+// Always resolves to the same generic result whether or not the email
+// matches an account — telling the caller "no account with that email"
+// would let anyone probe which addresses are registered.
+export async function requestPasswordReset(email) {
+  const generic = { ok: true, message: "If an account exists for that email, a password reset link has been sent." };
+  const normalizedEmail = (email || "").trim().toLowerCase();
+  if (!normalizedEmail) return generic;
+
+  const user = (db.data.users || []).find(u => u.email === normalizedEmail);
+  if (!user) return generic;
+
+  const nonce = randomUUID();
+  user.resetNonce = nonce;
+  user.resetRequestedAt = new Date().toISOString();
+  await db.write();
+
+  const token = jwt.sign({ userId: user.id, purpose: "password-reset", nonce }, JWT_SECRET, { expiresIn: RESET_TOKEN_EXPIRY });
+  const link = `${passwordResetAppUrl()}/?resetToken=${encodeURIComponent(token)}`;
+
+  const result = await sendEmail({
+    to: user.email,
+    subject: "Reset your ShieldAI password",
+    fromLocal: "security",
+    html: `<p>Someone requested a password reset for your ShieldAI account (${escapeHtml(user.email)}).</p>
+<p><a href="${link}">Click here to choose a new password</a>. This link expires in 1 hour and works once.</p>
+<p>If you didn't request this, you can safely ignore this email — your password hasn't been changed.</p>`,
+    text: `Reset your ShieldAI password: ${link}\n\nThis link expires in 1 hour and works once. If you didn't request this, ignore this email — your password hasn't been changed.`,
+  });
+  if (!result.ok) {
+    // Never surface delivery failure to the caller — same reasoning as the
+    // generic response above. Logged server-side so a real outage is still
+    // visible to staff, just not to whoever is asking.
+    console.error(`Password reset email to ${user.email} failed to send:`, result.error);
+  }
+  return generic;
+}
+
+export async function resetPassword({ token, newPassword }) {
+  if (!newPassword || newPassword.length < 8) {
+    const err = new Error("New password must be at least 8 characters.");
+    err.code = "WEAK_PASSWORD";
+    throw err;
+  }
+  let payload;
+  try {
+    payload = jwt.verify(token || "", JWT_SECRET);
+  } catch {
+    const err = new Error("This reset link is invalid or has expired. Request a new one.");
+    err.code = "INVALID_TOKEN";
+    throw err;
+  }
+  if (payload.purpose !== "password-reset") {
+    const err = new Error("This reset link is invalid.");
+    err.code = "INVALID_TOKEN";
+    throw err;
+  }
+  const user = (db.data.users || []).find(u => u.id === payload.userId);
+  if (!user || !user.resetNonce || user.resetNonce !== payload.nonce) {
+    const err = new Error("This reset link has already been used or is no longer valid. Request a new one.");
+    err.code = "INVALID_TOKEN";
+    throw err;
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 10);
+  user.resetNonce = null;
+  user.mustChangePassword = false;
+  await db.write();
+  return publicUser(user);
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
