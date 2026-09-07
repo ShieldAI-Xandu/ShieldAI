@@ -3091,6 +3091,7 @@ function VendorQuestionnaireTool() {
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null); // saved-response id pending delete, or null
 
   async function loadHistory() {
     try {
@@ -3126,9 +3127,13 @@ function VendorQuestionnaireTool() {
     } catch { /* noop */ }
   }
 
-  async function deleteSaved(id, e) {
+  function requestDelete(id, e) {
     e.stopPropagation(); // don't also trigger the row's openSaved click
-    if (!window.confirm("Delete this saved response? This cannot be undone.")) return;
+    setDeleteTarget(id);
+  }
+
+  async function deleteSaved(id) {
+    setDeleteTarget(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/vendors/questionnaires/${id}`, { method: "DELETE" });
       if (res.ok) {
@@ -3170,7 +3175,7 @@ function VendorQuestionnaireTool() {
               {h.needsInputCount > 0 && (
                 <span style={{color:C.amberText,fontWeight:600}}>{h.needsInputCount} need input</span>
               )}
-              <button onClick={(e)=>deleteSaved(h.id, e)}
+              <button onClick={(e)=>requestDelete(h.id, e)}
                 style={{padding:"3px 9px",background:"none",border:`1px solid ${C.border}`,
                   borderRadius:6,color:C.textMut,fontSize:11,cursor:"pointer"}}>
                 Delete
@@ -3179,6 +3184,16 @@ function VendorQuestionnaireTool() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={()=>setDeleteTarget(null)}
+        onConfirm={()=>deleteSaved(deleteTarget)}
+        title="Delete this saved response?"
+        message="This cannot be undone."
+        confirmLabel="Delete"
+        danger
+      />
 
       {error && (
         <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
@@ -3350,6 +3365,7 @@ function ComplianceCalendarSection({ onNavigate }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState(null); // null | "new" | custom item being edited
+  const [removeTarget, setRemoveTarget] = useState(null); // calendar item pending removal, or null
 
   async function load() {
     setLoading(true); setError(null);
@@ -3395,7 +3411,7 @@ function ComplianceCalendarSection({ onNavigate }) {
   }
 
   async function removeEntry(item) {
-    if (!window.confirm(`Remove "${item.title}"?`)) return;
+    setRemoveTarget(null);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/calendar/${item.id}`, { method: "DELETE" });
@@ -3492,7 +3508,7 @@ function ComplianceCalendarSection({ onNavigate }) {
                         <div style={{display:"flex",gap:6}}>
                           <button onClick={()=>completeEntry(item)} disabled={busy} style={miniBtn(C.green,busy)}>Mark done</button>
                           <button onClick={()=>setModal(item)} disabled={busy} style={miniBtn(C.accent,busy)}>Edit</button>
-                          <button onClick={()=>removeEntry(item)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                          <button onClick={()=>setRemoveTarget(item)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
                         </div>
                       ) : item.detailPath ? (
                         <button onClick={()=>onNavigate && onNavigate(item.detailPath)} style={miniBtn(C.accent,false)}>View</button>
@@ -3514,6 +3530,16 @@ function ComplianceCalendarSection({ onNavigate }) {
           onClose={()=>setModal(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onClose={()=>setRemoveTarget(null)}
+        onConfirm={()=>removeEntry(removeTarget)}
+        title="Remove this reminder?"
+        message={`Remove "${removeTarget?.title || ""}"?`}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -4011,6 +4037,8 @@ function TrainingProgramSection() {
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [removeLearnerTarget, setRemoveLearnerTarget] = useState(null); // learner pending removal, or null
+  const [waiveTarget, setWaiveTarget] = useState(null); // assignment pending waive, or null
 
   // Add-learner form
   const [nl, setNl] = useState({ name: "", email: "", department: "" });
@@ -4061,7 +4089,7 @@ function TrainingProgramSection() {
   }
 
   async function removeLearner(l) {
-    if (!window.confirm(`Remove ${l.name} and their assignments? This can't be undone.`)) return;
+    setRemoveLearnerTarget(null);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
@@ -4122,7 +4150,7 @@ function TrainingProgramSection() {
   }
 
   async function waive(a) {
-    if (!window.confirm(`Waive "${a.title}" for ${a.learnerName}?`)) return;
+    setWaiveTarget(null);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}`, {
@@ -4213,7 +4241,7 @@ function TrainingProgramSection() {
                       {a.status !== "completed" && a.status !== "waived" && (
                         <>
                           <button onClick={()=>remind(a)} disabled={busy} style={miniBtn(C.accent,busy)}>Remind</button>
-                          <button onClick={()=>waive(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
+                          <button onClick={()=>setWaiveTarget(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
                         </>
                       )}
                     </div>
@@ -4250,7 +4278,7 @@ function TrainingProgramSection() {
                   </div>
                   <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
                   <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
-                  <button onClick={()=>removeLearner(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                  <button onClick={()=>setRemoveLearnerTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
                 </div>
               ))}
             </>
@@ -4359,6 +4387,24 @@ function TrainingProgramSection() {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={!!removeLearnerTarget}
+        onClose={()=>setRemoveLearnerTarget(null)}
+        onConfirm={()=>removeLearner(removeLearnerTarget)}
+        title="Remove this learner?"
+        message={`Remove ${removeLearnerTarget?.name || ""} and their assignments? This can't be undone.`}
+        confirmLabel="Remove"
+        danger
+      />
+      <ConfirmDialog
+        open={!!waiveTarget}
+        onClose={()=>setWaiveTarget(null)}
+        onConfirm={()=>waive(waiveTarget)}
+        title="Waive this assignment?"
+        message={`Waive "${waiveTarget?.title || ""}" for ${waiveTarget?.learnerName || ""}?`}
+        confirmLabel="Waive"
+      />
     </div>
   );
 }
@@ -4382,6 +4428,8 @@ function PhishingSimTab({ learners }) {
   const [viewCampaign, setViewCampaign] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [nc, setNc] = useState({ name: "", scenarioId: "", learnerIds: [] });
+  const [sendTarget, setSendTarget] = useState(null); // campaign id pending send, or null
+  const [deleteTarget, setDeleteTarget] = useState(null); // campaign id pending delete, or null
 
   function flash(msg, tone = C.greenText) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
 
@@ -4421,7 +4469,7 @@ function PhishingSimTab({ learners }) {
   }
 
   async function sendCampaign(id) {
-    if (!window.confirm("Send this simulated phishing test now? Emails go out immediately to every selected learner.")) return;
+    setSendTarget(null);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/phishing/campaigns/${id}/send`, { method: "POST" });
@@ -4434,7 +4482,7 @@ function PhishingSimTab({ learners }) {
   }
 
   async function deleteCampaign(id) {
-    if (!window.confirm("Delete this draft campaign?")) return;
+    setDeleteTarget(null);
     setBusy(true);
     try {
       await authFetch(`${API_BASE}/api/phishing/campaigns/${id}`, { method: "DELETE" });
@@ -4576,10 +4624,10 @@ function PhishingSimTab({ learners }) {
                   color:C.textSec,fontSize:11.5,cursor:"pointer"}}>Details</button>
               {c.status === "draft" && (
                 <>
-                  <button onClick={()=>sendCampaign(c.id)} disabled={busy}
+                  <button onClick={()=>setSendTarget(c.id)} disabled={busy}
                     style={{padding:"6px 12px",background:C.accent,border:"none",borderRadius:7,
                       color:"#04121F",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>Send Now</button>
-                  <button onClick={()=>deleteCampaign(c.id)} disabled={busy}
+                  <button onClick={()=>setDeleteTarget(c.id)} disabled={busy}
                     style={{padding:"6px 12px",background:"none",border:`1px solid ${C.border}`,borderRadius:7,
                       color:C.textMut,fontSize:11.5,cursor:"pointer"}}>Delete</button>
                 </>
@@ -4619,6 +4667,24 @@ function PhishingSimTab({ learners }) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!sendTarget}
+        onClose={()=>setSendTarget(null)}
+        onConfirm={()=>sendCampaign(sendTarget)}
+        title="Send this simulated phishing test now?"
+        message="Emails go out immediately to every selected learner."
+        confirmLabel="Send Now"
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onClose={()=>setDeleteTarget(null)}
+        onConfirm={()=>deleteCampaign(deleteTarget)}
+        title="Delete this draft campaign?"
+        message="This can't be undone."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }
@@ -4789,6 +4855,7 @@ function DomainMonitoringCard({ onChange } = {}) {
   const [input, setInput] = useState("");
   const [busyKey, setBusyKey] = useState(null); // "add" | "verify:<id>" | "remove:<id>"
   const [error, setError] = useState(null);
+  const [removeTarget, setRemoveTarget] = useState(null); // domain id pending removal, or null
 
   async function load() {
     setLoading(true); setError(null);
@@ -4834,7 +4901,7 @@ function DomainMonitoringCard({ onChange } = {}) {
   }
 
   async function removeDomain(id) {
-    if (!window.confirm("Remove this domain? Breach monitoring for it will stop.")) return;
+    setRemoveTarget(null);
     setBusyKey(`remove:${id}`); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/client/domain/${id}`, { method: "DELETE" });
@@ -4888,7 +4955,7 @@ function DomainMonitoringCard({ onChange } = {}) {
           No company domain on file yet. Add one below to enable breach and dark-web exposure monitoring.
         </div>
       ) : (domains||[]).map(d => (
-        <DomainRow key={d.id} d={d} onVerify={verifyDomain} onRemove={removeDomain} busyKey={busyKey}/>
+        <DomainRow key={d.id} d={d} onVerify={verifyDomain} onRemove={setRemoveTarget} busyKey={busyKey}/>
       ))}
 
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -4905,6 +4972,16 @@ function DomainMonitoringCard({ onChange } = {}) {
           {busyKey==="add" ? "Saving…" : (domains||[]).length ? "+ Add another domain" : "+ Add domain"}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onClose={()=>setRemoveTarget(null)}
+        onConfirm={()=>removeDomain(removeTarget)}
+        title="Remove this domain?"
+        message="Breach monitoring for it will stop."
+        confirmLabel="Remove"
+        danger
+      />
     </Card>
   );
 }
@@ -6674,6 +6751,7 @@ function TeamRosterPanel() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", department: "" });
   const [expanded, setExpanded] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState(null); // team member pending removal, or null
 
   async function load() {
     setLoading(true);
@@ -6704,7 +6782,7 @@ function TeamRosterPanel() {
   }
 
   async function removeMember(l) {
-    if (!window.confirm(`Remove ${l.name} from your team roster? This also removes any training/policy history tied to them.`)) return;
+    setRemoveTarget(null);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
@@ -6749,7 +6827,7 @@ function TeamRosterPanel() {
                     <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
                     <span style={{color:C.textMut}}> · {l.email}{l.department ? ` · ${l.department}` : ""}</span>
                   </div>
-                  <button onClick={()=>removeMember(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                  <button onClick={()=>setRemoveTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
                 </div>
               ))}
 
@@ -6780,6 +6858,16 @@ function TeamRosterPanel() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!removeTarget}
+        onClose={()=>setRemoveTarget(null)}
+        onConfirm={()=>removeMember(removeTarget)}
+        title="Remove this team member?"
+        message={`Remove ${removeTarget?.name || ""} from your team roster? This also removes any training/policy history tied to them.`}
+        confirmLabel="Remove"
+        danger
+      />
     </Card>
   );
 }
@@ -6883,6 +6971,8 @@ function PolicyLibrarySection({ assessment }) {
   const [expandedAckPolicyId, setExpandedAckPolicyId] = useState(null);
   const [ackActionBusy, setAckActionBusy] = useState(null); // id of the row currently being acted on
   const [assignModalPolicy, setAssignModalPolicy] = useState(null); // {id, policyName} | null
+  const [unassignTarget, setUnassignTarget] = useState(null); // acknowledgment row pending unassign, or null
+  const [deletePolicyTarget, setDeletePolicyTarget] = useState(null); // {id, name} pending delete, or null
 
   async function loadAcknowledgments() {
     if (!hasRoster) return;
@@ -6911,7 +7001,7 @@ function PolicyLibrarySection({ assessment }) {
   }
 
   async function unassignSigner(row) {
-    if (!window.confirm(`Remove this assignment for ${row.learnerName}?`)) return;
+    setUnassignTarget(null);
     setAckActionBusy(row.id);
     try {
       const res = await authFetch(`${API_BASE}/api/client/policies/acknowledgments/${row.id}`, { method: "DELETE" });
@@ -6965,8 +7055,8 @@ function PolicyLibrarySection({ assessment }) {
     }
   }
 
-  async function deleteSavedPolicy(id, name) {
-    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  async function deleteSavedPolicy(id) {
+    setDeletePolicyTarget(null);
     try {
       const res = await authFetch(`${API_BASE}/api/policies/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Could not delete policy");
@@ -7272,7 +7362,7 @@ function PolicyLibrarySection({ assessment }) {
                       cursor:openingSaved===p.id?"wait":"pointer",whiteSpace:"nowrap"}}>
                     {openingSaved===p.id ? "Opening…" : "View / Download"}
                   </button>
-                  <button onClick={() => deleteSavedPolicy(p.id, p.policyName)}
+                  <button onClick={() => setDeletePolicyTarget(p)}
                     style={{padding:"8px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,
                       borderRadius:8,color:C.redText,fontSize:12,cursor:"pointer"}}>
                     Delete
@@ -7299,7 +7389,7 @@ function PolicyLibrarySection({ assessment }) {
                               style={miniBtn(C.accent, ackActionBusy===row.id)}>Remind</button>
                           </>
                         )}
-                        <button onClick={()=>unassignSigner(row)} disabled={ackActionBusy===row.id}
+                        <button onClick={()=>setUnassignTarget(row)} disabled={ackActionBusy===row.id}
                           style={miniBtn(C.textMut, ackActionBusy===row.id)}>Remove</button>
                       </div>
                     ))}
@@ -7358,6 +7448,25 @@ function PolicyLibrarySection({ assessment }) {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!unassignTarget}
+        onClose={()=>setUnassignTarget(null)}
+        onConfirm={()=>unassignSigner(unassignTarget)}
+        title="Remove this assignment?"
+        message={`Remove this assignment for ${unassignTarget?.learnerName || ""}?`}
+        confirmLabel="Remove"
+        danger
+      />
+      <ConfirmDialog
+        open={!!deletePolicyTarget}
+        onClose={()=>setDeletePolicyTarget(null)}
+        onConfirm={()=>deleteSavedPolicy(deletePolicyTarget?.id)}
+        title="Delete this policy?"
+        message={`Delete "${deletePolicyTarget?.policyName || ""}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   );
 }
@@ -16857,6 +16966,7 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
   const [removing, setRemoving] = useState(false);
   const [requestingCheckIn, setRequestingCheckIn] = useState(false);
   const [checkInNote, setCheckInNote] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -16869,7 +16979,7 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
   useEffect(() => { load(); }, [endpointId]);
 
   async function removeEndpoint() {
-    if (!window.confirm("Remove this endpoint? It will stop appearing in your fleet and its history will be deleted. This can't be undone.")) return;
+    setConfirmRemove(false);
     setRemoving(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/admin/endpoints/${endpointId}`, { method: "DELETE" });
@@ -16917,7 +17027,7 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
             {requestingCheckIn ? "Requesting…" : a.pendingCheckIn ? "Check-in requested" : "Request check-in"}
           </button>
           {!isAnalystView && (
-            <button onClick={removeEndpoint} disabled={removing}
+            <button onClick={()=>setConfirmRemove(true)} disabled={removing}
               style={{padding:"6px 14px",background:`${C.red}12`,
                 border:`1px solid ${C.red}40`,borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,
                 cursor:removing?"wait":"pointer"}}>
@@ -17023,6 +17133,16 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
           </Card>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeEndpoint}
+        title="Remove this endpoint?"
+        message="It will stop appearing in your fleet and its history will be deleted. This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -17416,6 +17536,8 @@ function IntegrationDetail({ integrationId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -17438,7 +17560,7 @@ function IntegrationDetail({ integrationId, onBack }) {
   }
 
   async function revoke() {
-    if (!window.confirm("Revoke this connection? The source tool's next post will be rejected.")) return;
+    setConfirmRevoke(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}/revoke`, { method: "POST" });
@@ -17447,7 +17569,7 @@ function IntegrationDetail({ integrationId, onBack }) {
   }
 
   async function removeIntegration() {
-    if (!window.confirm("Remove this connection? Its finding history will be deleted. This can't be undone.")) return;
+    setConfirmRemove(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/integrations/${integrationId}`, { method: "DELETE" });
@@ -17472,13 +17594,13 @@ function IntegrationDetail({ integrationId, onBack }) {
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           {i.status === "active" && (
-            <button onClick={revoke} disabled={busy}
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
               style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
                 borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
               Revoke
             </button>
           )}
-          <button onClick={removeIntegration} disabled={busy}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
             style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
               borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
             Remove
@@ -17530,6 +17652,23 @@ function IntegrationDetail({ integrationId, onBack }) {
         })}
         {findings.length===0 && <div style={{color:C.textMut,fontSize:13}}>No findings received yet.</div>}
       </div>
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message="The source tool's next post will be rejected."
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeIntegration}
+        title="Remove this connection?"
+        message="Its finding history will be deleted. This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -17658,6 +17797,8 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -17686,7 +17827,7 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   }
 
   async function revoke() {
-    if (!window.confirm("Revoke this connection? ShieldAI will stop syncing from it.")) return;
+    setConfirmRevoke(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/directory/${connectionId}/revoke`, { method: "POST" });
@@ -17695,7 +17836,7 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
   }
 
   async function removeConnection() {
-    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setConfirmRemove(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/directory/${connectionId}`, { method: "DELETE" });
@@ -17722,13 +17863,13 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           {c.status === "active" && (
-            <button onClick={revoke} disabled={busy}
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
               style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
                 borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
               Revoke
             </button>
           )}
-          <button onClick={removeConnection} disabled={busy}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
             style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
               borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
             Remove
@@ -17915,6 +18056,8 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -17969,7 +18112,7 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
   }
 
   async function revoke() {
-    if (!window.confirm("Revoke this connection? ShieldAI will stop posting to Slack.")) return;
+    setConfirmRevoke(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}/revoke`, { method: "POST" });
@@ -17978,7 +18121,7 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
   }
 
   async function removeConnection() {
-    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setConfirmRemove(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/productivity/${connectionId}`, { method: "DELETE" });
@@ -18003,13 +18146,13 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           {c.status === "active" && (
-            <button onClick={revoke} disabled={busy}
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
               style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
                 borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
               Revoke
             </button>
           )}
-          <button onClick={removeConnection} disabled={busy}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
             style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
               borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
             Remove
@@ -18087,6 +18230,23 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
           Choose a channel above before enabling notifications — without one, ShieldAI has nowhere to post.
         </p>
       )}
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message="ShieldAI will stop posting to Slack."
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeConnection}
+        title="Remove this connection?"
+        message="This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -18099,6 +18259,8 @@ function ProductivityConnectionDetail({ connectionId, onBack }) {
 function SchedulingConnectionDetail({ connection, onBack }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (!connection) {
     return (
@@ -18118,7 +18280,7 @@ function SchedulingConnectionDetail({ connection, onBack }) {
   const statusLabel = c.status === "active" ? "Connected" : "Revoked";
 
   async function revoke() {
-    if (!window.confirm(`Revoke this connection? ShieldAI will no longer be able to create ${providerLabel} meetings.`)) return;
+    setConfirmRevoke(false);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/scheduling/${c.id}/revoke`, { method: "POST" });
@@ -18127,7 +18289,7 @@ function SchedulingConnectionDetail({ connection, onBack }) {
   }
 
   async function removeConnection() {
-    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setConfirmRemove(false);
     setBusy(true); setError(null);
     try {
       const res = await authFetch(`${API_BASE}/api/scheduling/${c.id}`, { method: "DELETE" });
@@ -18145,13 +18307,13 @@ function SchedulingConnectionDetail({ connection, onBack }) {
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           {c.status === "active" && (
-            <button onClick={revoke} disabled={busy}
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
               style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
                 borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
               Revoke
             </button>
           )}
-          <button onClick={removeConnection} disabled={busy}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
             style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
               borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
             Remove
@@ -18176,6 +18338,23 @@ function SchedulingConnectionDetail({ connection, onBack }) {
         access. Revoke it here at any time; ShieldAI will no longer be able to create meetings on
         your behalf until you reconnect.
       </p>
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message={`ShieldAI will no longer be able to create ${providerLabel} meetings.`}
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeConnection}
+        title="Remove this connection?"
+        message="This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -18312,6 +18491,8 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   async function load() {
     setLoading(true); setError(null);
@@ -18354,7 +18535,7 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
   }
 
   async function revoke() {
-    if (!window.confirm("Revoke this connection? ShieldAI will stop syncing tasks to it.")) return;
+    setConfirmRevoke(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}/revoke`, { method: "POST" });
@@ -18363,7 +18544,7 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
   }
 
   async function removeConnection() {
-    if (!window.confirm("Remove this connection? This can't be undone.")) return;
+    setConfirmRemove(false);
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/tasktracker/${connectionId}`, { method: "DELETE" });
@@ -18394,13 +18575,13 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           {c.status === "active" && (
-            <button onClick={revoke} disabled={busy}
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
               style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
                 borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
               Revoke
             </button>
           )}
-          <button onClick={removeConnection} disabled={busy}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
             style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
               borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
             Remove
@@ -18463,6 +18644,23 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message="ShieldAI will stop syncing tasks to it."
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeConnection}
+        title="Remove this connection?"
+        message="This can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   );
 }
@@ -20293,6 +20491,10 @@ export default function ShieldAI() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Teams recommendation-action deep link confirmation (see effect below) —
+  // { action, refType, refId, actionLabel } | null.
+  const [teamsActionConfirm, setTeamsActionConfirm] = useState(null);
+
   // Tier-gate upgrade prompt (fired by authFetch on any HTTP 402).
   const [upgradePrompt, setUpgradePrompt] = useState(null);
   useEffect(() => {
@@ -20337,23 +20539,29 @@ export default function ShieldAI() {
     // Every other mutating action in the app confirms first — this is the
     // one place a page LOAD (not a click) can trigger a write, since it
     // comes from a Teams Action.OpenUrl link rather than an in-app button.
+    // The confirmation itself renders from teamsActionConfirm state (see the
+    // ConfirmDialog near the root return) rather than window.confirm, so it
+    // matches every other confirmation in the app.
     const actionLabel = { handle: "mark this as being handled", complete: "mark this complete", decline: "decline this" }[action] || `apply "${action}" to`;
-    if (!window.confirm(`This link will ${actionLabel} the recommendation it's tied to. Continue?`)) return;
-    (async () => {
-      try {
-        const res = await authFetch(`${API_BASE}/api/productivity/apply-action`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refType, refId, action }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not apply that action.");
-        window.alert(`Done — "${data.title}" marked ${data.status}.`);
-      } catch (e) {
-        window.alert(`Couldn't apply that action: ${e.message}`);
-      }
-    })();
+    setTeamsActionConfirm({ action, refType, refId, actionLabel });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, restoringSession]);
+
+  async function applyTeamsAction() {
+    const { action, refType, refId } = teamsActionConfirm;
+    setTeamsActionConfirm(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/productivity/apply-action`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refType, refId, action }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not apply that action.");
+      window.alert(`Done — "${data.title}" marked ${data.status}.`);
+    } catch (e) {
+      window.alert(`Couldn't apply that action: ${e.message}`);
+    }
+  }
 
   // Capability helper for gating UI (mirrors backend; backend remains the real gate).
   const can = (cap) => {
@@ -20648,6 +20856,14 @@ export default function ShieldAI() {
       </div>
     )}
     <UpgradeModal info={upgradePrompt} onClose={() => setUpgradePrompt(null)}/>
+    <ConfirmDialog
+      open={!!teamsActionConfirm}
+      onClose={() => setTeamsActionConfirm(null)}
+      onConfirm={applyTeamsAction}
+      title="Apply this action?"
+      message={`This link will ${teamsActionConfirm?.actionLabel || ""} the recommendation it's tied to.`}
+      confirmLabel="Continue"
+    />
     <div style={{padding:"10px 20px",background:NAV.bg,borderBottom:`1px solid ${NAV.border}`,
       display:"flex",alignItems:"center",gap:10}}>
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex",flexShrink:0}}>
