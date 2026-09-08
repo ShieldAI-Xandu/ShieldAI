@@ -15,7 +15,7 @@
 //   registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
 
 import { randomUUID } from "crypto";
-import { getTier, hasCapability, hasTrainingDelivery, featureAccess, DEFAULT_TIER } from "./tiers.js";
+import { getTier, hasCapability, hasTrainingDelivery, featureAccess, DEFAULT_TIER, priceLabel } from "./tiers.js";
 import { cachedExposure } from "./cveService.js";
 import { cachedDarkweb } from "./darkwebService.js";
 import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
@@ -1236,8 +1236,9 @@ Limit findings to 6 and recommendations to 5.`;
       const tier = user?.tier && getTier(user.tier).id === user.tier ? user.tier : DEFAULT_TIER;
       if (!hasCapability(tier, "mastermindChat")) {
         return res.status(402).json({
-          error: "Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.",
+          error: `Mastermind is available on the ${getTier("starter").name} plan and above. Upgrade to ${getTier("starter").name} (${priceLabel("starter")}) to chat with your virtual-CISO assistant.`,
           code: "UPGRADE_REQUIRED", capability: "mastermindChat", currentTier: tier, requiresTier: "starter",
+          requiresTierName: getTier("starter").name, requiresPrice: priceLabel("starter"),
         });
       }
       next();

@@ -65,6 +65,19 @@ const COMPANY_SLUG = {
   "Apex Manufacturing": "apex",
 };
 
+// Which subscription tier each demo client sits on. Deliberately spread across
+// tiers so the demo shows real tier differences (and exercises tier-gating).
+// Meridian stays on "managed" because the no-code "Start demo" button resolves
+// to that persona (DEMO_PERSONAS.client) and is used for investor/prospect
+// walkthroughs — it must not hit upgrade walls. The other two are reached via
+// minted access codes and showcase mid-tiers. Names must match the homepage:
+// Free / Starter / Growth / Guided / Managed vCISO.
+const COMPANY_TIER = {
+  "Meridian Dental Group": "managed",
+  "Lakeside Financial Advisors": "guided",
+  "Apex Manufacturing": "growth",
+};
+
 // ── Claude helpers (self-contained so the script doesn't depend on server.js) ──
 async function callClaudeText({ system, messages, max_tokens }) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -626,7 +639,8 @@ async function main() {
       cUser = {
         id: randomUUID(), email: persona.email, companyName: co.company.name,
         passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
-        isAdmin: false, isAnalyst: false, isDemo: true, tier: "managed",
+        isAdmin: false, isAnalyst: false, isDemo: true,
+        tier: COMPANY_TIER[co.company.name] || "managed",
         createdAt: new Date().toISOString(),
       };
       db.data.users.push(cUser);
@@ -634,7 +648,7 @@ async function main() {
     }
     cUser.isDemo = true;
     cUser.companyName = co.company.name; // keep in sync even on re-seed of a pre-existing user
-    cUser.tier = "managed"; // keep in sync too — stale/renamed tier ids must not survive a re-seed
+    cUser.tier = COMPANY_TIER[co.company.name] || "managed"; // keep in sync too — stale/renamed tier ids must not survive a re-seed
     usersByCompany[co.company.name] = cUser;
   }
   db.data.branding = (db.data.branding || []).filter(b => b.ownerUserId !== analyst.id);

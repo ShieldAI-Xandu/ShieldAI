@@ -29,7 +29,7 @@
 import { randomUUID } from "crypto";
 import { getScenario, scenarioSummaries, renderScenario } from "./phishingScenarios.js";
 import { sendEmail, emailConfigured } from "./emailService.js";
-import { hasTrainingDelivery, getTier, priceLabel, getAddon } from "./tiers.js";
+import { hasTrainingDelivery, getTier, priceLabel, getAddon, addonPriceLabel } from "./tiers.js";
 import { notify } from "./notificationDispatch.js";
 
 function ensureCollections(db) {
@@ -47,8 +47,9 @@ function hasUsedTrial(db, clientUserId) {
 
 function upgradeMessage(tier) {
   const addon = getAddon("training_delivery");
+  const addonPrice = addon ? addonPriceLabel("training_delivery") : null;
   return {
-    error: "You've used your one free trial phishing campaign. Add Training Delivery ($40/mo) on your current plan, or upgrade to Growth, for ongoing campaigns.",
+    error: `You've used your one free trial phishing campaign. Add Training Delivery${addonPrice ? ` (${addonPrice})` : ""} on your current plan, or upgrade to ${getTier("growth").name} (${priceLabel("growth")}), for ongoing campaigns.`,
     code: "UPGRADE_REQUIRED",
     capability: "trainingDelivery",
     currentTier: tier,
@@ -56,7 +57,7 @@ function upgradeMessage(tier) {
     requiresTierName: getTier("growth").name,
     requiresPrice: priceLabel("growth"),
     addon: "training_delivery",
-    addonPrice: addon ? `$${(addon.priceCents / 100).toFixed(0)}/mo` : null,
+    addonPrice,
   };
 }
 

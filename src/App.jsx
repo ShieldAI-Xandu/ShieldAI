@@ -679,6 +679,22 @@ function IntakeChat({ onComplete }) {
 const API_BASE = import.meta.env.DEV ? "http://localhost:3001" : "";
 
 // ─────────────────────────────────────────────────────────────
+//  TIER DISPLAY — single source of truth for tier NAME + PRICE
+//  strings shown anywhere the frontend can't read them from the
+//  backend (`/api/billing/plans` is authoritative when available).
+//  Names/prices must stay identical to tiers.js and the homepage
+//  pricing grid: Free / Starter / Growth / Guided / Managed vCISO.
+// ─────────────────────────────────────────────────────────────
+const TIER_DISPLAY = [
+  { id: "free",    name: "Free",          price: "$0/mo" },
+  { id: "starter", name: "Starter",       price: "$159/mo" },
+  { id: "growth",  name: "Growth",        price: "$349/mo" },
+  { id: "guided",  name: "Guided",        price: "$699/mo" },
+  { id: "managed", name: "Managed vCISO", price: "$1,950/mo" },
+];
+const tierDisplay = (id) => TIER_DISPLAY.find(t => t.id === id) || { id, name: id, price: "" };
+
+// ─────────────────────────────────────────────────────────────
 //  AUTH HELPERS
 // ─────────────────────────────────────────────────────────────
 let AUTH_TOKEN = null;
@@ -2000,6 +2016,7 @@ function ThreatIntelLockedCard({ title, blurb }) {
       <button onClick={() => showUpgradePrompt({
           error: "Real threat intelligence isn't included on your current plan.",
           code: "UPGRADE_REQUIRED", capability: "threatIntel", currentTier: "starter", requiresTier: "growth",
+          requiresTierName: tierDisplay("growth").name, requiresPrice: tierDisplay("growth").price,
         })}
         style={{padding:"9px 20px",borderRadius:9,border:"none",cursor:"pointer",
           background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -3448,6 +3465,7 @@ function VendorQuestionnaireLockedCard() {
       <button onClick={() => showUpgradePrompt({
           error: "AI-assisted questionnaire responses aren't included on your current plan.",
           code: "UPGRADE_REQUIRED", capability: "vendorQuestionnaireAssistant", currentTier: "starter",
+          requiresTier: "growth", requiresTierName: tierDisplay("growth").name, requiresPrice: tierDisplay("growth").price,
         })}
         style={{padding:"9px 20px",borderRadius:9,border:"none",cursor:"pointer",
           background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
@@ -7950,7 +7968,7 @@ function Dashboard({ assessment, results, onReset }) {
       points={["Self-serve status & update reports","Staff-delivered compliance & insurance reports","Full audit trail of every report generated"]}/>,
     library: <LockedFeature icon="📚" title="Policy Library" capability="createPolicies"
       blurb="Generate and store a full library of security policy documents."
-      points={["Every policy in our catalog, customized to you","Save, edit, and re-download anytime","No limit on paid tiers"]}/>,
+      points={["Every policy in our catalog, customized to you","Save, edit, and re-download anytime","Up to 6 on Starter, 10 on Growth, unlimited on Guided & Managed vCISO"]}/>,
     remediation: <LockedFeature icon="🛠️" title="Remediation Tracking" capability="remediationTasks"
       blurb="Turn every compliance gap into a tracked, assignable task."
       points={["Tasks generated from your actual gaps","Progress tracked toward re-scoring","Owner and due-date assignment"]}/>,
@@ -9495,7 +9513,7 @@ function FaqPage({ onNavigate }) {
     { q: "Is my data safe with an AI-powered platform?",
       a: "We follow standard security practices — encrypted connections, role-based access control, and strict data isolation between clients (an analyst assigned to one client can't see another's data). We never store your payment details ourselves; all billing runs through Stripe's own PCI-compliant systems. If you have specific data-handling questions for your industry, our Support team can walk through your situation directly." },
     { q: "Which compliance frameworks does ShieldAI support?",
-      a: "Twelve frameworks today, including SOC 2, PCI DSS v4.0, ISO 27001, HIPAA Security Rule, CMMC 2.0, NIST SP 800-171, NIST SP 800-53, the FTC Safeguards Rule, CIS Controls v8.1, and state privacy laws — plus a NIST CSF/CIS Controls foundation you choose at intake to set your baseline scoring model." },
+      a: "Twelve frameworks in the catalog today, including SOC 2, PCI DSS v4.0, ISO 27001, HIPAA Security Rule, CMMC 2.0, NIST SP 800-171, NIST SP 800-53, the FTC Safeguards Rule, CIS Controls v8.1, and state privacy laws — plus a NIST CSF/CIS Controls foundation you choose at intake to set your baseline scoring model. How many you can actively track at once depends on your plan (2 on Starter, 5 on Growth, 10 on Guided, all of them on Managed vCISO)." },
     { q: "Does the monitoring agent have any control over my systems?",
       a: "No. It's read-only by design — it reports what it observes (installed software, versions, basic posture signals) and has no inbound command channel at all. It cannot be used to push changes, run remote commands, or take any action on your endpoints, now or as a future feature." },
     { q: "How much does ShieldAI cost?",
@@ -9983,23 +10001,26 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   // "Start free" without silently breaking routing. Every tier still starts
   // with the same free assessment (nothing here is a paid checkout), so
   // `action` only ever needs two values.
+  // name + price come from TIER_DISPLAY so this grid can never drift from the
+  // admin switcher / in-app plans screen. Everything else (tag, points, cta) is
+  // marketing copy specific to this page.
   const tiers = [
-    { name:"Free", tag:"Get started", price:"$0/mo",
+    { id:"free", tag:"Get started",
       points:["Security assessment & NIST/CIS posture score","See exactly where you stand today","Upgrade anytime to build your program"],
       cta:"Start free", action:"assessment" },
-    { name:"Starter", tag:"Build your program", price:"$159/mo",
-      points:["Multiple assessments & full program builder","Up to 6 policies with employee sign-off tracking","Vendor risk registry & compliance calendar","AI-recommended training plan + 1 free phishing test","5 monitored endpoints","Full training delivery available as a $40/mo add-on"],
+    { id:"starter", tag:"Build your program",
+      points:["Multiple assessments & full program builder","Up to 6 policies with employee sign-off tracking","2 compliance frameworks","Vendor risk registry & compliance calendar","AI-recommended training plan + 1 free phishing test","5 monitored endpoints","Full training delivery available as a $40/mo add-on"],
       cta:"Start with a free assessment →", action:"assessment" },
-    { name:"Growth", tag:"Most popular", featured:true, price:"$349/mo",
+    { id:"growth", tag:"Most popular", featured:true,
       points:["Everything in Starter","Real threat intel + AI-answered vendor questionnaires","Employee training delivery included","5 compliance frameworks, evidence & workflows","Connect your security tools, directory, and chat apps","Up to 10 policies, 25 endpoints","Full downloads & exports"],
       cta:"Start with a free assessment →", action:"assessment" },
-    { name:"Guided", tag:"Expert-reviewed", price:"$699/mo",
+    { id:"guided", tag:"Expert-reviewed",
       points:["Everything in Growth","Periodic engineer review, including flagged vendor answers","10 compliance frameworks & scheduled check-ins","Up to 100 endpoints"],
       cta:"Start with a free assessment →", action:"assessment" },
-    { name:"Managed vCISO", tag:"Full service", price:"$1,950/mo",
-      points:["A ShieldAI engineer runs your program end-to-end, including vendor management","Unlimited endpoints & full agent access","All compliance frameworks","Client-facing Mastermind Q&A","Still below a human-only vCISO retainer"],
+    { id:"managed", tag:"Full service",
+      points:["Everything in Guided","A ShieldAI engineer runs your program end-to-end, including vendor management","Unlimited endpoints & full agent access","All compliance frameworks","Client-facing Mastermind Q&A","Still below a human-only vCISO retainer"],
       cta:"Contact us", action:"contact" },
-  ];
+  ].map(t => ({ ...t, name: tierDisplay(t.id).name, price: tierDisplay(t.id).price }));
 
   const trust = ["NIST Cybersecurity Framework","CISA Guidance","HIPAA","SOC 2","CMMC","PCI-DSS"];
 
@@ -12279,13 +12300,9 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind 
 
   const money = (cents) => cents == null ? "—" : `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
 
-  const TIER_LIST = [
-    { id:"free", name:"Free", price:"$0" },
-    { id:"starter", name:"Starter", price:"$159/mo" },
-    { id:"growth", name:"Growth", price:"$349/mo" },
-    { id:"guided", name:"Guided", price:"$699/mo" },
-    { id:"managed", name:"Managed vCISO", price:"$1,950/mo" },
-  ];
+  // Names/prices come straight from TIER_DISPLAY so this never drifts from the
+  // homepage pricing grid.
+  const TIER_LIST = TIER_DISPLAY;
 
   // Load the rich account-control record for a user.
   async function loadAccountCtl(id) {
@@ -20514,7 +20531,7 @@ function PlanBillingSection() {
         <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:4}}>
           <div style={{fontSize:22,fontWeight:800,color:C.text}}>{current?.name || currentTierId}</div>
           <div style={{fontSize:14,color:C.textSec}}>
-            {current ? (current.priceCents === 0 ? "Free" : `$${(current.priceCents/100).toFixed(0)}/mo`) : ""}
+            {current ? `$${(current.priceCents/100).toFixed(0)}/mo` : ""}
           </div>
         </div>
         {me?.subscription?.currentPeriodEnd && (
@@ -20547,10 +20564,20 @@ function PlanBillingSection() {
                 fontWeight:700,letterSpacing:0.5}}>CURRENT</div>}
               <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{p.name}</div>
               <div style={{fontSize:18,fontWeight:800,color:C.text,marginBottom:8}}>
-                {p.priceCents === 0 ? "Free" : `$${(p.priceCents/100).toFixed(0)}`}
-                {p.priceCents > 0 && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}>/mo</span>}
+                {p.priceCents === 0 ? "$0" : `$${(p.priceCents/100).toFixed(0)}`}
+                <span style={{fontSize:11,color:C.textMut,fontWeight:400}}>/mo</span>
               </div>
-              <div style={{fontSize:11,color:C.textMut,lineHeight:1.5,marginBottom:12,minHeight:44}}>{p.description}</div>
+              <div style={{fontSize:11,color:C.textMut,lineHeight:1.5,marginBottom:10,minHeight:44}}>{p.description}</div>
+              {Array.isArray(p.features) && p.features.length > 0 && (
+                <ul style={{listStyle:"none",padding:0,margin:"0 0 12px",display:"flex",flexDirection:"column",gap:4}}>
+                  {p.features.map((f,fi) => (
+                    <li key={fi} style={{fontSize:11,color:C.textSec,lineHeight:1.45,display:"flex",gap:6,alignItems:"flex-start"}}>
+                      <span style={{color:C.accentText,flexShrink:0}}>✓</span>
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {isCurrent ? (
                 <div style={{fontSize:11,color:C.textMut,textAlign:"center",padding:"7px 0"}}>Your current plan</div>
               ) : !p.selfServe ? (
@@ -21902,7 +21929,7 @@ export default function ShieldAI() {
         </button>
         <button onClick={() => can("integrations")
             ? setShowIntegrations(true)
-            : setUpgradePrompt({ error:"Security tool integrations (SIEM/EDR/scanner findings) are available on the Growth plan and above. Upgrade to Growth ($349/mo) to connect your tools.", code:"UPGRADE_REQUIRED", capability:"integrations", currentTier:user.tier, requiresTier:"growth" })}
+            : setUpgradePrompt({ error:"Security tool integrations (SIEM/EDR/scanner findings) are available on the Growth plan and above. Upgrade to Growth ($349/mo) to connect your tools.", code:"UPGRADE_REQUIRED", capability:"integrations", currentTier:user.tier, requiresTier:"growth", requiresTierName:tierDisplay("growth").name, requiresPrice:tierDisplay("growth").price })}
           title={can("integrations") ? "" : "Growth plan feature"}
           style={{padding:"5px 12px",
             background: can("integrations") ? `${C.accent}1E` : "rgba(255,255,255,0.04)",
@@ -21919,7 +21946,7 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("analystSupport")
               ? setShowClientChat(true)
-              : setUpgradePrompt({ error:"Direct analyst messaging is available on the Guided plan and above. Upgrade to Guided ($699/mo) to message your assigned analyst directly — or reach our team any time via the Support form.", code:"UPGRADE_REQUIRED", capability:"analystSupport", currentTier:user.tier, requiresTier:"guided" })}
+              : setUpgradePrompt({ error:"Direct analyst messaging is available on the Guided plan and above. Upgrade to Guided ($699/mo) to message your assigned analyst directly — or reach our team any time via the Support form.", code:"UPGRADE_REQUIRED", capability:"analystSupport", currentTier:user.tier, requiresTier:"guided", requiresTierName:tierDisplay("guided").name, requiresPrice:tierDisplay("guided").price })}
             title={can("analystSupport") ? "" : "Guided plan feature"}
             style={{padding:"5px 12px",
               background: can("analystSupport") ? `${C.green}1E` : "rgba(255,255,255,0.04)",
@@ -21931,7 +21958,7 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermindChat")
               ? setShowClientMastermind(true)
-              : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter" })}
+              : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter", requiresTierName:tierDisplay("starter").name, requiresPrice:tierDisplay("starter").price })}
             title={can("mastermindChat") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
               background: can("mastermindChat") ? `${C.purple}22` : "rgba(255,255,255,0.04)",
@@ -21943,7 +21970,7 @@ export default function ShieldAI() {
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("supportCenter")
               ? setShowSupportCenter(true)
-              : setUpgradePrompt({ error:"The in-app Support Center is available on the Starter plan and above. Upgrade to Starter ($159/mo) to submit support requests and chat with Mastermind for help — or reach our team any time via the public Support form.", code:"UPGRADE_REQUIRED", capability:"supportCenter", currentTier:user.tier, requiresTier:"starter" })}
+              : setUpgradePrompt({ error:"The in-app Support Center is available on the Starter plan and above. Upgrade to Starter ($159/mo) to submit support requests and chat with Mastermind for help — or reach our team any time via the public Support form.", code:"UPGRADE_REQUIRED", capability:"supportCenter", currentTier:user.tier, requiresTier:"starter", requiresTierName:tierDisplay("starter").name, requiresPrice:tierDisplay("starter").price })}
             title={can("supportCenter") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
               background: can("supportCenter") ? `${C.accent}1E` : "rgba(255,255,255,0.04)",

@@ -302,7 +302,10 @@ export function registerDemoRoutes(app, db, { redeemLimiter } = {}) {
           isAnalyst: record.type === "investor",
           isDemo: true,
           accessType: record.type,
-          tier: user.tier || "enterprise",
+          // "enterprise" was a stale, non-existent tier id — a seeded demo user
+          // always carries a real tier now; fall back to "managed" (full access)
+          // only if a record is somehow missing one.
+          tier: user.tier || "managed",
         },
       });
     } catch (err) {
@@ -344,7 +347,9 @@ export function registerDemoRoutes(app, db, { redeemLimiter } = {}) {
           isAdmin: false,
           isAnalyst: !!user.isAnalyst,
           isDemo: true,
-          tier: user.tier || "enterprise",
+          // See note above — "enterprise" is not a real tier; "managed" is the
+          // safe full-access fallback for a seeded demo record without one.
+          tier: user.tier || "managed",
         },
       });
     } catch (err) {

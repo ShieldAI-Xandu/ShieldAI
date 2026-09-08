@@ -280,7 +280,7 @@ export const TIERS = {
       remediationTasks: true,
       supportCenter: true,
     },
-    features: ["Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
+    features: ["Everything in Guided", "Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
 };
 
@@ -415,18 +415,20 @@ export function limitLabel(tierId, resource) {
   return limit == null ? "Unlimited" : String(limit);
 }
 
-// Price as a display string.
+// Price as a display string. Uses "/mo" (not "/month") to match the homepage
+// pricing grid, the admin tier switcher, and featureAccess() above — every
+// tier price shown to a user reads the same way.
 export function priceLabel(tierId) {
   const t = getTier(tierId);
   if (t.priceCents == null) return "Custom";
   if (t.priceCents === 0) return "Free";
-  return `$${(t.priceCents / 100).toFixed(0)}/${t.interval}`;
+  return `$${(t.priceCents / 100).toFixed(0)}/${t.interval === "month" ? "mo" : t.interval}`;
 }
 
 export function addonPriceLabel(addonId) {
   const a = getAddon(addonId);
   if (!a) return "";
-  return `$${(a.priceCents / 100).toFixed(0)}/${a.interval}`;
+  return `$${(a.priceCents / 100).toFixed(0)}/${a.interval === "month" ? "mo" : a.interval}`;
 }
 
 // For a given capability flag, the lowest tier that includes it (per

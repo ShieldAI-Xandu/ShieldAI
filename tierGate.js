@@ -14,7 +14,7 @@
 //   { error, code: "UPGRADE_REQUIRED" | "LIMIT_REACHED", capability?, resource?,
 //     currentTier, limit?, current? }
 
-import { getTier, hasCapability, hasTrainingDelivery, DEFAULT_TIER, minTierForCapability, nextTierForLimit, priceLabel } from "./tiers.js";
+import { getTier, hasCapability, hasTrainingDelivery, DEFAULT_TIER, minTierForCapability, nextTierForLimit, priceLabel, addonPriceLabel } from "./tiers.js";
 
 export function makeTierGate(db) {
   function tierOf(userId) {
@@ -88,7 +88,7 @@ export function makeTierGate(db) {
       const tier = tierOf(req.userId);
       if (hasTrainingDelivery(tier, addonsOf(req.userId))) return next();
       return res.status(402).json({
-        error: `Employee training delivery isn't included on your plan. Add it for $40/mo, or upgrade to Growth or higher where it's bundled.`,
+        error: `Employee training delivery isn't included on your plan. Add it for ${addonPriceLabel("training_delivery")}, or upgrade to ${getTier("growth").name} or higher where it's bundled.`,
         code: "UPGRADE_REQUIRED",
         capability: "trainingDelivery",
         addon: "training_delivery",
