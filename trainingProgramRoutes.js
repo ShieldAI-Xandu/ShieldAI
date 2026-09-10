@@ -28,6 +28,7 @@
 
 import { randomUUID, randomBytes } from "crypto";
 import { TRAINING_TOPICS } from "./trainingCatalog.js";
+import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
 
 const nowIso = () => new Date().toISOString();
 const newToken = () => randomBytes(24).toString("base64url"); // ~32 chars, URL-safe
@@ -41,6 +42,7 @@ function ensureCollections(db) {
   db.data.trainingAssignments ||= []; // { id, clientUserId, learnerId, source, title, modules[], status, progress, score, dueDate, assignedBy, assignedAt, startedAt, completedAt, moduleState{}, quarterId? }
   db.data.trainingQuarters    ||= []; // { id, clientUserId, label, year, quarter, topicIds[], dueDate, createdBy, createdAt, learnerCount }
   db.data.moduleContent       ||= []; // { id, clientUserId, topicId, slides[], quiz[{question,options,correct,explanation}], generatedBy, generatedAt }
+  ensureVersionHistoryCollection(db);
 }
 
 // ── scope helpers ─────────────────────────────────────────────
@@ -193,6 +195,112 @@ export function rollup(assignment) {
   return assignment;
 }
 
+// ── Shared write operations ─────────────────────────────────────
+// Exported so staffRoutes.js can perform the identical edit/delete/restore
+// on a client's behalf, instead of duplicating this logic. Each function
+// takes the already-resolved live record plus the acting user's identity —
+// callers (client-facing routes below, and staff routes) own scope
+// resolution, validation of request-shaped input, and db.write()/res.json().
+
+export function applyLearnerEdit(db, { learner, body, actorUserId, actorRole, logClientAction }) {
+  // Same dedupe rule as creating a learner — an edited email must not
+  // collide with a DIFFERENT learner under this client (matches the
+  // existing check in POST /api/training-program/learners).
+  if (typeof body?.email === "string" && body.email.trim()) {
+    const nextEmail = body.email.trim().toLowerCase();
+    const collision = (db.data.learners || []).find(l =>
+      l.id !== learner.id && l.clientUserId === learner.clientUserId && l.email.toLowerCase() === nextEmail);
+    if (collision) return { ok: false, error: "A learner with that email already exists." };
+  }
+  const before = { name: learner.name, email: learner.email, department: learner.department, status: learner.status };
+  for (const k of ["name", "email", "department"]) if (typeof body?.[k] === "string") learner[k] = body[k].trim();
+  if (body?.status && LEARNER_STATUSES.includes(body.status)) learner.status = body.status;
+  const changedFields = diffFields(before, learner, ["name", "email", "department", "status"]);
+  if (changedFields.length) {
+    recordVersion(db, { entityType: "learner", entityId: learner.id, clientUserId: learner.clientUserId,
+      action: "update", snapshot: before, changedFields, actorUserId, actorRole });
+  }
+  logClientAction(db, { clientUserId: learner.clientUserId, actorUserId, actorRole,
+    action: "training_learner_updated", detail: `Updated learner ${learner.name}.` });
+  return { ok: true, learner };
+}
+
+export function applyLearnerDelete(db, { learner, actorUserId, actorRole, logClientAction }) {
+  const cascadedAssignments = (db.data.trainingAssignments || []).filter(a => a.learnerId === learner.id);
+  recordVersion(db, { entityType: "learner", entityId: learner.id, clientUserId: learner.clientUserId,
+    action: "delete", snapshot: { learner: { ...learner }, cascadedAssignments: cascadedAssignments.map(a => ({ ...a })) },
+    actorUserId, actorRole });
+  db.data.learners = (db.data.learners || []).filter(l => l.id !== learner.id);
+  db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(a => a.learnerId !== learner.id);
+  logClientAction(db, { clientUserId: learner.clientUserId, actorUserId, actorRole,
+    action: "training_learner_removed", detail: `Removed learner ${learner.name}.` });
+}
+
+export function restoreLearnerFor(db, { learnerId, versionId, clientUserId, actorUserId, actorRole, logClientAction }) {
+  const liveRecord = (db.data.learners || []).find(l => l.id === learnerId && l.clientUserId === clientUserId);
+  const result = restoreVersion(db, { entityType: "learner", entityId: learnerId, versionId, liveRecord });
+  if (!result.ok) return result;
+  let record;
+  if (result.recreated) {
+    record = { ...result.record, id: learnerId, clientUserId };
+    db.data.learners.push(record);
+    if (result.cascaded && result.cascaded.length) {
+      for (const a of result.cascaded) {
+        if (!(db.data.trainingAssignments || []).some(x => x.id === a.id)) db.data.trainingAssignments.push({ ...a });
+      }
+    }
+  } else {
+    record = result.record;
+  }
+  recordVersion(db, { entityType: "learner", entityId: learnerId, clientUserId, action: "restore",
+    snapshot: result.recreated ? null : result.preRestoreSnapshot, actorUserId, actorRole });
+  logClientAction(db, { clientUserId, actorUserId, actorRole,
+    action: "training_learner_restored", detail: `Restored learner ${record.name} to an earlier version.` });
+  return { ok: true, record, appliedFields: result.appliedFields, skippedFields: result.skippedFields };
+}
+
+export function applyAssignmentEdit(db, { assignment, body, actorUserId, actorRole, logClientAction }) {
+  const before = { dueDate: assignment.dueDate, status: assignment.status };
+  if (body?.dueDate !== undefined) assignment.dueDate = body.dueDate || null;
+  if (body?.status === "waived") { assignment.status = "waived"; assignment.waivedBy = actorUserId; assignment.waivedAt = nowIso(); }
+  rollup(assignment);
+  const changedFields = diffFields(before, assignment, ["dueDate", "status"]);
+  if (changedFields.length) {
+    recordVersion(db, { entityType: "trainingAssignment", entityId: assignment.id, clientUserId: assignment.clientUserId,
+      action: "update", snapshot: before, changedFields, actorUserId, actorRole });
+  }
+  logClientAction(db, { clientUserId: assignment.clientUserId, actorUserId, actorRole,
+    action: "training_assignment_updated", detail: `Updated assignment "${assignment.title}".` });
+  return assignment;
+}
+
+export function applyAssignmentDelete(db, { assignment, actorUserId, actorRole, logClientAction }) {
+  recordVersion(db, { entityType: "trainingAssignment", entityId: assignment.id, clientUserId: assignment.clientUserId,
+    action: "delete", snapshot: { ...assignment }, actorUserId, actorRole });
+  db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(x => x.id !== assignment.id);
+  logClientAction(db, { clientUserId: assignment.clientUserId, actorUserId, actorRole,
+    action: "training_assignment_removed", detail: `Removed assignment "${assignment.title}".` });
+}
+
+export function restoreAssignmentFor(db, { assignmentId, versionId, clientUserId, actorUserId, actorRole, logClientAction }) {
+  const liveRecord = (db.data.trainingAssignments || []).find(x => x.id === assignmentId && x.clientUserId === clientUserId);
+  const result = restoreVersion(db, { entityType: "trainingAssignment", entityId: assignmentId, versionId, liveRecord });
+  if (!result.ok) return result;
+  let record;
+  if (result.recreated) {
+    record = { ...result.record, id: assignmentId, clientUserId };
+    db.data.trainingAssignments.push(record);
+  } else {
+    record = result.record;
+    rollup(record);
+  }
+  recordVersion(db, { entityType: "trainingAssignment", entityId: assignmentId, clientUserId, action: "restore",
+    snapshot: result.recreated ? null : result.preRestoreSnapshot, actorUserId, actorRole });
+  logClientAction(db, { clientUserId, actorUserId, actorRole,
+    action: "training_assignment_restored", detail: `Restored assignment "${record.title}" to an earlier version.` });
+  return { ok: true, record, appliedFields: result.appliedFields, skippedFields: result.skippedFields };
+}
+
 // Public (learner-facing) shape — no internal ids beyond what the flow needs.
 function learnerFacing(assignment, learner) {
   return {
@@ -336,6 +444,8 @@ export function registerTrainingProgramRoutes(app, {
       token: newToken(), status: "active", createdAt: nowIso(),
     };
     db.data.learners.push(learner);
+    recordVersion(db, { entityType: "learner", entityId: learner.id, clientUserId: scope.clientUserId,
+      action: "create", actorUserId: req.userId, actorRole: scope.role });
     await db.write();
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId,
       actorRole: scope.role, action: "training_learner_added", detail: `Added learner ${learner.name}.` });
@@ -347,22 +457,39 @@ export function registerTrainingProgramRoutes(app, {
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === scope.clientUserId);
     if (!learner) return res.status(404).json({ error: "Learner not found." });
-    for (const k of ["name", "email", "department"]) if (typeof req.body?.[k] === "string") learner[k] = req.body[k].trim();
-    if (req.body?.status && LEARNER_STATUSES.includes(req.body.status)) learner.status = req.body.status;
+    const result = applyLearnerEdit(db, { learner, body: req.body, actorUserId: req.userId, actorRole: scope.role, logClientAction });
+    if (!result.ok) return res.status(409).json({ error: result.error });
     await db.write();
-    res.json(learner);
+    res.json(result.learner);
   });
 
   app.delete("/api/training-program/learners/:id", requireAuth, gateRoster, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
-    const before = (db.data.learners || []).length;
-    db.data.learners = (db.data.learners || []).filter(l => !(l.id === req.params.id && l.clientUserId === scope.clientUserId));
-    if (db.data.learners.length === before) return res.status(404).json({ error: "Learner not found." });
-    // Cascade: remove their assignments too.
-    db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(a => a.learnerId !== req.params.id);
+    const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === scope.clientUserId);
+    if (!learner) return res.status(404).json({ error: "Learner not found." });
+    applyLearnerDelete(db, { learner, actorUserId: req.userId, actorRole: scope.role, logClientAction });
     await db.write();
     res.json({ ok: true, deleted: req.params.id });
+  });
+
+  // Version history for one learner (includes their delete/restore events).
+  app.get("/api/training-program/learners/:id/history", requireAuth, gateRoster, (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    res.json(listVersions(db, "learner", req.params.id).filter(v => v.clientUserId === scope.clientUserId));
+  });
+
+  // Restore a learner (and, if the version being restored is a delete, their
+  // cascade-deleted assignments) to a prior version — including past a hard delete.
+  app.post("/api/training-program/learners/:id/restore/:versionId", requireAuth, gateRoster, async (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    const result = restoreLearnerFor(db, { learnerId: req.params.id, versionId: req.params.versionId,
+      clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role, logClientAction });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await db.write();
+    res.json({ ok: true, learner: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
   });
 
   // === ASSIGNMENTS =============================================
@@ -421,29 +548,39 @@ export function registerTrainingProgramRoutes(app, {
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
     if (!a) return res.status(404).json({ error: "Assignment not found." });
-    if (req.body?.dueDate !== undefined) {
-      if (req.body.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
-        return res.status(400).json({ error: "dueDate must be an ISO date." });
-      }
-      a.dueDate = req.body.dueDate || null;
+    if (req.body?.dueDate !== undefined && req.body.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
+      return res.status(400).json({ error: "dueDate must be an ISO date." });
     }
-    if (req.body?.status === "waived") { a.status = "waived"; a.waivedBy = req.userId; a.waivedAt = nowIso(); }
-    rollup(a);
+    applyAssignmentEdit(db, { assignment: a, body: req.body, actorUserId: req.userId, actorRole: scope.role, logClientAction });
     await db.write();
-    logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
-      action: "training_assignment_updated", detail: `Updated assignment "${a.title}".` });
     res.json(a);
   });
 
   app.delete("/api/training-program/assignments/:id", requireAuth, gateDelivery, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
-    const before = (db.data.trainingAssignments || []).length;
-    db.data.trainingAssignments = (db.data.trainingAssignments || []).filter(
-      a => !(a.id === req.params.id && a.clientUserId === scope.clientUserId));
-    if (db.data.trainingAssignments.length === before) return res.status(404).json({ error: "Assignment not found." });
+    const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
+    if (!a) return res.status(404).json({ error: "Assignment not found." });
+    applyAssignmentDelete(db, { assignment: a, actorUserId: req.userId, actorRole: scope.role, logClientAction });
     await db.write();
     res.json({ ok: true, deleted: req.params.id });
+  });
+
+  // Version history for one assignment (includes its delete/restore events).
+  app.get("/api/training-program/assignments/:id/history", requireAuth, gateDelivery, (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    res.json(listVersions(db, "trainingAssignment", req.params.id).filter(v => v.clientUserId === scope.clientUserId));
+  });
+
+  app.post("/api/training-program/assignments/:id/restore/:versionId", requireAuth, gateDelivery, async (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    const result = restoreAssignmentFor(db, { assignmentId: req.params.id, versionId: req.params.versionId,
+      clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role, logClientAction });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await db.write();
+    res.json({ ok: true, assignment: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
   });
 
   // Staff can send a reminder (records an action; email delivery is out of scope here).

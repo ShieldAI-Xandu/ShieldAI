@@ -37,13 +37,32 @@
 //   GET   /api/staff/clients/:cid/policies/:id
 //   PATCH /api/staff/clients/:cid/policies/:id        edit policy content
 //   DELETE/api/staff/clients/:cid/policies/:id
+//   GET/POST /api/staff/clients/:cid/policies/:id/history, /restore/:versionId
 //   GET   /api/staff/clients/:cid/training
 //   GET   /api/staff/clients/:cid/training/:id
+//   PATCH /api/staff/clients/:cid/training/:id        edit curriculum text fields
+//   DELETE/api/staff/clients/:cid/training/:id
+//   GET/POST /api/staff/clients/:cid/training/:id/history, /restore/:versionId
+//   PATCH/DELETE + /history + /restore/:versionId for
+//     /api/staff/clients/:cid/training-program/learners/:id
+//     /api/staff/clients/:cid/training-program/assignments/:id
 //   GET   /api/staff/clients/:cid/endpoints
 //   DELETE/api/staff/clients/:cid/endpoints/:id
 //   POST  /api/staff/clients/:cid/impersonate        "View as Client" — see below
+//
+// Version history / edit / delete for policies, training curricula, and the
+// training-program roster (learners/assignments) share their write logic
+// with the client-facing routes in server.js / trainingProgramRoutes.js via
+// policyWriteOps.js and the exported apply*/restore* helpers in
+// trainingProgramRoutes.js — one implementation per entity, two callers.
 
 import { signImpersonationToken, publicUser } from "./auth.js";
+import { applyPolicyEdit, applyPolicyDelete, restorePolicyVersion } from "./policyWriteOps.js";
+import { listVersions, recordVersion, restoreVersion } from "./versionHistory.js";
+import {
+  applyLearnerEdit, applyLearnerDelete, restoreLearnerFor,
+  applyAssignmentEdit, applyAssignmentDelete, restoreAssignmentFor,
+} from "./trainingProgramRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -228,36 +247,38 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     res.json(record);
   });
 
-  // Edit a client's policy content on their behalf. Only the editable fields
-  // (content, and optionally policyName) are touched; provenance is preserved.
+  // Edit a client's policy content on their behalf. Shares its edit logic
+  // with the client-facing route in server.js via policyWriteOps.js — one
+  // implementation, two callers, each supplying their own actorRole.
   app.patch("/api/staff/clients/:cid/policies/:id", ...staff, async (req, res) => {
     const record = (db.data.policyDocs || []).find(p => p.id === req.params.id && p.userId === req.client.id);
     if (!record) return res.status(404).json({ error: "Policy document not found" });
     const { content, policyName } = req.body || {};
-    if (typeof content === "string") record.content = content;
-    if (typeof policyName === "string" && policyName.trim()) record.policyName = policyName.trim();
-    record.updatedAt = nowIso();
-    record.lastEditedBy = req.userId;
-    logClientAction(db, {
-      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
-      action: "edited_policy", detail: `Edited policy "${record.policyName}" (${record.id}) on behalf of client.`,
-    });
+    applyPolicyEdit(db, { record, content, policyName, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
     await db.write();
     res.json({ ok: true, id: record.id, policyName: record.policyName, content: record.content });
   });
 
   app.delete("/api/staff/clients/:cid/policies/:id", ...staff, async (req, res) => {
-    const before = (db.data.policyDocs || []).length;
-    db.data.policyDocs = (db.data.policyDocs || []).filter(
-      p => !(p.id === req.params.id && p.userId === req.client.id)
-    );
-    if (db.data.policyDocs.length === before) return res.status(404).json({ error: "Policy document not found" });
-    logClientAction(db, {
-      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
-      action: "deleted_policy", detail: `Deleted policy ${req.params.id} on behalf of client.`,
-    });
+    const record = (db.data.policyDocs || []).find(p => p.id === req.params.id && p.userId === req.client.id);
+    if (!record) return res.status(404).json({ error: "Policy document not found" });
+    applyPolicyDelete(db, { record, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
     await db.write();
     res.json({ ok: true, deleted: req.params.id });
+  });
+
+  // Version history for a client's policy (staff view — includes delete/restore events).
+  app.get("/api/staff/clients/:cid/policies/:id/history", ...staff, (req, res) => {
+    res.json(listVersions(db, "policyDoc", req.params.id).filter(v => v.clientUserId === req.client.id));
+  });
+
+  // Restore a client's policy to a prior version on their behalf.
+  app.post("/api/staff/clients/:cid/policies/:id/restore/:versionId", ...staff, async (req, res) => {
+    const result = restorePolicyVersion(db, { policyId: req.params.id, versionId: req.params.versionId,
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await db.write();
+    res.json({ ok: true, policy: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
   });
 
   // ── Training ────────────────────────────────────────────────
@@ -273,6 +294,138 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.client.id);
     if (!record) return res.status(404).json({ error: "Training program not found" });
     res.json(record);
+  });
+
+  // Edit a client's curriculum text fields on their behalf — same scoped
+  // fields (overview / a phase's note / a module's tailoredIntro or
+  // realWorldScenario) as the client-facing PATCH /api/training/:id.
+  app.patch("/api/staff/clients/:cid/training/:id", ...staff, async (req, res) => {
+    const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.client.id);
+    if (!record) return res.status(404).json({ error: "Training program not found" });
+    const before = JSON.parse(JSON.stringify(record.curriculum));
+    const { overview, phaseIndex, note, moduleId, tailoredIntro, realWorldScenario } = req.body || {};
+    let touched = false;
+    if (typeof overview === "string") { record.curriculum.overview = overview; touched = true; }
+    if (Number.isInteger(phaseIndex) && record.curriculum.phases?.[phaseIndex]) {
+      const phase = record.curriculum.phases[phaseIndex];
+      if (typeof note === "string") { phase.note = note; touched = true; }
+      if (moduleId) {
+        const mod = (phase.modules || []).find(m => m.id === moduleId);
+        if (mod) {
+          if (typeof tailoredIntro === "string") { mod.tailoredIntro = tailoredIntro; mod.editedByHuman = true; touched = true; }
+          if (typeof realWorldScenario === "string") { mod.realWorldScenario = realWorldScenario; mod.editedByHuman = true; touched = true; }
+        }
+      }
+    }
+    if (!touched) return res.status(400).json({ error: "No editable fields were provided." });
+    record.updatedAt = nowIso();
+    record.lastEditedBy = req.userId;
+    recordVersion(db, { entityType: "trainingCurriculum", entityId: record.id, clientUserId: req.client.id,
+      action: "update", snapshot: { curriculum: before }, changedFields: ["curriculum"],
+      actorUserId: req.userId, actorRole: actorRole(req) });
+    await db.write();
+    logClientAction(db, { clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "training_curriculum_edited", detail: `Edited training curriculum (${record.id}) on behalf of client.` });
+    res.json(record);
+  });
+
+  app.delete("/api/staff/clients/:cid/training/:id", ...staff, async (req, res) => {
+    const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.client.id);
+    if (!record) return res.status(404).json({ error: "Training program not found" });
+    recordVersion(db, { entityType: "trainingCurriculum", entityId: record.id, clientUserId: req.client.id,
+      action: "delete", snapshot: { ...record }, actorUserId: req.userId, actorRole: actorRole(req) });
+    db.data.trainingPrograms = (db.data.trainingPrograms || []).filter(t => t.id !== record.id);
+    await db.write();
+    logClientAction(db, { clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "training_curriculum_deleted", detail: `Deleted training curriculum (${record.id}) on behalf of client.` });
+    res.json({ ok: true, deleted: req.params.id });
+  });
+
+  app.get("/api/staff/clients/:cid/training/:id/history", ...staff, (req, res) => {
+    res.json(listVersions(db, "trainingCurriculum", req.params.id).filter(v => v.clientUserId === req.client.id));
+  });
+
+  app.post("/api/staff/clients/:cid/training/:id/restore/:versionId", ...staff, async (req, res) => {
+    const liveRecord = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.client.id);
+    const result = restoreVersion(db, { entityType: "trainingCurriculum", entityId: req.params.id, versionId: req.params.versionId, liveRecord });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    let record;
+    if (result.recreated) {
+      record = { ...result.record, id: req.params.id, userId: req.client.id };
+      db.data.trainingPrograms.push(record);
+    } else {
+      record = result.record;
+    }
+    record.updatedAt = nowIso();
+    record.lastEditedBy = req.userId;
+    recordVersion(db, { entityType: "trainingCurriculum", entityId: req.params.id, clientUserId: req.client.id,
+      action: "restore", snapshot: result.recreated ? null : result.preRestoreSnapshot, actorUserId: req.userId, actorRole: actorRole(req) });
+    await db.write();
+    logClientAction(db, { clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req),
+      action: "training_curriculum_restored", detail: `Restored training curriculum (${req.params.id}) on behalf of client.` });
+    res.json({ ok: true, program: record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
+  });
+
+  // ── Training program: learners (roster) ────────────────────────
+  app.patch("/api/staff/clients/:cid/training-program/learners/:id", ...staff, async (req, res) => {
+    const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === req.client.id);
+    if (!learner) return res.status(404).json({ error: "Learner not found." });
+    const result = applyLearnerEdit(db, { learner, body: req.body, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    await db.write();
+    res.json(result.learner);
+  });
+
+  app.delete("/api/staff/clients/:cid/training-program/learners/:id", ...staff, async (req, res) => {
+    const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === req.client.id);
+    if (!learner) return res.status(404).json({ error: "Learner not found." });
+    applyLearnerDelete(db, { learner, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    await db.write();
+    res.json({ ok: true, deleted: req.params.id });
+  });
+
+  app.get("/api/staff/clients/:cid/training-program/learners/:id/history", ...staff, (req, res) => {
+    res.json(listVersions(db, "learner", req.params.id).filter(v => v.clientUserId === req.client.id));
+  });
+
+  app.post("/api/staff/clients/:cid/training-program/learners/:id/restore/:versionId", ...staff, async (req, res) => {
+    const result = restoreLearnerFor(db, { learnerId: req.params.id, versionId: req.params.versionId,
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await db.write();
+    res.json({ ok: true, learner: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
+  });
+
+  // ── Training program: assignments ──────────────────────────────
+  app.patch("/api/staff/clients/:cid/training-program/assignments/:id", ...staff, async (req, res) => {
+    const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === req.client.id);
+    if (!a) return res.status(404).json({ error: "Assignment not found." });
+    if (req.body?.dueDate !== undefined && req.body.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
+      return res.status(400).json({ error: "dueDate must be an ISO date." });
+    }
+    applyAssignmentEdit(db, { assignment: a, body: req.body, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    await db.write();
+    res.json(a);
+  });
+
+  app.delete("/api/staff/clients/:cid/training-program/assignments/:id", ...staff, async (req, res) => {
+    const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === req.client.id);
+    if (!a) return res.status(404).json({ error: "Assignment not found." });
+    applyAssignmentDelete(db, { assignment: a, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    await db.write();
+    res.json({ ok: true, deleted: req.params.id });
+  });
+
+  app.get("/api/staff/clients/:cid/training-program/assignments/:id/history", ...staff, (req, res) => {
+    res.json(listVersions(db, "trainingAssignment", req.params.id).filter(v => v.clientUserId === req.client.id));
+  });
+
+  app.post("/api/staff/clients/:cid/training-program/assignments/:id/restore/:versionId", ...staff, async (req, res) => {
+    const result = restoreAssignmentFor(db, { assignmentId: req.params.id, versionId: req.params.versionId,
+      clientUserId: req.client.id, actorUserId: req.userId, actorRole: actorRole(req), logClientAction });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    await db.write();
+    res.json({ ok: true, assignment: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
   });
 
   // ── Endpoints ───────────────────────────────────────────────

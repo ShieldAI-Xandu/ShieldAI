@@ -1176,6 +1176,8 @@ Limit findings to 6 and recommendations to 5.`;
     if (has("trainingPlan")) {
       const plans = (db.data.trainingPrograms || []).filter(t => t.userId === userId);
       snap.trainingPlan = { generated: plans.length, latest: plans.length ? (plans[plans.length - 1].createdAt || null) : null };
+      // Real ids so a "proposed_edit" block can reference an actual curriculum.
+      snap.curricula = plans.slice(0, 20).map(t => ({ id: t.id, createdAt: t.createdAt, overview: t.curriculum?.overview || "" }));
     }
 
     // ── Training DELIVERY status (Growth+ or Starter w/ add-on) ─
@@ -1187,6 +1189,11 @@ Limit findings to 6 and recommendations to 5.`;
         assignments: assigns.length,
         completed: assigns.filter(a => a.status === "completed").length,
         quartersScheduled: (db.data.trainingQuarters || []).filter(q => q.clientUserId === userId).length,
+        // Real ids/fields so a "proposed_edit" block can reference an actual
+        // record — Mastermind must never invent an id. Capped since this is
+        // for chat-context, not a full export.
+        learnerList: learners.slice(0, 50).map(l => ({ id: l.id, name: l.name, email: l.email, department: l.department || "", status: l.status })),
+        assignmentList: assigns.slice(0, 50).map(a => ({ id: a.id, title: a.title, learnerId: a.learnerId, dueDate: a.dueDate, status: a.status })),
       };
       // Same capability that gates campaign creation (phishingRoutes.js) —
       // a Starter client's single free trial campaign isn't reflected here,
@@ -1201,8 +1208,14 @@ Limit findings to 6 and recommendations to 5.`;
 
     // ── Policy library & sign-off (Starter+) ────────────────────
     if (has("createPolicies")) {
-      snap.policies = policySummary(db, userId);
+      const docs = (db.data.policyDocs || []).filter(p => p.userId === userId);
+      snap.policies = {
+        ...policySummary(db, userId),
+        // Real ids so a "proposed_edit" block can reference an actual policy.
+        list: docs.slice(0, 50).map(d => ({ id: d.id, policyName: d.policyName, updatedAt: d.updatedAt || d.createdAt })),
+      };
     }
+
 
     // ── Generated reports (Growth+) ──────────────────────────────
     if (has("reportsAccess")) {
@@ -1247,7 +1260,7 @@ Limit findings to 6 and recommendations to 5.`;
 
   app.post("/api/client/mastermind/chat", requireClientMastermind, aiLimiter, async (req, res) => {
     if (!aiAvailable(res)) return;
-    const { messages } = req.body || {};
+    const { messages, pageContext } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "messages[] required." });
     }
@@ -1255,6 +1268,14 @@ Limit findings to 6 and recommendations to 5.`;
       role: m.role === "assistant" ? "assistant" : "user",
       content: String(m.content || "").slice(0, 6000),
     }));
+
+    // What the client was looking at when they opened this chat — lets a
+    // reply be relevant ("I see you're on the Training tab...") without the
+    // client having to restate it. Purely descriptive context, never used to
+    // authorize anything.
+    const contextLine = pageContext && typeof pageContext === "object"
+      ? `\n\nCurrent context: the client opened this chat while viewing ${pageContext.section ? `the "${pageContext.section}" section` : `the "${pageContext.phase || "app"}" screen`}${pageContext.entityType ? ` (looking at a ${pageContext.entityType}${pageContext.entityId ? ` — id ${pageContext.entityId}` : ""})` : ""}.`
+      : "";
 
     // ISOLATION: only this client's own data is ever placed in context, and only
     // for the features their tier includes (see clientSnapshot).
@@ -1273,10 +1294,16 @@ TIER SCOPING — this is critical:
 ADVISORY ONLY:
 - You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
 
+PROPOSING A SPECIFIC EDIT — the one exception to "advisory only" being purely descriptive: if fixing something means changing one field on one existing record (a team member's department or status in trainingDelivery.learnerList, a training assignment's due date in trainingDelivery.assignmentList, a policy's name in policies.list, or a saved curriculum's overview/module text in curricula), you may end your reply with EXACTLY ONE fenced block in this form:
+\`\`\`proposed_edit
+{"entityType":"learner"|"trainingAssignment"|"policyDoc"|"trainingCurriculum","entityId":"<a real id from the data below>","fields":{"<field>":"<new value>"}}
+\`\`\`
+This still never performs the edit — it renders as a card with an "Apply" button that the client must click themselves for anything to actually change. Only ever use an id that appears in the client's data below; never invent one. Omit this block entirely for anything that isn't a single concrete field change on an existing record (e.g. creating something new, or a broad recommendation) — just give the advice in prose.
+
 Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
 
 HOW-TO KNOWLEDGE — the ShieldAI user manual. When a client asks how to use a feature ("how do I install the agent," "how do employees acknowledge a policy," "how do I run a phishing test"), answer from this manual rather than guessing at UI details. Don't invent steps, buttons, or menus that aren't described here.
-${manualAsText()}
+${manualAsText()}${contextLine}
 
 This client's data and feature access (the only data you have):
 ${JSON.stringify(snap)}`;

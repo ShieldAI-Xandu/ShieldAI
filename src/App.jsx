@@ -4243,6 +4243,10 @@ function TrainingProgramSection() {
   const [busy, setBusy] = useState(false);
   const [removeLearnerTarget, setRemoveLearnerTarget] = useState(null); // learner pending removal, or null
   const [waiveTarget, setWaiveTarget] = useState(null); // assignment pending waive, or null
+  const [editLearnerId, setEditLearnerId] = useState(null);
+  const [editLearnerForm, setEditLearnerForm] = useState({ name: "", email: "", department: "" });
+  const [editDueId, setEditDueId] = useState(null); // assignment id whose due date is being edited
+  const [editDueValue, setEditDueValue] = useState("");
 
   // Add-learner form
   const [nl, setNl] = useState({ name: "", email: "", department: "" });
@@ -4366,6 +4370,40 @@ function TrainingProgramSection() {
     finally { setBusy(false); }
   }
 
+  function startEditLearner(l) { setEditLearnerId(l.id); setEditLearnerForm({ name: l.name, email: l.email, department: l.department || "" }); }
+
+  async function saveEditLearner() {
+    if (!editLearnerForm.name.trim() || !editLearnerForm.email.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${editLearnerId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editLearnerForm),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save that change.");
+      setEditLearnerId(null);
+      flash(`Updated ${d.name}.`);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function startEditDue(a) { setEditDueId(a.id); setEditDueValue(a.dueDate ? a.dueDate.slice(0, 10) : ""); }
+
+  async function saveEditDue() {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/assignments/${editDueId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dueDate: editDueValue || null }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not save that due date.");
+      setEditDueId(null);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
   function toggle(list, setList, id) {
     setList(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
   }
@@ -4442,12 +4480,28 @@ function TrainingProgramSection() {
                       </div>
                       <span style={{fontSize:11,fontWeight:700,color:tone.c,padding:"2px 9px",
                         borderRadius:20,background:`${tone.c}18`,minWidth:78,textAlign:"center"}}>{tone.l}</span>
-                      {a.status !== "completed" && a.status !== "waived" && (
+                      {editDueId === a.id ? (
                         <>
-                          <button onClick={()=>remind(a)} disabled={busy} style={miniBtn(C.accent,busy)}>Remind</button>
-                          <button onClick={()=>setWaiveTarget(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
+                          <input type="date" value={editDueValue} onChange={e=>setEditDueValue(e.target.value)}
+                            style={{padding:"5px 8px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:11.5}}/>
+                          <button onClick={saveEditDue} disabled={busy} style={miniBtn(C.accent,busy)}>Save</button>
+                          <button onClick={()=>setEditDueId(null)} style={miniBtn(C.textSec,false)}>Cancel</button>
                         </>
+                      ) : (
+                        a.status !== "completed" && a.status !== "waived" && (
+                          <>
+                            <button onClick={()=>startEditDue(a)} disabled={busy} style={miniBtn(C.textSec,busy)}>Edit due date</button>
+                            <button onClick={()=>remind(a)} disabled={busy} style={miniBtn(C.accent,busy)}>Remind</button>
+                            <button onClick={()=>setWaiveTarget(a)} disabled={busy} style={miniBtn(C.textMut,busy)}>Waive</button>
+                          </>
+                        )
                       )}
+                      <VersionHistoryPanel entityLabel="This assignment" historyUrl={`/api/training-program/assignments/${a.id}/history`}
+                        restoreUrlFor={vid=>`/api/training-program/assignments/${a.id}/restore/${vid}`} onRestored={loadAll}
+                        describeEntry={v => v.action === "create" ? "Assigned"
+                          : v.action === "delete" ? "Removed"
+                          : v.action === "restore" ? "Restored"
+                          : `Updated ${(v.changedFields||[]).join(", ")}`} />
                     </div>
                   );
                 })}
@@ -4473,16 +4527,38 @@ function TrainingProgramSection() {
                 <div style={{color:C.textSec,fontSize:13,padding:"8px 2px"}}>No learners yet.</div>
               ) : learners.map(l => (
                 <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",
-                  background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{safeText(l.name)}
-                      {l.department && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}> · {l.department}</span>}
-                    </div>
-                    <div style={{fontSize:11,color:C.textMut}}>{l.email}</div>
-                  </div>
-                  <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
-                  <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
-                  <button onClick={()=>setRemoveLearnerTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                  background:C.card,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:7,flexWrap:"wrap"}}>
+                  {editLearnerId === l.id ? (
+                    <>
+                      <input style={{...inp,flex:"1 1 120px"}} placeholder="Name" value={editLearnerForm.name}
+                        onChange={e=>setEditLearnerForm(f=>({...f,name:e.target.value}))}/>
+                      <input style={{...inp,flex:"1 1 160px"}} placeholder="Email" value={editLearnerForm.email}
+                        onChange={e=>setEditLearnerForm(f=>({...f,email:e.target.value}))}/>
+                      <input style={{...inp,flex:"1 1 120px"}} placeholder="Department" value={editLearnerForm.department}
+                        onChange={e=>setEditLearnerForm(f=>({...f,department:e.target.value}))}/>
+                      <button onClick={saveEditLearner} disabled={busy||!editLearnerForm.name.trim()||!editLearnerForm.email.trim()} style={miniBtn(C.accent,busy)}>Save</button>
+                      <button onClick={()=>setEditLearnerId(null)} style={miniBtn(C.textSec,false)}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:C.text}}>{safeText(l.name)}
+                          {l.department && <span style={{fontSize:11,color:C.textMut,fontWeight:400}}> · {l.department}</span>}
+                        </div>
+                        <div style={{fontSize:11,color:C.textMut}}>{l.email}</div>
+                      </div>
+                      <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
+                      <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
+                      <button onClick={()=>startEditLearner(l)} disabled={busy} style={miniBtn(C.textSec,busy)}>Edit</button>
+                      <VersionHistoryPanel entityLabel="This learner" historyUrl={`/api/training-program/learners/${l.id}/history`}
+                        restoreUrlFor={vid=>`/api/training-program/learners/${l.id}/restore/${vid}`} onRestored={loadAll}
+                        describeEntry={v => v.action === "create" ? "Added to roster"
+                          : v.action === "delete" ? "Removed from roster"
+                          : v.action === "restore" ? "Restored"
+                          : `Updated ${(v.changedFields||[]).join(", ")}`} />
+                      <button onClick={()=>setRemoveLearnerTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                    </>
+                  )}
                 </div>
               ))}
             </>
@@ -4597,7 +4673,7 @@ function TrainingProgramSection() {
         onClose={()=>setRemoveLearnerTarget(null)}
         onConfirm={()=>removeLearner(removeLearnerTarget)}
         title="Remove this learner?"
-        message={`Remove ${removeLearnerTarget?.name || ""} and their assignments? This can't be undone.`}
+        message={`Remove ${removeLearnerTarget?.name || ""} and their assignments? You can undo this from their version history afterward.`}
         confirmLabel="Remove"
         danger
       />
@@ -5644,7 +5720,7 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
   // ── Viewing a full curriculum ──
   if (curriculum) {
     return <FullCurriculumView curriculum={curriculum} company={assessment?.company}
-      programId={currentProgramId} onBack={() => setCurriculum(null)}/>;
+      programId={currentProgramId} onBack={() => setCurriculum(null)} onCurriculumChange={setCurriculum}/>;
   }
 
   return (
@@ -5800,11 +5876,36 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
 }
 
 // Full curriculum viewer
-function FullCurriculumView({ curriculum, company, programId, onBack }) {
+function FullCurriculumView({ curriculum, company, programId, onBack, onCurriculumChange }) {
   const { can } = useCapabilities();
   const canDownload = can("downloadExports");
   const [openPhase, setOpenPhase] = useState(0);
   const [openModule, setOpenModule] = useState(0);
+  const [editingOverview, setEditingOverview] = useState(false);
+  const [overviewDraft, setOverviewDraft] = useState(curriculum.overview || "");
+  const [savingOverview, setSavingOverview] = useState(false);
+
+  async function saveOverview() {
+    setSavingOverview(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/${programId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ overview: overviewDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      onCurriculumChange?.(data.curriculum);
+      setEditingOverview(false);
+    } catch { /* surfaced via the module-level error path is enough here */ }
+    finally { setSavingOverview(false); }
+  }
+
+  function applyModulePatch(phaseIdx, moduleIdx, patch) {
+    if (!Number.isInteger(phaseIdx)) return; // manager-track modules aren't editable (backend scope)
+    const next = { ...curriculum, phases: curriculum.phases.map((ph, pi) => pi !== phaseIdx ? ph : {
+      ...ph, modules: ph.modules.map((m, mi) => mi !== moduleIdx ? m : { ...m, ...patch }),
+    }) };
+    onCurriculumChange?.(next);
+  }
 
   function downloadCurriculum() {
     let html = "";
@@ -5858,18 +5959,47 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
         border:`1px solid ${C.border}`,borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
         ← Back to Training
       </button>
-      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8,flexWrap:"wrap"}}>
         <SectionLabel text="Security Awareness Training Program"/>
-        <button onClick={canDownload ? downloadCurriculum : undefined} disabled={!canDownload}
-          title={canDownload ? "" : "Downloads require Pro or higher"}
-          style={{marginLeft:"auto",padding:"7px 16px",
-          background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,borderRadius:7,
-          color:canDownload?C.accentText:C.textMut,fontSize:12,fontWeight:600,cursor:canDownload?"pointer":"not-allowed"}}>
-          {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}</button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {programId && (
+            <VersionHistoryPanel entityLabel="This curriculum" historyUrl={`/api/training/${programId}/history`}
+              restoreUrlFor={vid=>`/api/training/${programId}/restore/${vid}`}
+              onRestored={data => data.program && onCurriculumChange?.(data.program.curriculum)}
+              describeEntry={v => v.action === "create" ? "Generated"
+                : v.action === "delete" ? "Deleted"
+                : v.action === "restore" ? "Restored"
+                : "Edited"} />
+          )}
+          <button onClick={canDownload ? downloadCurriculum : undefined} disabled={!canDownload}
+            title={canDownload ? "" : "Downloads require Pro or higher"}
+            style={{padding:"7px 16px",
+            background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,borderRadius:7,
+            color:canDownload?C.accentText:C.textMut,fontSize:12,fontWeight:600,cursor:canDownload?"pointer":"not-allowed"}}>
+            {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}</button>
+        </div>
       </div>
-      {curriculum.overview && (
+      {(curriculum.overview || editingOverview) && (
         <Card style={{marginBottom:16,padding:"16px 18px"}}>
-          <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{safeText(curriculum.overview)}</p>
+          {editingOverview ? (
+            <>
+              <textarea value={overviewDraft} onChange={e=>setOverviewDraft(e.target.value)}
+                style={{width:"100%",minHeight:90,padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit",boxSizing:"border-box",resize:"vertical"}}/>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button onClick={saveOverview} disabled={savingOverview} style={miniBtn(C.accent,savingOverview)}>Save</button>
+                <button onClick={()=>{setEditingOverview(false);setOverviewDraft(curriculum.overview||"");}} style={miniBtn(C.textSec,false)}>Cancel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,margin:0}}>{safeText(curriculum.overview)}</p>
+              {programId && (
+                <button onClick={()=>{setOverviewDraft(curriculum.overview||"");setEditingOverview(true);}}
+                  style={{marginTop:10,...miniBtn(C.textSec,false)}}>Edit overview</button>
+              )}
+            </>
+          )}
         </Card>
       )}
 
@@ -5926,7 +6056,7 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
             ))}
           </div>
           <ModuleCard mod={curriculum.managerTrack[openModule]} accent={C.purple}
-            programId={programId} phaseIndex="mgr" moduleIndex={openModule}/>
+            programId={programId} phaseIndex="mgr" moduleIndex={openModule} editable={false}/>
         </div>
       ) : (
         <>
@@ -5950,7 +6080,8 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
               ))}
             </div>
             <ModuleCard mod={mod} accent={C.accent}
-              programId={programId} phaseIndex={openPhase} moduleIndex={openModule}/>
+              programId={programId} phaseIndex={openPhase} moduleIndex={openModule} editable
+              onPatch={patch => applyModulePatch(openPhase, openModule, patch)}/>
           </div>
         </>
       )}
@@ -5973,12 +6104,30 @@ function FullCurriculumView({ curriculum, company, programId, onBack }) {
 }
 
 // A single training module card (shared by phase + manager views)
-function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
+function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex, editable = false, onPatch }) {
   const [showAnswer, setShowAnswer] = useState(false);
   const [content, setContent] = useState(null);   // { slides, fullQuiz, generatedBy }
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [mode, setMode] = useState(null);          // null | "slides" | "quiz"
+  const [editingText, setEditingText] = useState(false);
+  const [textDraft, setTextDraft] = useState({ tailoredIntro: "", realWorldScenario: "" });
+  const [savingText, setSavingText] = useState(false);
+
+  async function saveModuleText() {
+    setSavingText(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training/${programId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phaseIndex, moduleId: mod.id, ...textDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      onPatch?.({ ...textDraft, editedByHuman: true });
+      setEditingText(false);
+    } catch (e) { setErr(e.message); }
+    finally { setSavingText(false); }
+  }
 
   useEffect(() => {
     setShowAnswer(false);
@@ -6049,7 +6198,26 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
       {/* Default detail view (when not in slides/quiz mode) */}
       {!mode && (
         <>
-          {mod.tailoredIntro && (
+          {editable && !editingText && (
+            <button onClick={()=>{setTextDraft({tailoredIntro:mod.tailoredIntro||"",realWorldScenario:mod.realWorldScenario||""});setEditingText(true);}}
+              style={{...miniBtn(C.textSec,false),marginBottom:10}}>✎ Edit intro / scenario</button>
+          )}
+          {editingText ? (
+            <div style={{marginBottom:14}}>
+              <label style={{display:"block",fontSize:11,color:C.textMut,marginBottom:4}}>Tailored intro</label>
+              <textarea value={textDraft.tailoredIntro} onChange={e=>setTextDraft(d=>({...d,tailoredIntro:e.target.value}))}
+                style={{width:"100%",minHeight:70,padding:"9px 11px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.text,fontSize:12.5,fontFamily:"inherit",boxSizing:"border-box",resize:"vertical",marginBottom:10}}/>
+              <label style={{display:"block",fontSize:11,color:C.textMut,marginBottom:4}}>Real-world scenario</label>
+              <textarea value={textDraft.realWorldScenario} onChange={e=>setTextDraft(d=>({...d,realWorldScenario:e.target.value}))}
+                style={{width:"100%",minHeight:70,padding:"9px 11px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.text,fontSize:12.5,fontFamily:"inherit",boxSizing:"border-box",resize:"vertical"}}/>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button onClick={saveModuleText} disabled={savingText} style={miniBtn(accent,savingText)}>Save</button>
+                <button onClick={()=>setEditingText(false)} style={miniBtn(C.textSec,false)}>Cancel</button>
+              </div>
+            </div>
+          ) : mod.tailoredIntro && (
             <p style={{color:C.textSec,fontSize:13,lineHeight:1.7,marginTop:0,marginBottom:14}}>{safeText(mod.tailoredIntro)}</p>
           )}
           {mod.objectives?.length > 0 && (
@@ -6065,7 +6233,7 @@ function ModuleCard({ mod, accent, programId, phaseIndex, moduleIndex }) {
               </div>
             </>
           )}
-          {mod.realWorldScenario && (
+          {!editingText && mod.realWorldScenario && (
             <div style={{marginBottom:14,padding:"12px 14px",background:C.surface,borderRadius:8,
               borderLeft:`3px solid ${accent}`}}>
               <div style={{color:accent,fontSize:11,fontWeight:700,marginBottom:5,letterSpacing:0.5}}>REAL-WORLD SCENARIO</div>
@@ -7117,6 +7285,94 @@ function ReportsSection({ hasFullReports = true, hasEvidenceAccess = false }) {
 //  for full training delivery. Deliberately NOT placed inside
 //  TrainingProgramSection, which stays fully gated behind trainingDelivery.
 // ─────────────────────────────────────────────────────────────
+// Shared version-history / restore UI — reused across learners, training
+// assignments, policies, and training curricula rather than four bespoke
+// history viewers. The caller supplies the fetch/restore URLs plus a
+// per-entry description function (snapshot shape differs per entity type).
+function VersionHistoryPanel({ entityLabel, historyUrl, restoreUrlFor, onRestored, describeEntry }) {
+  const [open, setOpen] = useState(false);
+  const [versions, setVersions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [restoreTarget, setRestoreTarget] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}${historyUrl}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load history.");
+      setVersions(Array.isArray(data) ? data : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+
+  function openPanel() { setOpen(true); setLastResult(null); load(); }
+
+  async function doRestore(version) {
+    setRestoreTarget(null); setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}${restoreUrlFor(version.id)}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not restore that version.");
+      setLastResult({ appliedFields: data.appliedFields || [], skippedFields: data.skippedFields || [] });
+      await load();
+      onRestored?.(data);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      <button onClick={openPanel} style={miniBtn(C.textMut, false)}>History</button>
+      <Modal open={open} onClose={() => setOpen(false)} title={`${entityLabel} — version history`} wide
+        footer={<Button variant="ghost" onClick={() => setOpen(false)}>Close</Button>}>
+        {error && (
+          <div style={{ marginBottom: 10, padding: "9px 12px", background: `${C.red}15`,
+            border: `1px solid ${C.red}33`, borderRadius: 7, color: C.redText, fontSize: 12.5 }}>{error}</div>
+        )}
+        {lastResult && (
+          <div style={{ marginBottom: 10, padding: "9px 12px", background: `${C.accent}12`,
+            border: `1px solid ${C.accent}33`, borderRadius: 7, color: C.textSec, fontSize: 12.5 }}>
+            Restored.{lastResult.appliedFields.length ? ` Applied: ${lastResult.appliedFields.join(", ")}.` : " No fields needed to change."}
+            {lastResult.skippedFields.length ? ` Kept the current value for ${lastResult.skippedFields.join(", ")} — it changed since this version.` : ""}
+          </div>
+        )}
+        {loading ? <Spinner /> : versions.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: C.textMut, margin: 0 }}>No earlier versions recorded.</p>
+        ) : (
+          <div>
+            {versions.map(v => (
+              <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 4px",
+                borderBottom: `1px solid ${C.border}`, fontSize: 12.5 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: C.text, fontWeight: 600 }}>{describeEntry ? describeEntry(v) : v.action}</div>
+                  <div style={{ color: C.textMut, fontSize: 11.5 }}>
+                    {new Date(v.at).toLocaleString()} · {v.actorRole === "client_admin" ? "you" : v.actorRole === "ai" ? "Mastermind proposal (applied by a human)" : v.actorRole}
+                  </div>
+                </div>
+                {v.action !== "create" && (
+                  <button onClick={() => setRestoreTarget(v)} disabled={busy} style={miniBtn(C.accent, busy)}>Restore</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+      <ConfirmDialog
+        open={!!restoreTarget}
+        onClose={() => setRestoreTarget(null)}
+        onConfirm={() => doRestore(restoreTarget)}
+        title="Restore this version?"
+        message={`This brings ${entityLabel.toLowerCase()} back to how it was at this point in time. Anything changed since that's still current is kept, not overwritten.`}
+        confirmLabel="Restore"
+      />
+    </>
+  );
+}
+
 function TeamRosterPanel() {
   const [learners, setLearners] = useState([]);
   const [cap, setCap] = useState(null);
@@ -7127,6 +7383,9 @@ function TeamRosterPanel() {
   const [form, setForm] = useState({ name: "", email: "", department: "" });
   const [expanded, setExpanded] = useState(false);
   const [removeTarget, setRemoveTarget] = useState(null); // team member pending removal, or null
+  const [editId, setEditId] = useState(null); // learner id currently in edit mode, or null
+  const [editForm, setEditForm] = useState({ name: "", email: "", department: "" });
+  const [recentlyRemoved, setRecentlyRemoved] = useState([]); // [{id,name}] this session, for quick Undo
 
   async function load() {
     setLoading(true);
@@ -7162,6 +7421,45 @@ function TeamRosterPanel() {
     try {
       const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Could not remove that team member.");
+      setRecentlyRemoved(r => [{ id: l.id, name: l.name }, ...r].slice(0, 5));
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Quick "Undo" for a delete made earlier in this same session — finds the
+  // most recent delete version for that learner and restores it. Older
+  // deletes (from a prior session) are still recoverable, just not surfaced
+  // here — a client would need the full History view for those, which isn't
+  // reachable once a row is gone from the live roster (a known v1 boundary).
+  async function undoRemoval(entry) {
+    setBusy(true); setError(null);
+    try {
+      const histRes = await authFetch(`${API_BASE}/api/training-program/learners/${entry.id}/history`);
+      const hist = await histRes.json();
+      const deleteVersion = Array.isArray(hist) ? hist.find(v => v.action === "delete") : null;
+      if (!deleteVersion) throw new Error("Could not find that removal to undo.");
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${entry.id}/restore/${deleteVersion.id}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not undo that removal.");
+      setRecentlyRemoved(r => r.filter(x => x.id !== entry.id));
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function startEdit(l) { setEditId(l.id); setEditForm({ name: l.name, email: l.email, department: l.department || "" }); }
+
+  async function saveEdit() {
+    if (!editForm.name.trim() || !editForm.email.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${editId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that change.");
+      setEditId(null);
       await load();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -7197,14 +7495,51 @@ function TeamRosterPanel() {
               )}
               {learners.map(l => (
                 <div key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 4px",
-                  borderBottom:`1px solid ${C.border}`,fontSize:12.5}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
-                    <span style={{color:C.textMut}}> · {l.email}{l.department ? ` · ${l.department}` : ""}</span>
-                  </div>
-                  <button onClick={()=>setRemoveTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                  borderBottom:`1px solid ${C.border}`,fontSize:12.5,flexWrap:"wrap"}}>
+                  {editId === l.id ? (
+                    <>
+                      <input value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))} placeholder="Name"
+                        style={{flex:"1 1 120px",padding:"6px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,fontSize:12,boxSizing:"border-box"}}/>
+                      <input value={editForm.email} onChange={e=>setEditForm(f=>({...f,email:e.target.value}))} placeholder="Email"
+                        style={{flex:"1 1 160px",padding:"6px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,fontSize:12,boxSizing:"border-box"}}/>
+                      <input value={editForm.department} onChange={e=>setEditForm(f=>({...f,department:e.target.value}))} placeholder="Department"
+                        style={{flex:"1 1 120px",padding:"6px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,fontSize:12,boxSizing:"border-box"}}/>
+                      <button onClick={saveEdit} disabled={busy||!editForm.name.trim()||!editForm.email.trim()} style={miniBtn(C.accent,busy)}>Save</button>
+                      <button onClick={()=>setEditId(null)} style={miniBtn(C.textSec,false)}>Cancel</button>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{flex:1,minWidth:0}}>
+                        <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
+                        <span style={{color:C.textMut}}> · {l.email}{l.department ? ` · ${l.department}` : ""}</span>
+                      </div>
+                      <button onClick={()=>startEdit(l)} disabled={busy} style={miniBtn(C.textSec,busy)}>Edit</button>
+                      <VersionHistoryPanel entityLabel="This team member" historyUrl={`/api/training-program/learners/${l.id}/history`}
+                        restoreUrlFor={vid=>`/api/training-program/learners/${l.id}/restore/${vid}`} onRestored={load}
+                        describeEntry={v => v.action === "create" ? "Added to roster"
+                          : v.action === "delete" ? "Removed from roster"
+                          : v.action === "restore" ? "Restored"
+                          : `Updated ${(v.changedFields||[]).join(", ")}`} />
+                      <button onClick={()=>setRemoveTarget(l)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
+                    </>
+                  )}
                 </div>
               ))}
+
+              {recentlyRemoved.length > 0 && (
+                <div style={{margin:"10px 0",padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}>
+                  <div style={{fontSize:11,color:C.textMut,marginBottom:4}}>Recently removed</div>
+                  {recentlyRemoved.map(entry => (
+                    <div key={entry.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+                      <span style={{flex:1,color:C.textSec}}>{entry.name}</span>
+                      <button onClick={()=>undoRemoval(entry)} disabled={busy} style={miniBtn(C.accent,busy)}>Undo</button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {adding ? (
                 <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
@@ -7239,7 +7574,7 @@ function TeamRosterPanel() {
         onClose={()=>setRemoveTarget(null)}
         onConfirm={()=>removeMember(removeTarget)}
         title="Remove this team member?"
-        message={`Remove ${removeTarget?.name || ""} from your team roster? This also removes any training/policy history tied to them.`}
+        message={`Remove ${removeTarget?.name || ""} from your team roster? This also removes their training assignments — you can undo this from "Recently removed" afterward, or from their version history.`}
         confirmLabel="Remove"
         danger
       />
@@ -7348,6 +7683,10 @@ function PolicyLibrarySection({ assessment }) {
   const [assignModalPolicy, setAssignModalPolicy] = useState(null); // {id, policyName} | null
   const [unassignTarget, setUnassignTarget] = useState(null); // acknowledgment row pending unassign, or null
   const [deletePolicyTarget, setDeletePolicyTarget] = useState(null); // {id, name} pending delete, or null
+  const [recentlyDeletedPolicies, setRecentlyDeletedPolicies] = useState([]); // [{id,name}] this session, for quick Undo
+  const [editingPolicy, setEditingPolicy] = useState(false);
+  const [policyEditForm, setPolicyEditForm] = useState({ policyName: "", content: "" });
+  const [savingPolicy, setSavingPolicy] = useState(false);
 
   async function loadAcknowledgments() {
     if (!hasRoster) return;
@@ -7431,14 +7770,53 @@ function PolicyLibrarySection({ assessment }) {
   }
 
   async function deleteSavedPolicy(id) {
+    const target = deletePolicyTarget;
     setDeletePolicyTarget(null);
     try {
       const res = await authFetch(`${API_BASE}/api/policies/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Could not delete policy");
+      if (target) setRecentlyDeletedPolicies(r => [{ id: target.id, name: target.policyName }, ...r].slice(0, 5));
       await loadSavedPolicies();
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  // Quick "Undo" for a policy deleted earlier in this same session (see the
+  // matching comment on TeamRosterPanel's undoRemoval — same v1 boundary:
+  // older deletes are still recoverable via the full History view on the
+  // policy detail page, just not surfaced in this quick strip).
+  async function undoPolicyDelete(entry) {
+    try {
+      const histRes = await authFetch(`${API_BASE}/api/policies/${entry.id}/history`);
+      const hist = await histRes.json();
+      const deleteVersion = Array.isArray(hist) ? hist.find(v => v.action === "delete") : null;
+      if (!deleteVersion) throw new Error("Could not find that deletion to undo.");
+      const res = await authFetch(`${API_BASE}/api/policies/${entry.id}/restore/${deleteVersion.id}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not undo that deletion.");
+      setRecentlyDeletedPolicies(r => r.filter(x => x.id !== entry.id));
+      await loadSavedPolicies();
+    } catch (e) { setError(e.message); }
+  }
+
+  function startEditPolicy() {
+    setPolicyEditForm({ policyName: generated.policyName, content: generated.content });
+    setEditingPolicy(true);
+  }
+
+  async function savePolicyEdit() {
+    setSavingPolicy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/policies/${generated.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(policyEditForm),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save this policy.");
+      setGenerated(g => ({ ...g, policyName: data.policyName, content: data.content }));
+      setEditingPolicy(false);
+    } catch (e) { setError(e.message); }
+    finally { setSavingPolicy(false); }
   }
 
   function openPolicy(policy) {
@@ -7635,35 +8013,81 @@ function PolicyLibrarySection({ assessment }) {
 
         {generated && (
           <Card>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
               <SectionLabel text="Generated Policy Document"/>
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={copyToClipboard}
-                  style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
-                    borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
-                  📋 Copy
-                </button>
-                <button onClick={canDownload ? downloadAsWord : undefined} disabled={!canDownload}
-                  title={canDownload ? "" : "Downloads require Pro or higher"}
-                  style={{padding:"6px 14px",background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,
-                    borderRadius:6,color:canDownload?C.accentText:C.textMut,fontSize:12,cursor:canDownload?"pointer":"not-allowed"}}>
-                  {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}
-                </button>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {!editingPolicy && (
+                  <button onClick={copyToClipboard}
+                    style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+                    📋 Copy
+                  </button>
+                )}
+                {!editingPolicy && (
+                  <button onClick={canDownload ? downloadAsWord : undefined} disabled={!canDownload}
+                    title={canDownload ? "" : "Downloads require Pro or higher"}
+                    style={{padding:"6px 14px",background:canDownload?`${C.accent}15`:C.surface,border:`1px solid ${canDownload?C.accent+"33":C.border}`,
+                      borderRadius:6,color:canDownload?C.accentText:C.textMut,fontSize:12,cursor:canDownload?"pointer":"not-allowed"}}>
+                    {canDownload ? "⬇ Download Word" : "🔒 Download (Pro+)"}
+                  </button>
+                )}
+                {generated.id && !editingPolicy && (
+                  <>
+                    <button onClick={startEditPolicy}
+                      style={{padding:"6px 14px",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+                      ✎ Edit
+                    </button>
+                    <VersionHistoryPanel entityLabel="This policy" historyUrl={`/api/policies/${generated.id}/history`}
+                      restoreUrlFor={vid=>`/api/policies/${generated.id}/restore/${vid}`}
+                      onRestored={() => openSavedPolicy(generated.id)}
+                      describeEntry={v => v.action === "create" ? "Generated"
+                        : v.action === "delete" ? "Deleted"
+                        : v.action === "restore" ? "Restored"
+                        : `Edited ${(v.changedFields||[]).join(", ")}`} />
+                  </>
+                )}
               </div>
             </div>
-            <div style={{padding:"24px 28px",background:"#fff",borderRadius:8,
-              border:`1px solid ${C.border}`,
-              maxHeight:600,overflowY:"auto"}}>
-              <div style={{filter:"none"}}>
-                <MarkdownDocLight text={generated.content}/>
+
+            {editingPolicy ? (
+              <>
+                <input value={policyEditForm.policyName} onChange={e=>setPolicyEditForm(f=>({...f,policyName:e.target.value}))}
+                  style={{width:"100%",padding:"10px 12px",marginBottom:10,background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:8,color:C.text,fontSize:14,fontWeight:600,boxSizing:"border-box"}}/>
+                <textarea value={policyEditForm.content} onChange={e=>setPolicyEditForm(f=>({...f,content:e.target.value}))}
+                  style={{width:"100%",minHeight:420,padding:"14px 16px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:8,color:C.text,fontSize:13,fontFamily:"monospace",boxSizing:"border-box",resize:"vertical"}}/>
+                <div style={{display:"flex",gap:8,marginTop:12}}>
+                  <button onClick={savePolicyEdit} disabled={savingPolicy}
+                    style={{padding:"8px 18px",background:C.accent,border:"none",borderRadius:8,color:"#04121F",
+                      fontSize:12.5,fontWeight:700,cursor:savingPolicy?"default":"pointer",opacity:savingPolicy?0.6:1}}>
+                    {savingPolicy ? "Saving…" : "Save changes"}
+                  </button>
+                  <button onClick={()=>setEditingPolicy(false)} disabled={savingPolicy}
+                    style={{padding:"8px 18px",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.textSec,fontSize:12.5,cursor:"pointer"}}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{padding:"24px 28px",background:"#fff",borderRadius:8,
+                border:`1px solid ${C.border}`,
+                maxHeight:600,overflowY:"auto"}}>
+                <div style={{filter:"none"}}>
+                  <MarkdownDocLight text={generated.content}/>
+                </div>
               </div>
-            </div>
-            <button onClick={() => { setGenerated(null); setAnswers({}); }}
-              style={{marginTop:14,padding:"8px 18px",background:"none",
-                border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,
-                fontSize:12,cursor:"pointer"}}>
-              ↩ Generate Another Version
-            </button>
+            )}
+            {!editingPolicy && (
+              <button onClick={() => { setGenerated(null); setAnswers({}); }}
+                style={{marginTop:14,padding:"8px 18px",background:"none",
+                  border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,
+                  fontSize:12,cursor:"pointer"}}>
+                ↩ Generate Another Version
+              </button>
+            )}
           </Card>
         )}
       </div>
@@ -7775,6 +8199,18 @@ function PolicyLibrarySection({ assessment }) {
             })}
           </div>
         )}
+
+        {recentlyDeletedPolicies.length > 0 && (
+          <div style={{marginTop:12,padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}>
+            <div style={{fontSize:11,color:C.textMut,marginBottom:4}}>Recently deleted</div>
+            {recentlyDeletedPolicies.map(entry => (
+              <div key={entry.id} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,padding:"3px 0"}}>
+                <span style={{flex:1,color:C.textSec}}>{entry.name}</span>
+                <button onClick={()=>undoPolicyDelete(entry)} style={miniBtn(C.accent,false)}>Undo</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {assignModalPolicy && (
@@ -7838,7 +8274,7 @@ function PolicyLibrarySection({ assessment }) {
         onClose={()=>setDeletePolicyTarget(null)}
         onConfirm={()=>deleteSavedPolicy(deletePolicyTarget?.id)}
         title="Delete this policy?"
-        message={`Delete "${deletePolicyTarget?.policyName || ""}"? This cannot be undone.`}
+        message={`Delete "${deletePolicyTarget?.policyName || ""}"? You can undo this from "Recently deleted" right after, or restore it later from its version history.`}
         confirmLabel="Delete"
         danger
       />
@@ -7854,7 +8290,7 @@ function PolicyLibrarySection({ assessment }) {
 //  (WorkflowsSection, ComplianceSection, ToolsSection, TrainingSection,
 //   ExecReportSection are UNCHANGED — keep your existing versions of those)
 // ─────────────────────────────────────────────────────────────
-function Dashboard({ assessment, results, onReset }) {
+function Dashboard({ assessment, results, onReset, onOpenMastermind }) {
   const [section, setSection] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { can, tier } = useCapabilities();
@@ -8113,7 +8549,16 @@ function Dashboard({ assessment, results, onReset }) {
               color:C.text,fontSize:16,cursor:"pointer",width:34,height:34,marginRight:12}}>
             ☰
           </button>
-          <div style={{marginLeft:"auto"}}><NotificationBell onNavigate={setSection}/></div>
+          {can("mastermindChat") && onOpenMastermind && (
+            <button onClick={()=>onOpenMastermind({ phase:"dashboard", section })}
+              title="Ask Mastermind about this section, or ask it to make a change for you"
+              style={{marginLeft:"auto",padding:"6px 13px",background:`${C.purple}1c`,
+                border:`1px solid ${C.purple}55`,borderRadius:7,color:C.purpleText,
+                fontSize:11.5,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+              🧠 Mastermind
+            </button>
+          )}
+          <div style={{marginLeft:can("mastermindChat") && onOpenMastermind ? 10 : "auto"}}><NotificationBell onNavigate={setSection}/></div>
         </div>
         {sectionMap[section]}
       </main>
@@ -21164,7 +21609,80 @@ function SupportCenter({ onClose, onOpenMastermind }) {
 // ─────────────────────────────────────────────────────────────
 //  CLIENT MASTERMIND (Enterprise) — scoped to the client's own data
 // ─────────────────────────────────────────────────────────────
-function ClientMastermind({ onClose }) {
+// ── Mastermind "propose an edit, human clicks Apply" convention ──────────
+// A chat reply may end with a fenced ```proposed_edit block (see the system
+// prompt in mastermindRoutes.js). This is advisory data written into a chat
+// message by the AI — never a write itself. Clicking Apply is the human
+// gesture that calls the real edit route (the same one a manual edit uses),
+// so actorRole/actorUserId on the resulting write are always the human who
+// clicked, never the AI — the CLAUDE.md "AI advises, humans act" boundary.
+const PROPOSED_EDIT_ROUTES = {
+  learner: { client: id => `/api/training-program/learners/${id}`,
+    staff: (id, cid) => `/api/staff/clients/${cid}/training-program/learners/${id}` },
+  trainingAssignment: { client: id => `/api/training-program/assignments/${id}`,
+    staff: (id, cid) => `/api/staff/clients/${cid}/training-program/assignments/${id}` },
+  policyDoc: { client: id => `/api/policies/${id}`,
+    staff: (id, cid) => `/api/staff/clients/${cid}/policies/${id}` },
+  trainingCurriculum: { client: id => `/api/training/${id}`,
+    staff: (id, cid) => `/api/staff/clients/${cid}/training/${id}` },
+};
+
+function extractProposedEdit(content) {
+  if (!content) return { prose: content, proposal: null };
+  const m = /```proposed_edit\s*\n([\s\S]*?)```/.exec(content);
+  if (!m) return { prose: content, proposal: null };
+  let proposal = null;
+  try { proposal = JSON.parse(m[1].trim()); } catch { proposal = null; }
+  const prose = (content.slice(0, m.index) + content.slice(m.index + m[0].length)).trim();
+  return { prose, proposal };
+}
+
+// `scope`: "client", or {staff:true, clientId} for admin/analyst chatting on a client's behalf.
+function ProposedEditCard({ proposal, scope = "client", onApplied }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [applied, setApplied] = useState(false);
+  const routeFor = proposal ? PROPOSED_EDIT_ROUTES[proposal.entityType] : null;
+  if (!proposal || !routeFor || !proposal.entityId || !proposal.fields) return null;
+
+  async function apply() {
+    setBusy(true); setErr(null);
+    try {
+      const url = (scope && scope.staff) ? routeFor.staff(proposal.entityId, scope.clientId) : routeFor.client(proposal.entityId);
+      const res = await authFetch(`${API_BASE}${url}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(proposal.fields),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not apply that change.");
+      setApplied(true);
+      onApplied?.(data);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{marginTop:8,padding:"10px 12px",background:C.surface,border:`1px solid ${C.accent}44`,borderRadius:8}}>
+      <div style={{fontSize:11,color:C.accentText,fontWeight:700,marginBottom:6,letterSpacing:0.5}}>PROPOSED CHANGE</div>
+      {Object.entries(proposal.fields).map(([k,v]) => (
+        <div key={k} style={{fontSize:12.5,color:C.textSec,marginBottom:2}}>
+          <strong style={{color:C.text}}>{k}</strong>: {String(v)}
+        </div>
+      ))}
+      {err && <div style={{fontSize:12,color:C.redText,marginTop:6}}>{err}</div>}
+      {applied ? (
+        <div style={{fontSize:12.5,color:C.greenText,marginTop:8,fontWeight:600}}>✓ Applied</div>
+      ) : (
+        <button onClick={apply} disabled={busy}
+          style={{marginTop:8,padding:"6px 16px",background:C.accent,border:"none",borderRadius:7,
+            color:"#04121F",fontSize:12,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
+          {busy ? "Applying…" : "Apply this change"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ClientMastermind({ onClose, pageContext }) {
   const [msgs, setMsgs] = useState([
     { role:"assistant", content:"Hi — I'm your ShieldAI Mastermind assistant. I can see your own endpoints, security posture, and recommendations, and help you understand and improve them. What would you like to know?" },
   ]);
@@ -21180,7 +21698,7 @@ function ClientMastermind({ onClose }) {
     try {
       const res = await authFetch(`${API_BASE}/api/client/mastermind/chat`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ messages: next }),
+        body: JSON.stringify({ messages: next, pageContext }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Mastermind error.");
@@ -21204,15 +21722,19 @@ function ClientMastermind({ onClose }) {
       <div style={{maxWidth:820,margin:"0 auto",padding:"20px"}}>
         {error && <div style={{marginBottom:12,color:C.redText,fontSize:13}}>{error}</div>}
         <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
-          {msgs.map((m,i)=>(
+          {msgs.map((m,i)=>{
+            const { prose, proposal } = m.role === "assistant" ? extractProposedEdit(m.content) : { prose: m.content, proposal: null };
+            return (
             <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
               <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
                 background:m.role==="user"?`${C.accent}1F`:C.card,
                 border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,color:C.text}}>
-                {m.role==="user" ? m.content : <ChatMarkdown text={m.content} color={C.text} mutedColor={C.textSec}/>}
+                {m.role==="user" ? prose : <ChatMarkdown text={prose} color={C.text} mutedColor={C.textSec}/>}
+                {proposal && <ProposedEditCard proposal={proposal} scope="client"/>}
               </div>
             </div>
-          ))}
+            );
+          })}
           {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
         </div>
         <div style={{display:"flex",gap:8,position:"sticky",bottom:16}}>
@@ -21268,6 +21790,15 @@ export default function ShieldAI() {
   const [showEndpoints, setShowEndpoints] = useState(false);
   const [showMastermind, setShowMastermind] = useState(false);
   const [showClientMastermind, setShowClientMastermind] = useState(false);
+  // What the client was looking at when they opened Mastermind (section/
+  // phase, and optionally which record) — threaded into the chat request so
+  // replies (and any proposed edit) are relevant without the client having
+  // to restate where they are. Purely descriptive, carries no authorization.
+  const [mastermindContext, setMastermindContext] = useState(null);
+  const openMastermind = useCallback((ctx) => {
+    setMastermindContext(ctx || null);
+    setShowClientMastermind(true);
+  }, []);
   const [showClientChat, setShowClientChat] = useState(false);
   // In-app Support Center (Starter+): submit a ticketed support request, or
   // jump into the existing Mastermind chat. Separate from showClientChat,
@@ -21843,7 +22374,7 @@ export default function ShieldAI() {
 
   // Client-facing Mastermind (Enterprise clients only; staff use admin console)
   if (showClientMastermind && !user.isAdmin && !user.isAnalyst) {
-    return <>{demoBanner}<ClientMastermind onClose={() => setShowClientMastermind(false)}/></>;
+    return <>{demoBanner}<ClientMastermind onClose={() => { setShowClientMastermind(false); setMastermindContext(null); }} pageContext={mastermindContext}/></>;
   }
 
   // Client's side of the chat thread with their security analyst
@@ -21855,7 +22386,7 @@ export default function ShieldAI() {
   if (showSupportCenter && !user.isAdmin && !user.isAnalyst) {
     return <>{demoBanner}<SupportCenter
       onClose={() => setShowSupportCenter(false)}
-      onOpenMastermind={() => { setShowSupportCenter(false); setShowClientMastermind(true); }}
+      onOpenMastermind={() => { setShowSupportCenter(false); openMastermind({ phase: "supportCenter" }); }}
     /></>;
   }
 
@@ -21957,7 +22488,7 @@ export default function ShieldAI() {
         )}
         {!user.isAdmin && !user.isAnalyst && (
           <button onClick={() => can("mastermindChat")
-              ? setShowClientMastermind(true)
+              ? openMastermind({ phase })
               : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter", requiresTierName:tierDisplay("starter").name, requiresPrice:tierDisplay("starter").price })}
             title={can("mastermindChat") ? "" : "Starter plan feature"}
             style={{padding:"5px 12px",
@@ -22212,12 +22743,17 @@ export default function ShieldAI() {
 
   if (phase === "edit") {
     return (
-      <EditAssessmentScreen
-        assessmentId={editingId}
-        onCancel={() => { setEditingId(null); setPhase("home"); }}
-        onSaved={() => { setEditingId(null); setPhase("home"); }}
-        onRegenerate={handleRegenerate}
-      />
+      <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
+        <TopBar/>
+        <div style={{flex:1,overflow:"auto"}}>
+          <EditAssessmentScreen
+            assessmentId={editingId}
+            onCancel={() => { setEditingId(null); setPhase("home"); }}
+            onSaved={() => { setEditingId(null); setPhase("home"); }}
+            onRegenerate={handleRegenerate}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -22251,7 +22787,7 @@ export default function ShieldAI() {
       <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
         <TopBar/>
         <div style={{flex:1,overflow:"hidden"}}>
-          <Dashboard assessment={assessment} results={results} onReset={reset}/>
+          <Dashboard assessment={assessment} results={results} onReset={reset} onOpenMastermind={openMastermind}/>
         </div>
       </div>
       </CapabilityContext.Provider>

@@ -69,6 +69,8 @@ import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+import { applyPolicyEdit, applyPolicyDelete, restorePolicyVersion } from "./policyWriteOps.js";
+import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
 // Policy read-and-sign-off tracking — reuses the training product's employee
 // roster and public token link (see trainingProgramRoutes.js's roster split).
 import { registerPolicyAcknowledgmentRoutes } from "./policyAcknowledgmentRoutes.js";
@@ -114,6 +116,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const gate = makeTierGate(db);
+ensureVersionHistoryCollection(db);
 // Railway (and most PaaS) inject the port to listen on. Falling back to 3001
 // keeps local dev unchanged.
 const PORT = process.env.PORT || 3001;
@@ -1440,17 +1443,38 @@ app.get("/api/policies/:id", requireAuth, (req, res) => {
   res.json(record);
 });
 
+// Edit your own saved policy's content/name. Shares its edit logic with the
+// staff on-behalf-of-client route in staffRoutes.js via policyWriteOps.js.
+app.patch("/api/policies/:id", requireAuth, gate.capability("createPolicies"), async (req, res) => {
+  const record = db.data.policyDocs.find(p => p.id === req.params.id && p.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Policy document not found" });
+  const { content, policyName } = req.body || {};
+  applyPolicyEdit(db, { record, content, policyName, actorUserId: req.userId, actorRole: "client_admin", logClientAction });
+  await db.write();
+  res.json({ ok: true, id: record.id, policyName: record.policyName, content: record.content });
+});
+
 // Delete one of your own saved policies
 app.delete("/api/policies/:id", requireAuth, async (req, res) => {
-  const before = (db.data.policyDocs || []).length;
-  db.data.policyDocs = (db.data.policyDocs || []).filter(
-    p => !(p.id === req.params.id && p.userId === req.userId)
-  );
-  if (db.data.policyDocs.length === before) {
-    return res.status(404).json({ error: "Policy document not found" });
-  }
+  const record = db.data.policyDocs.find(p => p.id === req.params.id && p.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Policy document not found" });
+  applyPolicyDelete(db, { record, actorUserId: req.userId, actorRole: "client_admin", logClientAction });
   await db.write();
   res.json({ ok: true, deleted: req.params.id });
+});
+
+// Version history for one of your own policies (includes delete/restore events).
+app.get("/api/policies/:id/history", requireAuth, gate.capability("createPolicies"), (req, res) => {
+  res.json(listVersions(db, "policyDoc", req.params.id).filter(v => v.clientUserId === req.userId));
+});
+
+// Restore one of your own policies to a prior version — including past a hard delete.
+app.post("/api/policies/:id/restore/:versionId", requireAuth, gate.capability("createPolicies"), async (req, res) => {
+  const result = restorePolicyVersion(db, { policyId: req.params.id, versionId: req.params.versionId,
+    clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin", logClientAction });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  await db.write();
+  res.json({ ok: true, policy: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -1599,15 +1623,79 @@ app.get("/api/training/:id", requireAuth, (req, res) => {
 
 // Delete a training program
 app.delete("/api/training/:id", requireAuth, async (req, res) => {
-  const before = (db.data.trainingPrograms || []).length;
-  db.data.trainingPrograms = (db.data.trainingPrograms || []).filter(
-    t => !(t.id === req.params.id && t.userId === req.userId)
-  );
-  if (db.data.trainingPrograms.length === before) {
-    return res.status(404).json({ error: "Training program not found" });
-  }
+  const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Training program not found" });
+  recordVersion(db, { entityType: "trainingCurriculum", entityId: record.id, clientUserId: req.userId,
+    action: "delete", snapshot: { ...record }, actorUserId: req.userId, actorRole: "client_admin" });
+  db.data.trainingPrograms = (db.data.trainingPrograms || []).filter(t => t.id !== record.id);
   await db.write();
+  logClientAction(db, { clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+    action: "training_curriculum_deleted", detail: `Deleted training curriculum (${record.id}).` });
   res.json({ ok: true, deleted: req.params.id });
+});
+
+// Edit specific text fields of a saved curriculum — a phase's note, or a
+// module's tailoredIntro/realWorldScenario, or the top-level overview. NOT a
+// wholesale content replacement (that stays what /api/training/generate is
+// for) — keeps "manual edit" and "AI regeneration" distinct, honest actions.
+// Body: { overview?, phaseIndex?, note?, moduleId?, tailoredIntro?, realWorldScenario? }
+app.patch("/api/training/:id", requireAuth, gate.trainingDelivery(), async (req, res) => {
+  const record = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.userId);
+  if (!record) return res.status(404).json({ error: "Training program not found" });
+  const before = JSON.parse(JSON.stringify(record.curriculum));
+  const { overview, phaseIndex, note, moduleId, tailoredIntro, realWorldScenario } = req.body || {};
+  let touched = false;
+  if (typeof overview === "string") { record.curriculum.overview = overview; touched = true; }
+  if (Number.isInteger(phaseIndex) && record.curriculum.phases?.[phaseIndex]) {
+    const phase = record.curriculum.phases[phaseIndex];
+    if (typeof note === "string") { phase.note = note; touched = true; }
+    if (moduleId) {
+      const mod = (phase.modules || []).find(m => m.id === moduleId);
+      if (mod) {
+        if (typeof tailoredIntro === "string") { mod.tailoredIntro = tailoredIntro; mod.editedByHuman = true; touched = true; }
+        if (typeof realWorldScenario === "string") { mod.realWorldScenario = realWorldScenario; mod.editedByHuman = true; touched = true; }
+      }
+    }
+  }
+  if (!touched) return res.status(400).json({ error: "No editable fields were provided." });
+
+  record.updatedAt = new Date().toISOString();
+  record.lastEditedBy = req.userId;
+  recordVersion(db, { entityType: "trainingCurriculum", entityId: record.id, clientUserId: req.userId,
+    action: "update", snapshot: { curriculum: before }, changedFields: ["curriculum"],
+    actorUserId: req.userId, actorRole: "client_admin" });
+  await db.write();
+  logClientAction(db, { clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+    action: "training_curriculum_edited", detail: `Edited training curriculum (${record.id}).` });
+  res.json(record);
+});
+
+// Version history for one of your own curricula (includes delete/restore events).
+app.get("/api/training/:id/history", requireAuth, gate.trainingDelivery(), (req, res) => {
+  res.json(listVersions(db, "trainingCurriculum", req.params.id).filter(v => v.clientUserId === req.userId));
+});
+
+// Restore a curriculum to a prior version — including past a hard delete.
+app.post("/api/training/:id/restore/:versionId", requireAuth, gate.trainingDelivery(), async (req, res) => {
+  const liveRecord = (db.data.trainingPrograms || []).find(t => t.id === req.params.id && t.userId === req.userId);
+  const result = restoreVersion(db, { entityType: "trainingCurriculum", entityId: req.params.id, versionId: req.params.versionId, liveRecord });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  let record;
+  if (result.recreated) {
+    record = { ...result.record, id: req.params.id, userId: req.userId };
+    db.data.trainingPrograms.push(record);
+  } else {
+    record = result.record;
+  }
+  record.updatedAt = new Date().toISOString();
+  record.lastEditedBy = req.userId;
+  recordVersion(db, { entityType: "trainingCurriculum", entityId: req.params.id, clientUserId: req.userId,
+    action: "restore", snapshot: result.recreated ? null : result.preRestoreSnapshot, actorUserId: req.userId, actorRole: "client_admin" });
+  await db.write();
+  logClientAction(db, { clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+    action: "training_curriculum_restored", detail: `Restored training curriculum (${req.params.id}) to an earlier version.` });
+  res.json({ ok: true, program: record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
 });
 
 // Generate (and cache) slides + a full quiz for ONE module within a saved program.

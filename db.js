@@ -57,6 +57,15 @@ function freshDefaults() {
   };
 }
 
+// Collections NOT listed above are bootstrapped lazily by the feature module
+// that owns them (each calls its own ensureCollections()/ensure*Collection()
+// on register), not by freshDefaults(). Notably:
+//   learners, trainingAssignments, trainingQuarters, moduleContent — trainingProgramRoutes.js
+//   versionHistory — versionHistory.js's ensureVersionHistoryCollection(db);
+//     { id, entityType: "learner"|"trainingAssignment"|"policyDoc"|"trainingCurriculum",
+//       entityId, clientUserId, action: "create"|"update"|"delete"|"restore",
+//       snapshot, changedFields, actorUserId, actorRole, at }
+
 const COLLECTIONS = Object.keys(freshDefaults());
 
 async function openStore(filename) {
