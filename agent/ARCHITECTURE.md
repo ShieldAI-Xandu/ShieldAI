@@ -36,7 +36,20 @@ The collector produces a normalized `inventory` (same schema on Windows, Linux,
 and macOS):
 - **Security posture** — installed security tools (e.g. Microsoft Defender),
   host firewall state, disk encryption (BitLocker/FileVault/LUKS), pending OS
-  patches, local administrator accounts, and screen-lock policy.
+  patches, local administrator accounts, and screen-lock policy. On Windows,
+  AV/EDR detection has two independent layers: Windows Security Center
+  enumeration (catches anything registered as an AV product — Bitdefender,
+  Norton, Sophos, etc. — and correctly treats Microsoft Defender's "passive"
+  state as expected, not a failure, when a third-party AV is active) plus a
+  service/process fallback for EDR that doesn't register with Security
+  Center at all (common for centrally-managed CrowdStrike Falcon deployments).
+- **VPN, password manager, and browser protection posture** — whether a known
+  VPN client (OpenVPN, Cisco AnyConnect, WireGuard, NordVPN, Tailscale) is
+  installed and whether a tunnel is actively connected right now (not just
+  installed); whether a known third-party password manager (1Password,
+  LastPass, Bitwarden, Dashlane, KeePass) is installed, and whether each
+  browser's own built-in password manager is enabled; each browser's Safe
+  Browsing/SmartScreen state and whether it's a current/supported version.
 - **Host** — OS and version, architecture, hostname, last boot.
 - **Installed software inventory** — a list of installed applications with their
   versions, as `[{ "name": "...", "version": "..." }]`. Sources per OS:
@@ -134,7 +147,18 @@ and macOS):
   ],
   "inventory": {                         // for compliance evidence
     "localAdmins": [], "installedSecurityTools": [],
-    "diskEncryption": "", "pendingPatches": 0, "firewall": ""
+    "diskEncryption": "", "pendingPatches": 0, "firewall": "",
+    "vpn": {                              // installed VPN clients + live tunnel state
+      "installedClients": ["OpenVPN", "Tailscale"],
+      "tunnelActive": true, "activeTunnelClient": "Tailscale"
+    },
+    "passwordManagers": {                 // 3rd-party apps + each browser's built-in manager
+      "thirdPartyInstalled": ["Bitwarden"],
+      "browserNative": { "chrome": "enabled", "edge": "disabled", "firefox": "not-installed" }
+    },
+    "browsers": [                         // Safe Browsing/SmartScreen state + version currency
+      { "name": "Google Chrome", "version": "128.0.6613.120", "safeBrowsing": "enabled", "currentVersion": true }
+    ]
   }
 }
 ```
@@ -142,16 +166,48 @@ and macOS):
 ## Collectors (per OS) — all read-only, all native tools
 - **Windows (PowerShell):** Defender status (`Get-MpComputerStatus`,
   `Get-MpThreat`), firewall (`Get-NetFirewallProfile`), BitLocker
-  (`Get-BitLockerVolume`), pending updates, local admins, OS build, screen-lock.
+  (`Get-BitLockerVolume`), pending updates, local admins, OS build, screen-lock;
+  Security Center AV enumeration + a service/process fallback for EDR that
+  skips Security Center registration; VPN client/tunnel detection
+  (`Get-Service`/`Get-Process`/`Get-NetAdapter`); password-manager and
+  Safe-Browsing/SmartScreen state read from each browser's own JSON
+  Preferences file (Chrome/Edge) or `prefs.js` (Firefox), with the
+  enterprise Group-Policy registry key honored as authoritative when set.
 - **Linux (Bash):** ufw/firewalld state, LUKS/`cryptsetup` encryption, `clamav`
   or vendor AV status if present, pending package updates, sudo group members,
-  SSH config posture, auto-update config.
+  SSH config posture, auto-update config; VPN client/tunnel detection
+  (`systemctl`/binary presence); password-manager and browser-protection
+  state read the same way as Windows, at each user's `~/.config/...` path,
+  with managed-policy JSON files honored as authoritative when present.
 - **macOS (Bash/zsh):** XProtect/MRT presence, `socketfilterfw` firewall,
   FileVault (`fdesetup status`), `softwareupdate` pending, admin group members,
-  Gatekeeper/SIP status.
+  Gatekeeper/SIP status; VPN client/tunnel detection (`/Applications` +
+  `pgrep` + `scutil --nc`/`utun` interface state); password-manager and
+  browser-protection state read from the same cross-platform Preferences
+  file Chrome/Edge use on every OS (not a `defaults`/plist domain — Chromium
+  doesn't store these settings there), at its macOS path.
 
 Each collector outputs the **same JSON schema** so the backend and AI treat all
 hosts uniformly.
+
+### Version-currency baseline (browsers)
+Each collector maintains its own minimum-supported-major-version table for
+Chrome/Edge/Firefox (the same static-threshold idiom already used for
+signature-age and pending-patch-count checks). **This table must be
+refreshed periodically and kept numerically identical across all three
+collector files** — there's no automated sync for it.
+
+### Installer-source sync (read before touching any collector script)
+`agent/installers/{windows,macos}/.../agent-src|payload` and the Linux
+`.run`'s embedded payload are **manually-synced copies**, not built from
+these main sources automatically. Whenever a collector script changes here,
+the corresponding installer-bundled copy must be re-synced and its native
+installer rebuilt, or the shipped installer will silently keep running the
+old collector logic — this is exactly the class of bug that caused the
+Windows installer to ship without third-party-AV passive-mode handling for
+a period, producing false "no antivirus protection" reports on machines
+running a legitimate third-party AV. Each installer-bundled collector file
+carries a comment at its top saying the same thing.
 
 ## Backend additions (Stage 3)
 - lowdb collections: `agents[]`, `agentReports[]`, `agentEvents[]`,

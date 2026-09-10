@@ -17,7 +17,7 @@
 # string escaping; if absent, a built-in escaper is used.
 
 set -u
-AGENT_VERSION="1.1.0"
+AGENT_VERSION="1.2.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -140,6 +140,211 @@ else
     "No endpoint protection product was detected on this host." "10"
 fi
 
+# ── 3b. VPN client installed + tunnel active ───────────────────
+VPN_CLIENTS=""
+add_vpn() { VPN_CLIENTS="${VPN_CLIENTS:+$VPN_CLIENTS, }$1"; }
+if have openvpn || systemctl list-units --all 2>/dev/null | grep -q 'openvpn@'; then add_vpn "OpenVPN"; fi
+if have wg || systemctl is-active --quiet 'wg-quick@*' 2>/dev/null; then add_vpn "WireGuard"; fi
+if have tailscale || systemctl is-active --quiet tailscaled 2>/dev/null; then add_vpn "Tailscale"; fi
+if [ -x /opt/cisco/anyconnect/bin/vpn ] || systemctl is-active --quiet vpnagentd 2>/dev/null; then add_vpn "Cisco AnyConnect"; fi
+if have nordvpn; then add_vpn "NordVPN"; fi
+
+if [ -n "$VPN_CLIENTS" ]; then
+  add_check "vpn_client_installed" "Protect" "VPN client installed" "pass" "info" "$VPN_CLIENTS" \
+    "A VPN client is installed on this host." "12"
+else
+  add_check "vpn_client_installed" "Protect" "VPN client installed" "warn" "low" "None detected" \
+    "No known VPN client software was found on this host." "12"
+fi
+
+# Tunnel-active: vendor-specific confirmations first (more precise), falling
+# back to a generic UP tun/tap/wg interface check for anything else.
+TUNNEL_ACTIVE=0; TUNNEL_VENDOR=""
+if have wg && wg show interfaces 2>/dev/null | grep -q .; then
+  TUNNEL_ACTIVE=1; TUNNEL_VENDOR="WireGuard"
+elif have tailscale && tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"'; then
+  TUNNEL_ACTIVE=1; TUNNEL_VENDOR="Tailscale"
+elif systemctl is-active --quiet tailscaled 2>/dev/null; then
+  TUNNEL_ACTIVE=1; TUNNEL_VENDOR="Tailscale"
+elif have nordvpn && nordvpn status 2>/dev/null | grep -qi connected; then
+  TUNNEL_ACTIVE=1; TUNNEL_VENDOR="NordVPN"
+elif ip link show 2>/dev/null | grep -qE '^[0-9]+: (tun|tap)[0-9]*.*state UP'; then
+  TUNNEL_ACTIVE=1; TUNNEL_VENDOR="unknown"
+fi
+
+if [ "$TUNNEL_ACTIVE" -eq 1 ]; then
+  add_check "vpn_tunnel_active" "Protect" "VPN tunnel active" "pass" "info" "Connected ($TUNNEL_VENDOR)" \
+    "An active VPN tunnel was detected." "12"
+elif [ -n "$VPN_CLIENTS" ]; then
+  add_check "vpn_tunnel_active" "Protect" "VPN tunnel active" "warn" "low" "Installed but not connected" \
+    "A VPN client is installed but no active tunnel was detected right now." "12"
+else
+  add_check "vpn_tunnel_active" "Protect" "VPN tunnel active" "warn" "low" "No VPN client installed" \
+    "No VPN client is installed, so no tunnel can be active." "12"
+fi
+
+# ── 3c. Password manager detection ─────────────────────────────
+PWD_MGRS=""
+add_pwdmgr() { PWD_MGRS="${PWD_MGRS:+$PWD_MGRS, }$1"; }
+if have 1password || [ -d /opt/1Password ]; then add_pwdmgr "1Password"; fi
+if have bitwarden; then add_pwdmgr "Bitwarden"; fi
+if have keepassxc; then add_pwdmgr "KeePassXC"; fi
+# lpass is the LastPass CLI — a distinct tool from a vault-manager GUI — not
+# treated as "LastPass installed" here, to avoid a misleading positive.
+# Dashlane has no reliable standalone Linux binary (it's primarily a browser
+# extension there) — not checked, so this limitation is visible rather than
+# silently under-detecting it as a false negative.
+
+if [ -n "$PWD_MGRS" ]; then
+  add_check "password_manager_installed" "Protect" "Password manager installed" "pass" "info" "$PWD_MGRS" \
+    "A third-party password manager is installed on this host." "6"
+else
+  add_check "password_manager_installed" "Protect" "Password manager installed" "warn" "low" "None detected" \
+    "No known third-party password manager was found on this host." "6"
+fi
+
+# ── 3d/3e. Browser-native password manager, Safe Browsing, version ──
+# Chrome/Edge (Chromium) store this in a JSON Preferences file per profile.
+# Uses jq when present for a real JSON read; falls back to a plain-text
+# grep otherwise, matching this file's existing "prefer a real tool, fall
+# back to text scraping" convention (see json_escape above).
+read_chromium_pref() {
+  # $1 = Preferences file path, $2 = key, dotted for a nested lookup
+  # (e.g. "safebrowsing.enabled"); prints "true"/"false"/"" (unset).
+  local f="$1" key="$2"
+  if have jq; then
+    jq -r ".${key} // empty" "$f" 2>/dev/null
+  else
+    local leaf="${key##*.}"
+    grep -o "\"${leaf}\":[a-z]*" "$f" 2>/dev/null | head -1 | cut -d: -f2
+  fi
+}
+
+# Major-version floor per browser, "current stable major minus ~2" as of
+# when this was written. Must be refreshed periodically and kept
+# numerically identical across the Windows/Linux/macOS collectors — see
+# agent/ARCHITECTURE.md's installer-sync / version-baseline note.
+MIN_CHROME_MAJOR=128
+MIN_EDGE_MAJOR=128
+MIN_FIREFOX_MAJOR=128
+
+# Scans every local user's Chromium-family profile(s) for this browser and
+# returns (via echo, "|"-joined): pwdmgr|safebrowsing|any_profile_found
+scan_chromium_profiles() {
+  local config_dir_name="$1" pwdmgr_disabled=0 sb_disabled=0 any_profile=0 home prefs
+  for home in /home/*; do
+    [ -d "$home" ] || continue
+    for prefs in "$home/.config/$config_dir_name/Default/Preferences" "$home"/.config/"$config_dir_name"/Profile*/Preferences; do
+      [ -f "$prefs" ] || continue
+      any_profile=1
+      [ "$(read_chromium_pref "$prefs" credentials_enable_service)" = "false" ] && pwdmgr_disabled=1
+      [ "$(read_chromium_pref "$prefs" safebrowsing.enabled)" = "false" ] && sb_disabled=1
+    done
+  done
+  echo "${pwdmgr_disabled}|${sb_disabled}|${any_profile}"
+}
+
+# Managed-policy JSON files (authoritative override when present), same
+# precedence as the Windows/macOS collectors' registry-policy/plist checks.
+chromium_policy_says_disabled() {
+  local policy_key="$1" pf
+  for pf in /etc/opt/chrome/policies/managed/*.json /etc/chromium/policies/managed/*.json /etc/opt/edge/policies/managed/*.json; do
+    [ -f "$pf" ] || continue
+    have jq || continue
+    if [ "$(jq -r ".${policy_key} // empty" "$pf" 2>/dev/null)" = "false" ]; then echo 1; return; fi
+  done
+  echo 0
+}
+
+emit_browser_checks() {
+  # $1 display name, $2 check-id key, $3 version, $4 min major, $5 pwdmgr_disabled,
+  # $6 sb_disabled, $7 any_profile_found, $8 policy_pwdmgr_disabled, $9 policy_sb_disabled
+  local name="$1" key="$2" ver="$3" min_major="$4" pwdmgr_off="$5" sb_off="$6" any_profile="$7" pol_pwdmgr_off="$8" pol_sb_off="$9"
+  local major current="true" pwdmgr="unknown" safebrowsing="unknown"
+  major="$(echo "$ver" | cut -d. -f1)"
+  if [ -n "$major" ] && [ "$major" -lt "$min_major" ] 2>/dev/null; then current="false"; fi
+  if [ "$pol_pwdmgr_off" -eq 1 ]; then
+    pwdmgr="disabled"
+  elif [ "$any_profile" -eq 1 ]; then
+    pwdmgr="enabled"; [ "$pwdmgr_off" -eq 1 ] && pwdmgr="disabled"
+  fi
+  if [ "$pol_sb_off" -eq 1 ]; then
+    safebrowsing="disabled"
+  elif [ "$any_profile" -eq 1 ]; then
+    safebrowsing="enabled"; [ "$sb_off" -eq 1 ] && safebrowsing="disabled"
+  fi
+
+  if [ "$pwdmgr" != "unknown" ]; then
+    add_check "browser_pwdmgr_$key" "Protect" "$name password manager" \
+      "$([ "$pwdmgr" = "enabled" ] && echo pass || echo warn)" \
+      "$([ "$pwdmgr" = "enabled" ] && echo info || echo low)" \
+      "$pwdmgr" "Built-in $name password manager state." "6"
+  fi
+  if [ "$safebrowsing" != "unknown" ]; then
+    add_check "browser_safebrowsing_$key" "Protect" "$name Safe Browsing" \
+      "$([ "$safebrowsing" = "enabled" ] && echo pass || echo fail)" \
+      "$([ "$safebrowsing" = "enabled" ] && echo info || echo medium)" \
+      "$safebrowsing" "Built-in phishing/malware protection state." "9"
+  fi
+  add_check "browser_version_$key" "Identify" "$name version currency" \
+    "$([ "$current" = "true" ] && echo pass || echo warn)" \
+    "$([ "$current" = "true" ] && echo info || echo medium)" \
+    "$ver" "Installed browser version compared against the supported baseline." "7"
+  BROWSERS_JSON="${BROWSERS_JSON:+$BROWSERS_JSON,}{\"name\":$(json_escape "$name"),\"version\":$(json_escape "$ver"),\"safeBrowsing\":$(json_escape "$safebrowsing"),\"currentVersion\":$current}"
+}
+
+BROWSERS_JSON=""
+PWDMGR_CHROME="not-installed"; PWDMGR_EDGE="not-installed"; PWDMGR_FIREFOX="not-installed"
+
+CHROME_VER=""
+if have google-chrome-stable; then CHROME_VER="$(google-chrome-stable --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"
+elif have google-chrome; then CHROME_VER="$(google-chrome --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"; fi
+if [ -n "$CHROME_VER" ]; then
+  IFS='|' read -r c_pwdmgr_off c_sb_off c_any_profile <<< "$(scan_chromium_profiles google-chrome)"
+  pol_pwdmgr_off="$(chromium_policy_says_disabled PasswordManagerEnabled)"
+  pol_sb_off=0
+  emit_browser_checks "Google Chrome" "chrome" "$CHROME_VER" "$MIN_CHROME_MAJOR" \
+    "$c_pwdmgr_off" "$c_sb_off" "$c_any_profile" "$pol_pwdmgr_off" "$pol_sb_off"
+  [ "$c_any_profile" -eq 1 ] && { PWDMGR_CHROME="enabled"; [ "$c_pwdmgr_off" -eq 1 ] && PWDMGR_CHROME="disabled"; }
+  [ "$pol_pwdmgr_off" -eq 1 ] && PWDMGR_CHROME="disabled"
+fi
+
+EDGE_VER=""
+if have microsoft-edge-stable; then EDGE_VER="$(microsoft-edge-stable --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"
+elif have microsoft-edge; then EDGE_VER="$(microsoft-edge --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"; fi
+if [ -n "$EDGE_VER" ]; then
+  IFS='|' read -r e_pwdmgr_off e_sb_off e_any_profile <<< "$(scan_chromium_profiles microsoft-edge)"
+  pol_pwdmgr_off="$(chromium_policy_says_disabled PasswordManagerEnabled)"
+  pol_sb_off=0
+  emit_browser_checks "Microsoft Edge" "edge" "$EDGE_VER" "$MIN_EDGE_MAJOR" \
+    "$e_pwdmgr_off" "$e_sb_off" "$e_any_profile" "$pol_pwdmgr_off" "$pol_sb_off"
+  [ "$e_any_profile" -eq 1 ] && { PWDMGR_EDGE="enabled"; [ "$e_pwdmgr_off" -eq 1 ] && PWDMGR_EDGE="disabled"; }
+  [ "$pol_pwdmgr_off" -eq 1 ] && PWDMGR_EDGE="disabled"
+fi
+
+# Firefox uses a different preferences format entirely (prefs.js, a
+# JS-literal text file, not JSON) — handled separately, a genuinely
+# different idiom rather than an oversight.
+FIREFOX_VER=""
+if have firefox; then FIREFOX_VER="$(firefox --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)"; fi
+if [ -n "$FIREFOX_VER" ]; then
+  ff_pwdmgr_off=0; ff_sb_off=0; ff_any_profile=0
+  for home in /home/*; do
+    [ -d "$home" ] || continue
+    for pf in "$home"/.mozilla/firefox/*.default*/prefs.js; do
+      [ -f "$pf" ] || continue
+      ff_any_profile=1
+      grep -Eq 'user_pref\("signon\.rememberSignons",[[:space:]]*false\)' "$pf" && ff_pwdmgr_off=1
+      grep -Eq 'user_pref\("browser\.safebrowsing\.(malware|phishing)\.enabled",[[:space:]]*false\)' "$pf" && ff_sb_off=1
+    done
+  done
+  emit_browser_checks "Mozilla Firefox" "firefox" "$FIREFOX_VER" "$MIN_FIREFOX_MAJOR" \
+    "$ff_pwdmgr_off" "$ff_sb_off" "$ff_any_profile" 0 0
+  PWDMGR_FIREFOX="enabled"; [ "$ff_pwdmgr_off" -eq 1 ] && PWDMGR_FIREFOX="disabled"
+fi
+
+PWDMGRS_BROWSER_JSON="{\"chrome\":$(json_escape "$PWDMGR_CHROME"),\"edge\":$(json_escape "$PWDMGR_EDGE"),\"firefox\":$(json_escape "$PWDMGR_FIREFOX")}"
+
 # ── 4. Pending package updates ────────────────────────────────
 PEND=0; PEND_KNOWN=0
 if have apt-get; then
@@ -237,9 +442,30 @@ build_software() {
 build_software
 
 # ── inventory ─────────────────────────────────────────────────
+VPN_CLIENTS_JSON=""
+if [ -n "$VPN_CLIENTS" ]; then
+  IFS=',' read -ra _vc <<< "$VPN_CLIENTS"
+  for v in "${_vc[@]}"; do
+    v="$(echo "$v" | sed 's/^ *//;s/ *$//')"
+    VPN_CLIENTS_JSON="${VPN_CLIENTS_JSON:+$VPN_CLIENTS_JSON,}$(json_escape "$v")"
+  done
+fi
+VPN_INV="{\"installedClients\":[${VPN_CLIENTS_JSON}],\"tunnelActive\":$([ "$TUNNEL_ACTIVE" -eq 1 ] && echo true || echo false),\"activeTunnelClient\":$(json_escape "${TUNNEL_VENDOR:-}")}"
+
+PWD_MGRS_JSON=""
+if [ -n "$PWD_MGRS" ]; then
+  IFS=',' read -ra _pm <<< "$PWD_MGRS"
+  for p in "${_pm[@]}"; do
+    p="$(echo "$p" | sed 's/^ *//;s/ *$//')"
+    PWD_MGRS_JSON="${PWD_MGRS_JSON:+$PWD_MGRS_JSON,}$(json_escape "$p")"
+  done
+fi
+PWDMGR_INV="{\"thirdPartyInstalled\":[${PWD_MGRS_JSON}],\"browserNative\":${PWDMGRS_BROWSER_JSON}}"
+
 INV="{\"localAdmins\":[],\"installedSecurityTools\":[${SEC_TOOLS}],"
 INV+="\"diskEncryption\":$(json_escape "$ENC_OBSERVED"),\"pendingPatches\":${PEND:-0},"
 INV+="\"firewall\":$(json_escape "$FW_OBSERVED"),"
+INV+="\"vpn\":${VPN_INV},\"passwordManagers\":${PWDMGR_INV},\"browsers\":[${BROWSERS_JSON}],"
 INV+="\"software\":[${SOFTWARE_JSON}]}"
 
 # ── assemble report ───────────────────────────────────────────

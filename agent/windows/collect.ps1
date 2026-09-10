@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
   [string]$OutFile = "",
-  [string]$AgentVersion = "1.1.0"
+  [string]$AgentVersion = "1.2.0"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -250,6 +250,59 @@ Try-Run {
   }
 }
 
+# ── 1c. Third-party EDR/AV fallback (service/process presence) ──
+# Some centrally-managed EDR products (CrowdStrike Falcon is the most common
+# case) don't register with Windows Security Center at all in enterprise
+# deployments, so section 1a's enumeration alone can miss them — an active
+# EDR would still show up as "no AV detected." This checks for the vendor's
+# own service/process directly, as a second, independent signal. Bitdefender
+# is included here too as a backup path to section 1a, not a replacement for
+# it — if Security Center enumeration ever misses it (e.g. certain
+# GravityZone configurations), this still catches it.
+#
+# NOTE: these are the best publicly-documented service/process names for
+# each vendor, but — like the equivalent Linux/macOS checks — they haven't
+# all been verified against a live install of every product. Spot-check
+# against a real endpoint before fully trusting a specific vendor's entry.
+$edrVendors = @(
+  @{ Name = "CrowdStrike Falcon"; Services = @("CSFalconService") },
+  @{ Name = "SentinelOne"; Services = @("SentinelAgent","SentinelServiceHost") },
+  @{ Name = "Sophos"; Services = @("Sophos MCS Client"); Processes = @("SophosHealth") },
+  @{ Name = "ESET"; Services = @("ekrn"); Processes = @("ekrn") },
+  @{ Name = "Malwarebytes"; Services = @("MBAMService") },
+  @{ Name = "Wazuh"; Services = @("WazuhSvc") },
+  @{ Name = "Bitdefender"; Services = @("VSSERV"); Processes = @("bdservicehost","EPSecurityService") }
+)
+$edrFound = New-Object System.Collections.ArrayList
+foreach ($vendor in $edrVendors) {
+  $hit = $false
+  foreach ($svc in @($vendor.Services)) {
+    if ($svc -and (Get-Service -Name $svc -ErrorAction SilentlyContinue)) { $hit = $true; break }
+  }
+  if (-not $hit) {
+    foreach ($proc in @($vendor.Processes)) {
+      if ($proc -and (Get-Process -Name $proc -ErrorAction SilentlyContinue)) { $hit = $true; break }
+    }
+  }
+  if ($hit) {
+    [void]$edrFound.Add($vendor.Name)
+    if (-not ($inventory.installedSecurityTools -contains $vendor.Name)) {
+      [void]$inventory.installedSecurityTools.Add($vendor.Name)
+    }
+  }
+}
+if ($edrFound.Count -gt 0) {
+  $alreadyRegisteredNames = @($decoded.Keys)
+  $newlyFoundOnly = @($edrFound | Where-Object { $alreadyRegisteredNames -notcontains $_ })
+  $detailSuffix = if ($newlyFoundOnly.Count -gt 0) { " Found via service/process detection, not registered with Windows Security Center: $($newlyFoundOnly -join ', ')." } else { "" }
+  Add-Check -Id "edr_fallback" -Category "Protect" -Title "Third-party EDR/AV (service detection)" `
+    -Status "pass" -Severity "info" -Observed "$($edrFound -join ', ')" `
+    -Detail "Detected via vendor service/process presence.$detailSuffix" -CisControl "10"
+}
+# If nothing is found here, no check is emitted — section 1a's
+# "av_registered"/av_realtime checks above already cover the "nothing
+# detected at all" case, and a third redundant warning would just be noise.
+
 # ── 2. Firewall ───────────────────────────────────────────────
 Try-Run {
   $profiles = Get-NetFirewallProfile
@@ -421,6 +474,280 @@ Try-Run {
   # Non-fatal: if the scan fails, software stays an empty array (honest — no
   # fabricated inventory), and CVE matching falls back to OS + assessment data.
   $inventory.software = @()
+}
+
+# ── 11. VPN client installed ───────────────────────────────────
+$vpnVendors = @(
+  @{ Name = "OpenVPN"; Services = @("OpenVPNService"); Processes = @("openvpn","openvpn-gui") },
+  @{ Name = "Cisco AnyConnect"; Services = @("vpnagent"); Processes = @("vpnui") },
+  @{ Name = "WireGuard"; Services = @("WireGuardTunnel*"); Processes = @("wireguard") },
+  @{ Name = "NordVPN"; Services = @("nordvpn-service"); Processes = @("NordVPN") },
+  @{ Name = "Tailscale"; Services = @("Tailscale"); Processes = @("tailscaled") }
+)
+$vpnClientsFound = New-Object System.Collections.ArrayList
+foreach ($vendor in $vpnVendors) {
+  $hit = $false
+  foreach ($svc in @($vendor.Services)) {
+    if ($svc -and (Get-Service -Name $svc -ErrorAction SilentlyContinue)) { $hit = $true; break }
+  }
+  if (-not $hit) {
+    foreach ($proc in @($vendor.Processes)) {
+      if ($proc -and (Get-Process -Name $proc -ErrorAction SilentlyContinue)) { $hit = $true; break }
+    }
+  }
+  if ($hit) { [void]$vpnClientsFound.Add($vendor.Name) }
+}
+$inventory.vpn = [ordered]@{ installedClients = @($vpnClientsFound); tunnelActive = $false; activeTunnelClient = "" }
+if ($vpnClientsFound.Count -gt 0) {
+  Add-Check -Id "vpn_client_installed" -Category "Protect" -Title "VPN client installed" `
+    -Status "pass" -Severity "info" -Observed "$($vpnClientsFound -join ', ')" `
+    -Detail "A VPN client is installed on this endpoint." -CisControl "12"
+} else {
+  Add-Check -Id "vpn_client_installed" -Category "Protect" -Title "VPN client installed" `
+    -Status "warn" -Severity "low" -Observed "None detected" `
+    -Detail "No known VPN client software was found on this endpoint." -CisControl "12"
+}
+
+# ── 12. VPN tunnel actively connected ──────────────────────────
+# Distinct from "installed" above — a client can be present but not
+# currently protecting the session. Matches on BOTH InterfaceDescription
+# and Name because several vendors share the Wintun driver (WireGuard,
+# newer OpenVPN, Tailscale, NordVPN's NordLynx all present as "Wintun
+# Userspace Tunnel"), so Name (vendor/tunnel-specific) is needed to
+# disambiguate; falls back to attributing an ambiguous Wintun adapter to
+# whichever VPN client's service/process was already confirmed running.
+Try-Run {
+  $upAdapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq "Up" })
+  $tunnelPatterns = @(
+    @{ Pattern = "Tailscale"; Vendor = "Tailscale" },
+    @{ Pattern = "NordLynx"; Vendor = "NordVPN" },
+    @{ Pattern = "WireGuard"; Vendor = "WireGuard" },
+    @{ Pattern = "TAP-Windows Adapter"; Vendor = "OpenVPN" },
+    @{ Pattern = "Cisco AnyConnect"; Vendor = "Cisco AnyConnect" },
+    @{ Pattern = "Wintun"; Vendor = $null }
+  )
+  $activeVendor = $null
+  foreach ($a in $upAdapters) {
+    $desc = "$($a.InterfaceDescription)"; $nm = "$($a.Name)"
+    foreach ($tp in $tunnelPatterns) {
+      if ($desc -notmatch [regex]::Escape($tp.Pattern) -and $nm -notmatch [regex]::Escape($tp.Pattern)) { continue }
+      if ($tp.Vendor) { $activeVendor = $tp.Vendor }
+      else {
+        foreach ($v in $vpnClientsFound) {
+          if ($nm -match [regex]::Escape($v)) { $activeVendor = $v; break }
+        }
+        if (-not $activeVendor -and $vpnClientsFound.Count -gt 0) { $activeVendor = $vpnClientsFound[0] }
+      }
+      if ($activeVendor) { break }
+    }
+    if ($activeVendor) { break }
+  }
+  if ($activeVendor) {
+    $inventory.vpn.tunnelActive = $true
+    $inventory.vpn.activeTunnelClient = $activeVendor
+    Add-Check -Id "vpn_tunnel_active" -Category "Protect" -Title "VPN tunnel active" `
+      -Status "pass" -Severity "info" -Observed "Connected ($activeVendor)" `
+      -Detail "An active VPN tunnel was detected via network adapter state." -CisControl "12"
+  } elseif ($vpnClientsFound.Count -gt 0) {
+    Add-Check -Id "vpn_tunnel_active" -Category "Protect" -Title "VPN tunnel active" `
+      -Status "warn" -Severity "low" -Observed "Installed but not connected" `
+      -Detail "A VPN client is installed but no active tunnel was detected right now." -CisControl "12"
+  } else {
+    Add-Check -Id "vpn_tunnel_active" -Category "Protect" -Title "VPN tunnel active" `
+      -Status "warn" -Severity "low" -Observed "No VPN client installed" `
+      -Detail "No VPN client is installed, so no tunnel can be active." -CisControl "12"
+  }
+} {
+  Add-Check -Id "vpn_tunnel_active" -Category "Protect" -Title "VPN tunnel active" -Status "unknown" `
+    -Severity "low" -Observed "Not determinable" -Detail "Could not enumerate network adapters." -CisControl "12"
+}
+
+# ── 13. Password managers ──────────────────────────────────────
+# Third-party desktop apps: name-match against the software inventory
+# already built in section 10, rather than re-scanning the registry again.
+$pwdMgrNames = @("1Password","LastPass","Bitwarden","Dashlane","KeePass")
+$pwdMgrsFound = New-Object System.Collections.ArrayList
+foreach ($sw in $inventory.software) {
+  foreach ($pm in $pwdMgrNames) {
+    if ($sw.name -match [regex]::Escape($pm) -and -not ($pwdMgrsFound -contains $pm)) {
+      [void]$pwdMgrsFound.Add($pm)
+    }
+  }
+}
+$inventory.passwordManagers = [ordered]@{
+  thirdPartyInstalled = @($pwdMgrsFound)
+  browserNative = [ordered]@{ chrome = "not-installed"; edge = "not-installed"; firefox = "not-installed" }
+}
+if ($pwdMgrsFound.Count -gt 0) {
+  Add-Check -Id "password_manager_installed" -Category "Protect" -Title "Password manager installed" `
+    -Status "pass" -Severity "info" -Observed "$($pwdMgrsFound -join ', ')" `
+    -Detail "A third-party password manager is installed on this endpoint." -CisControl "6"
+} else {
+  Add-Check -Id "password_manager_installed" -Category "Protect" -Title "Password manager installed" `
+    -Status "warn" -Severity "low" -Observed "None detected" `
+    -Detail "No known third-party password manager was found on this endpoint." -CisControl "6"
+}
+
+# ── 14. Browser-native password manager, Safe Browsing/SmartScreen, version ──
+# Reads each browser's own JSON Preferences file — same idiom as
+# agent-run.ps1's Read-Json (Get-Content -Raw | ConvertFrom-Json, guarded by
+# Test-Path) — checking the enterprise Group-Policy override first since
+# it's authoritative when set. This is genuinely new collector logic; no
+# prior Preferences-file or Policy-key read exists elsewhere in this script.
+function Read-JsonFile($path) {
+  if (Test-Path $path) {
+    try { return (Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json) } catch { return $null }
+  }
+  return $null
+}
+function Get-ChromiumProfilePrefs($userDataDir) {
+  $results = New-Object System.Collections.ArrayList
+  if (Test-Path $userDataDir) {
+    Get-ChildItem $userDataDir -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -eq "Default" -or $_.Name -match "^Profile \d+$" } |
+      ForEach-Object {
+        $prefs = Read-JsonFile (Join-Path $_.FullName "Preferences")
+        if ($prefs) { [void]$results.Add($prefs) }
+      }
+  }
+  return $results
+}
+
+# Major-version floor per browser, "current stable major minus ~2" as of
+# when this was written. Must be refreshed periodically and kept numerically
+# identical across the Windows/Linux/macOS collectors — see
+# agent/ARCHITECTURE.md's installer-sync / version-baseline note.
+$MinSupportedBrowserMajor = @{ chrome = 128; edge = 128; firefox = 128 }
+
+$inventory.browsers = New-Object System.Collections.ArrayList
+$chromiumBrowsers = @(
+  @{ Key = "chrome"; Name = "Google Chrome"; Exe = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe";
+     PrefsDir = "$env:LOCALAPPDATA\Google\Chrome\User Data"; PolicyKey = "HKLM:\SOFTWARE\Policies\Google\Chrome" },
+  @{ Key = "edge"; Name = "Microsoft Edge"; Exe = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe";
+     PrefsDir = "$env:LOCALAPPDATA\Microsoft\Edge\User Data"; PolicyKey = "HKLM:\SOFTWARE\Policies\Microsoft\Edge" }
+)
+foreach ($b in $chromiumBrowsers) {
+  if (-not (Test-Path $b.Exe)) { continue }
+  $version = "unknown"
+  try { $version = (Get-Item $b.Exe -ErrorAction Stop).VersionInfo.ProductVersion } catch { }
+  $major = 0
+  try { $major = [int](("$version" -split "\.")[0]) } catch { }
+  $current = ($major -ge $MinSupportedBrowserMajor[$b.Key])
+
+  # @()-wrap: PowerShell unwraps a single-element collection to a bare
+  # scalar on return, which would silently drop .Count here whenever a
+  # browser has exactly one profile (confirmed against a real Edge install
+  # with only "Default" — the same class of gotcha $avProducts/$sw guard
+  # against elsewhere in this file with the same @() idiom).
+  $profiles = @(Get-ChromiumProfilePrefs $b.PrefsDir)
+  $pwdMgrEnabled = "unknown"; $safeBrowsing = "unknown"
+
+  # Policy overrides win when set, regardless of the per-profile Preferences
+  # value. Edge's SmartScreen is checked as its own key (SmartScreenEnabled)
+  # alongside Chrome's SafeBrowsingProtectionLevel — Edge (Chromium-based)
+  # also honors the standard SafeBrowsingProtectionLevel policy, so either
+  # name is checked generically here rather than branching per browser.
+  $policyPwdMgr = $null; $policySafeBrowsing = $null
+  try {
+    $pol = Get-ItemProperty $b.PolicyKey -ErrorAction Stop
+    if ($pol.PSObject.Properties.Name -contains "PasswordManagerEnabled") { $policyPwdMgr = $pol.PasswordManagerEnabled }
+    if ($pol.PSObject.Properties.Name -contains "SafeBrowsingProtectionLevel") { $policySafeBrowsing = [int]$pol.SafeBrowsingProtectionLevel -ge 1 }
+    elseif ($pol.PSObject.Properties.Name -contains "SmartScreenEnabled") { $policySafeBrowsing = [int]$pol.SmartScreenEnabled -eq 1 }
+  } catch { }
+
+  if ($policyPwdMgr -ne $null) {
+    $pwdMgrEnabled = if ($policyPwdMgr -eq 1) { "enabled" } else { "disabled" }
+  } elseif ($profiles.Count -gt 0) {
+    # credentials_enable_service defaults to true (enabled) when unset, so
+    # only an explicit false counts as "disabled" — matches Chromium's
+    # actual default-on behavior rather than treating "not customized" as off.
+    $anyDisabled = @($profiles | Where-Object { $_.credentials_enable_service -eq $false })
+    $pwdMgrEnabled = if ($anyDisabled.Count -gt 0) { "disabled" } else { "enabled" }
+  }
+
+  if ($policySafeBrowsing -ne $null) {
+    $safeBrowsing = if ($policySafeBrowsing) { "enabled" } else { "disabled" }
+  } elseif ($profiles.Count -gt 0) {
+    # For the unmanaged/no-policy default state, this reads the standard
+    # Chromium `safebrowsing.enabled` preference (default-on, same
+    # explicit-false-only-counts-as-disabled reasoning as above). Edge's
+    # own SmartScreen has additional settings beyond Safe Browsing in some
+    # builds — if a future check needs finer-grained SmartScreen state
+    # specifically (not just the shared Safe-Browsing subsystem), verify
+    # the exact unmanaged-default Preferences key against a real Edge
+    # profile before relying on it; not guessed here.
+    $anyDisabled = @($profiles | Where-Object { $_.safebrowsing -and $_.safebrowsing.enabled -eq $false })
+    $safeBrowsing = if ($anyDisabled.Count -gt 0) { "disabled" } else { "enabled" }
+  }
+
+  [void]$inventory.browsers.Add([ordered]@{
+    name = $b.Name; version = $version; safeBrowsing = $safeBrowsing; currentVersion = $current
+  })
+  $inventory.passwordManagers.browserNative.$($b.Key) = $pwdMgrEnabled
+
+  if ($pwdMgrEnabled -ne "unknown") {
+    Add-Check -Id "browser_pwdmgr_$($b.Key)" -Category "Protect" -Title "$($b.Name) password manager" `
+      -Status ($(if ($pwdMgrEnabled -eq "enabled") {"pass"} else {"warn"})) `
+      -Severity ($(if ($pwdMgrEnabled -eq "enabled") {"info"} else {"low"})) `
+      -Observed $pwdMgrEnabled -Detail "Built-in $($b.Name) password manager state." -CisControl "6"
+  }
+  if ($safeBrowsing -ne "unknown") {
+    Add-Check -Id "browser_safebrowsing_$($b.Key)" -Category "Protect" -Title "$($b.Name) Safe Browsing / SmartScreen" `
+      -Status ($(if ($safeBrowsing -eq "enabled") {"pass"} else {"fail"})) `
+      -Severity ($(if ($safeBrowsing -eq "enabled") {"info"} else {"medium"})) `
+      -Observed $safeBrowsing -Detail "Built-in phishing/malware protection state." -CisControl "9"
+  }
+  Add-Check -Id "browser_version_$($b.Key)" -Category "Identify" -Title "$($b.Name) version currency" `
+    -Status ($(if ($current) {"pass"} else {"warn"})) `
+    -Severity ($(if ($current) {"info"} else {"medium"})) `
+    -Observed "$version" -Detail "Installed browser version compared against the supported baseline." -CisControl "7"
+}
+
+# Firefox uses a different preferences format entirely (prefs.js, a
+# JS-literal text file, not JSON) — handled separately rather than folded
+# into the Chromium loop above, which is a genuinely different idiom, not
+# an oversight.
+$firefoxExe = "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
+if (Test-Path $firefoxExe) {
+  $version = "unknown"
+  try { $version = (Get-Item $firefoxExe -ErrorAction Stop).VersionInfo.ProductVersion } catch { }
+  $major = 0
+  try { $major = [int](("$version" -split "\.")[0]) } catch { }
+  $current = ($major -ge $MinSupportedBrowserMajor["firefox"])
+
+  $pwdMgrEnabled = "unknown"; $safeBrowsing = "unknown"
+  $profileLines = @()
+  try {
+    $profileFiles = Get-ChildItem "$env:APPDATA\Mozilla\Firefox\Profiles\*.default*\prefs.js" -ErrorAction SilentlyContinue
+    foreach ($pf in $profileFiles) { $profileLines += @(Get-Content $pf.FullName -ErrorAction SilentlyContinue) }
+  } catch { }
+  if ($profileLines.Count -gt 0) {
+    $remember = @($profileLines | Where-Object { $_ -match 'user_pref\("signon\.rememberSignons",\s*(true|false)\)' })
+    # Absence of the pref means the Firefox default (enabled) hasn't been
+    # overridden — same default-on reasoning as the Chromium checks above.
+    $pwdMgrEnabled = if ($remember.Count -gt 0 -and $remember[0] -match "false") { "disabled" } else { "enabled" }
+    $malwareOff = @($profileLines | Where-Object { $_ -match 'user_pref\("browser\.safebrowsing\.malware\.enabled",\s*false\)' })
+    $phishingOff = @($profileLines | Where-Object { $_ -match 'user_pref\("browser\.safebrowsing\.phishing\.enabled",\s*false\)' })
+    $safeBrowsing = if ($malwareOff.Count -gt 0 -or $phishingOff.Count -gt 0) { "disabled" } else { "enabled" }
+  }
+
+  [void]$inventory.browsers.Add([ordered]@{
+    name = "Mozilla Firefox"; version = $version; safeBrowsing = $safeBrowsing; currentVersion = $current
+  })
+  $inventory.passwordManagers.browserNative.firefox = $pwdMgrEnabled
+
+  Add-Check -Id "browser_pwdmgr_firefox" -Category "Protect" -Title "Firefox password manager" `
+    -Status ($(if ($pwdMgrEnabled -eq "enabled") {"pass"} else {"warn"})) `
+    -Severity ($(if ($pwdMgrEnabled -eq "enabled") {"info"} else {"low"})) `
+    -Observed $pwdMgrEnabled -Detail "Built-in Firefox password manager state." -CisControl "6"
+  Add-Check -Id "browser_safebrowsing_firefox" -Category "Protect" -Title "Firefox Safe Browsing" `
+    -Status ($(if ($safeBrowsing -eq "enabled") {"pass"} else {"fail"})) `
+    -Severity ($(if ($safeBrowsing -eq "enabled") {"info"} else {"medium"})) `
+    -Observed $safeBrowsing -Detail "Built-in phishing/malware protection state." -CisControl "9"
+  Add-Check -Id "browser_version_firefox" -Category "Identify" -Title "Firefox version currency" `
+    -Status ($(if ($current) {"pass"} else {"warn"})) `
+    -Severity ($(if ($current) {"info"} else {"medium"})) `
+    -Observed "$version" -Detail "Installed browser version compared against the supported baseline." -CisControl "7"
 }
 
 # ── assemble report ───────────────────────────────────────────
