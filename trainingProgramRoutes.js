@@ -29,9 +29,40 @@
 import { randomUUID, randomBytes } from "crypto";
 import { TRAINING_TOPICS } from "./trainingCatalog.js";
 import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
+import { sendEmail, sendBatch, emailConfigured } from "./emailService.js";
 
 const nowIso = () => new Date().toISOString();
 const newToken = () => randomBytes(24).toString("base64url"); // ~32 chars, URL-safe
+
+// Mirrors reportRoutes.js's/policyAcknowledgmentRoutes.js's esc() — learner
+// names and assignment/quarter titles are client-entered and get interpolated
+// into email HTML below.
+function esc(s) {
+  return String(s ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c],
+  );
+}
+
+function trainingLink(learner) {
+  return `${process.env.APP_URL || "http://localhost:5173"}/train/${learner.token}`;
+}
+
+function trainingEmailHtml(learner, title) {
+  const link = trainingLink(learner);
+  return `<p>Hi ${esc(learner.name.split(" ")[0])},</p>
+<p>You have security training waiting for you: <strong>${esc(title)}</strong>.</p>
+<p>Please take a few minutes to complete it:</p>
+<p><a href="${link}">${link}</a></p>
+<p>Thanks,<br/>Your security team</p>`;
+}
 
 export const LEARNER_STATUSES = ["active", "inactive"];
 export const ASSIGNMENT_STATUSES = ["assigned", "in_progress", "completed", "overdue", "waived"];
@@ -373,9 +404,10 @@ export function trainingSummary(db, depth = "summary") {
 // ──────────────────────────────────────────────────────────────
 export function registerTrainingProgramRoutes(app, {
   db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds,
-  callAI, extractJson,
+  callAI, extractJson, emailSendLimiter,
 }) {
   ensureCollections(db);
+  const emailLimit = emailSendLimiter || ((req, res, next) => next());
 
   // Client-facing training DELIVERY gate: passes for Growth+ (bundled) or a
   // Starter who bought the $40 add-on; staff (admin/analyst) always bypass.
@@ -511,7 +543,7 @@ export function registerTrainingProgramRoutes(app, {
   });
 
   // Create assignment(s): assign a set of catalog topics to one or more learners.
-  app.post("/api/training-program/assignments", requireAuth, gateDelivery, async (req, res) => {
+  app.post("/api/training-program/assignments", requireAuth, gateDelivery, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { learnerIds, topicIds, title, dueDate } = req.body || {};
@@ -523,6 +555,7 @@ export function registerTrainingProgramRoutes(app, {
     if (!modules.length) return res.status(400).json({ error: "No valid topics selected." });
 
     const created = [];
+    const createdLearners = [];
     for (const learnerId of learnerIds) {
       const learner = (db.data.learners || []).find(l => l.id === learnerId && l.clientUserId === scope.clientUserId);
       if (!learner) continue;
@@ -535,11 +568,25 @@ export function registerTrainingProgramRoutes(app, {
       };
       db.data.trainingAssignments.push(a);
       created.push(a);
+      createdLearners.push(learner);
     }
     await db.write();
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
       action: "training_assigned", detail: `Assigned ${modules.length} module(s) to ${created.length} learner(s).` });
-    res.json({ ok: true, created: created.length, assignments: created });
+
+    // Send each newly-assigned learner their link by email, so "assign
+    // training" actually delivers it rather than requiring the client to
+    // copy/paste the link manually. Never blocks a successful assignment on
+    // email failure — emailResults just reports what happened per learner.
+    let emailResults = [];
+    if (emailConfigured()) {
+      emailResults = await Promise.all(created.map(async (a, i) => {
+        const learner = createdLearners[i];
+        const result = await sendEmail({ to: learner.email, subject: `New security training assigned: ${a.title}`, html: trainingEmailHtml(learner, a.title), fromLocal: "notifications" });
+        return { learnerId: learner.id, emailed: result.ok, sendError: result.ok ? null : result.error };
+      }));
+    }
+    res.json({ ok: true, created: created.length, assignments: created, emailResults });
   });
 
   // Update an assignment (due date, waive, cancel).
@@ -583,8 +630,8 @@ export function registerTrainingProgramRoutes(app, {
     res.json({ ok: true, assignment: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
   });
 
-  // Staff can send a reminder (records an action; email delivery is out of scope here).
-  app.post("/api/training-program/assignments/:id/remind", requireAuth, gateDelivery, async (req, res) => {
+  // Send a real reminder email to a learner about a pending assignment.
+  app.post("/api/training-program/assignments/:id/remind", requireAuth, gateDelivery, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const a = (db.data.trainingAssignments || []).find(x => x.id === req.params.id && x.clientUserId === scope.clientUserId);
@@ -592,9 +639,20 @@ export function registerTrainingProgramRoutes(app, {
     const learner = (db.data.learners || []).find(l => l.id === a.learnerId);
     a.lastReminderAt = nowIso();
     await db.write();
+
+    // Attempt the send BEFORE logging, so the audit trail records what
+    // actually happened rather than an assumed success.
+    let emailed = false, sendError = null;
+    if (learner && emailConfigured()) {
+      const result = await sendEmail({ to: learner.email, subject: `Training reminder: ${a.title}`, html: trainingEmailHtml(learner, a.title), fromLocal: "notifications" });
+      emailed = result.ok;
+      sendError = result.ok ? null : result.error;
+    }
+    const outcome = emailed ? "emailed" : learner ? (sendError ? `email failed: ${sendError}` : "email not configured — link recorded only") : "no learner on file";
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
-      action: "training_reminder_sent", detail: `Reminder for "${a.title}" to ${learner?.name || "learner"}.` });
-    res.json({ ok: true, learnerLink: learner ? `/train/${learner.token}` : null, remindedAt: a.lastReminderAt });
+      action: "training_reminder_sent", detail: `Reminder for "${a.title}" to ${learner?.name || "learner"} (${outcome}).` });
+
+    res.json({ ok: true, emailed, sendError, learnerLink: learner ? `/train/${learner.token}` : null, remindedAt: a.lastReminderAt });
   });
 
   // === QUARTERLY SCHEDULING ====================================
@@ -607,7 +665,7 @@ export function registerTrainingProgramRoutes(app, {
 
   // Schedule a quarter: fan out an assignment of the chosen topics to every
   // active learner. Admin-scheduled, manual (confirmed cadence choice).
-  app.post("/api/training-program/quarters", requireAuth, gateDelivery, async (req, res) => {
+  app.post("/api/training-program/quarters", requireAuth, gateDelivery, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
     const { year, quarter, topicIds, dueDate, label } = req.body || {};
@@ -639,7 +697,23 @@ export function registerTrainingProgramRoutes(app, {
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
       action: "training_quarter_scheduled",
       detail: `Scheduled "${quarterRec.label}" for ${activeLearners.length} learner(s).` });
-    res.json({ ok: true, quarter: quarterRec, assigned: activeLearners.length });
+
+    // Fan out a "new training assigned" email to every active learner —
+    // sendBatch is already built for exactly this (sequential, small delay,
+    // per-recipient results, never throws).
+    let emailResults = [];
+    if (emailConfigured() && activeLearners.length) {
+      const messages = activeLearners.map(learner => ({
+        to: learner.email,
+        subject: `New security training assigned: ${quarterRec.label}`,
+        html: trainingEmailHtml(learner, quarterRec.label),
+      }));
+      // sendBatch returns {to, ok, id|error} per recipient — normalize to the
+      // same {emailed, sendError} shape the assignments-create route uses, so
+      // the frontend's shared emailSummary() works identically for both.
+      emailResults = (await sendBatch(messages)).map(r => ({ to: r.to, emailed: r.ok, sendError: r.ok ? null : r.error }));
+    }
+    res.json({ ok: true, quarter: quarterRec, assigned: activeLearners.length, emailResults });
   });
 
   // === REPORTS / OVERVIEW ======================================

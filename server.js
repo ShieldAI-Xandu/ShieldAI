@@ -1421,6 +1421,346 @@ async function regenerateExecReportSection(program) {
   return program.sections.execReport;
 }
 
+// ─────────────────────────────────────────────────────────────
+//  On-demand regeneration for the remaining frozen program sections
+//  (Security Program Overview, Priorities, Policies, Workflows, Tools,
+//  Training preview, Threat Landscape) — same idea as regenerateExecReportSection
+//  above, extended to every other pipeline-authored section.
+// ─────────────────────────────────────────────────────────────
+
+// riskOverview is bespoke, not covered by the generic helper below, for two
+// reasons: (1) it force-overwrites postureScore/postureLevel/breakdown after
+// generation, and (2) runPipeline's riskOverview branch builds its own INLINE
+// system prompt (see the "COMPUTED SECURITY POSTURE" block above in this file)
+// rather than reading PIPELINE.find(s=>s.key==="riskOverview").system — that
+// array entry's schema ({"riskScore":...}) is dead legacy content. A regenerate
+// must reconstruct the same inline-prompt style, not the generic one.
+async function regenerateRiskOverviewSection(program) {
+  const assessment = db.data.assessments.find(a => a.id === program.assessmentId);
+  if (!assessment) {
+    throw Object.assign(new Error("This program's original assessment no longer exists."), { status: 400 });
+  }
+  const ctx = JSON.stringify(assessment.data);
+  const posture = computePostureScore(assessment.data);
+
+  // "Before" read BEFORE we overwrite program.sections.riskOverview below.
+  const ro = program.sections?.riskOverview;
+  let before = null, levelBefore = null, beforeSource = null;
+  if (ro && typeof ro.postureScore === "number") {
+    before = ro.postureScore; levelBefore = ro.postureLevel || null; beforeSource = "program";
+  } else {
+    const snaps = (db.data.postureSnapshots || [])
+      .filter(s => s.userId === program.userId)
+      .sort((a, b) => new Date(a.at) - new Date(b.at));
+    if (snaps[0]) { before = snaps[0].score; levelBefore = snaps[0].level || null; beforeSource = "snapshot"; }
+  }
+  const improvementDelta = before == null ? null : {
+    before, after: posture.postureScore, delta: posture.postureScore - before,
+    levelBefore, levelAfter: posture.postureLevel, beforeSource,
+  };
+
+  const postureSummary = `COMPUTED SECURITY POSTURE (authoritative — do not change these numbers):
+- Overall posture score: ${posture.postureScore}/100 (${posture.postureLevel}) — higher is better
+- Methodology: ${posture.methodology}
+- Per-function scores: ${posture.functions.map(f => `${f.name} ${f.score}/100`).join(", ")}
+- Weakest areas: ${posture.weakestAreas.join(", ")}
+- Key findings: ${posture.functions.flatMap(f => f.factors.map(x => x.finding)).join(" ")}
+- Compliance note: ${posture.complianceNote}
+- ${improvementDelta
+      ? `Improvement since this overview was first generated: ${improvementDelta.before}/100 (${improvementDelta.levelBefore}) → ${posture.postureScore}/100 (${posture.postureLevel}), a change of ${improvementDelta.delta >= 0 ? "+" : ""}${improvementDelta.delta} points — reflect this improvement/decline in the executive summary.`
+      : "No prior baseline is available — this is the first overview generated for this client."}`;
+
+  const system = `You are a senior CISO. A deterministic scoring engine has ALREADY computed this business's security posture score using the NIST CSF framework. Your job is to write the narrative around it — you must NOT invent or change the score.
+
+Return ONLY valid JSON, no markdown fences:
+{"postureScore":<use the exact computed score>,"postureLevel":"<use the exact computed level>","executiveSummary":"3-4 sentences explaining what this score means for this specific business, referencing the weakest areas","topThreats":[{"threat":"","likelihood":"High|Medium|Low","impact":"High|Medium|Low","description":""}]}
+
+Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Keep each description to 1 sentence. Higher score = better security posture.`;
+
+  const userContent = `Business context:\n${ctx}\n\n${postureSummary}\n\nWrite the risk overview JSON. Use the computed postureScore (${posture.postureScore}) and postureLevel (${posture.postureLevel}) EXACTLY.`;
+
+  let parsed, provider;
+  try {
+    const r = await genForStep("riskOverview", { system, messages: [{ role: "user", content: userContent }], max_tokens: 1500 });
+    parsed = extractJson(r.text); provider = r.provider;
+  } catch (firstErr) {
+    console.warn(`regenerate-section "riskOverview" first attempt failed (${firstErr.message}); retrying…`);
+    const r = await genForStep("riskOverview", {
+      system,
+      messages: [{ role: "user", content: userContent + " Return strictly valid, minified JSON — no trailing commas, no text before or after." }],
+      max_tokens: 1500,
+    });
+    parsed = extractJson(r.text); provider = r.provider;
+  }
+
+  // Enforce the computed values (defend against the AI drifting), exactly as
+  // the original pipeline does.
+  parsed.postureScore = posture.postureScore;
+  parsed.postureLevel = posture.postureLevel;
+  parsed.generatedBy = provider;
+  parsed.generatedAt = new Date().toISOString();
+  parsed.improvementDelta = improvementDelta;
+  parsed.breakdown = {
+    methodology: posture.methodology,
+    functions: posture.functions,
+    weakestAreas: posture.weakestAreas,
+    complianceNote: posture.complianceNote,
+    frameworkLens: posture.frameworkLens || "NIST CSF",
+    lens: posture.lens || "nist",
+    alternateView: posture.alternateView || null,
+  };
+
+  program.sections.riskOverview = parsed;
+  applyShapeGuard(program, "riskOverview");
+  await db.write();
+  return program.sections.riskOverview;
+}
+
+// ── Per-section "authoritative current state" context builders ──────────
+// Each returns a plain text block appended to that step's original PIPELINE
+// system prompt. `data` is gatherReportData(db, program.userId) — client-wide
+// task/training counts only (not assessment-specific).
+
+function nonNistFrameworkSummary(assessment) {
+  const frameworks = evaluateAllFrameworks(checklistOf(assessment), optsFor(assessment));
+  return (frameworks || [])
+    .filter(f => typeof f.compliancePct === "number")
+    .slice(0, 3)
+    .map(f => `${f.name}: ${f.compliancePct}% compliant`)
+    .join("; ") || "no framework has been formally assessed yet";
+}
+
+function completedTaskTitles(program, limit = 10) {
+  return (db.data.tasks || [])
+    .filter(t => t.ownerUserId === program.userId && t.status === "done")
+    .slice(0, limit)
+    .map(t => t.title);
+}
+
+function buildPrioritiesContext(program, assessment, posture) {
+  const strong = posture.functions.flatMap(f => f.factors).filter(f => f.score >= 70).map(f => f.label);
+  const weak = posture.functions.flatMap(f => f.factors).filter(f => f.score < 50).map(f => f.label);
+  const done = completedTaskTitles(program);
+  return `COMPUTED CURRENT STATE (authoritative — do not change these numbers, and do not invent a separate compliance percentage for any framework not listed):
+- Current posture score: ${posture.postureScore}/100 (${posture.postureLevel})
+- ALREADY ADEQUATELY ADDRESSED — do not recommend a new priority or quick win for these: ${strong.join(", ") || "none yet"}
+- REMAINING HIGH-IMPACT GAPS — prioritize these first: ${weak.join(", ") || "none identified"}
+- Remediation actions the client has ALREADY completed — do not list any of these again as a priority or quick win: ${done.join(", ") || "none yet"}
+- Compliance: ${nonNistFrameworkSummary(assessment)}
+
+Re-rank the remaining priorities and quick wins around what's ACTUALLY still open. Never include an item that duplicates something marked already-addressed or already-completed above.`;
+}
+
+function buildPoliciesContext(program, assessment, posture) {
+  return `COMPUTED CURRENT STATE (authoritative):
+- Current posture: ${posture.postureScore}/100 (${posture.postureLevel})
+
+The business profile above may have changed since these policies were first written (headcount, industry, data types, tech stack) — refresh the policy language to match the CURRENT profile exactly. Do not reference frameworks or percentages not given here.`;
+}
+
+function buildWorkflowsContext(program, assessment, posture) {
+  const done = completedTaskTitles(program);
+  return `COMPUTED CURRENT STATE (authoritative):
+- Weakest posture areas right now: ${posture.weakestAreas.join(", ")}
+- Controls already in place — reflect this instead of assuming they're missing: ${done.join(", ") || "none recorded yet"}
+
+Focus escalation/response detail on the business's CURRENT weakest areas.`;
+}
+
+function buildToolsContext(program, assessment, posture) {
+  const strong = posture.functions.flatMap(f => f.factors).filter(f => f.score >= 70).map(f => f.label);
+  return `COMPUTED CURRENT STATE (authoritative):
+- Weakest posture areas right now: ${posture.weakestAreas.join(", ")}
+- ALREADY ADEQUATELY ADDRESSED — do not recommend urgent tooling for these: ${strong.join(", ") || "none yet"}
+
+Match cost/urgency framing to the CURRENT weakest areas, not the original assessment's.`;
+}
+
+function buildTrainingContext(program, assessment, posture, data) {
+  const pct = data?.training?.completionPct;
+  return `COMPUTED CURRENT STATE (authoritative — do not claim a different completion percentage than given):
+- Current team training completion: ${pct != null ? pct + "%" : "not yet tracked"}
+- Weakest posture areas right now: ${posture.weakestAreas.join(", ")}
+
+Keep modules focused on the business's CURRENT weakest areas.`;
+}
+
+function buildThreatIntelContext(program, assessment, posture) {
+  return `COMPUTED CURRENT STATE (authoritative):
+- Weakest posture areas right now: ${posture.weakestAreas.join(", ")}
+
+Never invent CVE IDs, breach statistics, or percentages — those come from the live NVD/HIBP-backed cards shown elsewhere on this page, not from you.`;
+}
+
+const REGENERATABLE_SECTIONS = {
+  priorities:  { capability: "buildPrograms",   steps: ["priorities"],                  buildContext: buildPrioritiesContext,  label: "Prioritized Roadmap" },
+  policies:    { capability: "createPolicies",  steps: ["policiesCore", "policiesOps"], buildContext: buildPoliciesContext,    label: "Security Policies" },
+  workflows:   { capability: "workflowsAccess", steps: ["workflows"],                   buildContext: buildWorkflowsContext,   label: "Incident Response Workflows" },
+  tools:       { capability: "buildPrograms",   steps: ["tools"],                       buildContext: buildToolsContext,       label: "Recommended Tool Stack" },
+  training:    { capability: "trainingPlan",    steps: ["training"],                    buildContext: buildTrainingContext,    label: "Training Preview" },
+  threatIntel: { capability: "threatIntel",     steps: ["threatIntel"],                 buildContext: buildThreatIntelContext, label: "Threat Landscape" },
+};
+
+// Generic single-step-or-multi-step regenerate for everything in
+// REGENERATABLE_SECTIONS above (riskOverview and execReport are bespoke).
+async function regenerateProgramSection(program, sectionKey) {
+  const cfg = REGENERATABLE_SECTIONS[sectionKey];
+  if (!cfg) throw Object.assign(new Error("Unknown section."), { status: 400 });
+
+  const assessment = db.data.assessments.find(a => a.id === program.assessmentId);
+  if (!assessment) {
+    throw Object.assign(new Error("This program's original assessment no longer exists."), { status: 400 });
+  }
+  const posture = computePostureScore(assessment.data);
+  const data = gatherReportData(db, program.userId); // client-wide task/training counts only
+  const ctx = JSON.stringify(assessment.data);
+  const authoritative = cfg.buildContext(program, assessment, posture, data);
+
+  const result = {};
+  for (const stepKey of cfg.steps) {
+    const step = PIPELINE.find(s => s.key === stepKey);
+    const system = `${step.system}\n\n${authoritative}`;
+    const userContent = `Business context:\n${ctx}\n\nGenerate the "${stepKey}" section reflecting the current state above. Return ONLY valid JSON matching the schema in your instructions.`;
+    let parsed, provider;
+    try {
+      const r = await genForStep(stepKey, { system, messages: [{ role: "user", content: userContent }], max_tokens: step.maxTokens });
+      parsed = extractJson(r.text); provider = r.provider;
+    } catch (firstErr) {
+      console.warn(`regenerate-section "${stepKey}" first attempt failed (${firstErr.message}); retrying…`);
+      const r = await genForStep(stepKey, {
+        system,
+        messages: [{ role: "user", content: userContent + " Return strictly valid, minified JSON — no trailing commas, no text before or after." }],
+        max_tokens: step.maxTokens,
+      });
+      parsed = extractJson(r.text); provider = r.provider;
+    }
+    program.sections[stepKey] = { ...parsed, generatedBy: provider, generatedAt: new Date().toISOString() };
+    applyShapeGuard(program, stepKey);
+    result[stepKey] = program.sections[stepKey];
+    // Persist after each step, not just once at the end — a multi-step
+    // section (e.g. "policies" -> policiesCore + policiesOps) must not lose
+    // an already-succeeded step's AI spend/output if a later step then fails.
+    await db.write();
+  }
+  return result;
+}
+
+// Client self-serve: regenerate one non-exec-report program section.
+app.post("/api/programs/:id/regenerate-section/:key", requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const key = req.params.key;
+    const program = db.data.programs.find(p => p.id === req.params.id && p.userId === req.userId);
+    if (!program) return res.status(404).json({ error: "Program not found" });
+    if (program.status !== "complete") {
+      return res.status(400).json({ error: "This program hasn't finished generating yet." });
+    }
+
+    if (key === "riskOverview") {
+      if (!hasCapability(gate.tierOf(req.userId), "buildPrograms")) {
+        return res.status(402).json({
+          error: `Your current plan doesn't include this feature.`,
+          code: "UPGRADE_REQUIRED", capability: "buildPrograms", currentTier: gate.tierOf(req.userId),
+        });
+      }
+      const riskOverview = await regenerateRiskOverviewSection(program);
+      logClientAction(db, {
+        clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+        action: "regenerated_program_section", detail: "Regenerated the Security Program Overview.",
+      });
+      await db.write();
+      return res.json({ sections: { riskOverview } });
+    }
+
+    const cfg = REGENERATABLE_SECTIONS[key];
+    if (!cfg) return res.status(400).json({ error: "Unknown section." });
+    if (!hasCapability(gate.tierOf(req.userId), cfg.capability)) {
+      return res.status(402).json({
+        error: `Your current plan doesn't include this feature.`,
+        code: "UPGRADE_REQUIRED", capability: cfg.capability, currentTier: gate.tierOf(req.userId),
+      });
+    }
+    const sections = await regenerateProgramSection(program, key);
+    logClientAction(db, {
+      clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+      action: "regenerated_program_section", detail: `Regenerated ${cfg.label}.`,
+    });
+    await db.write();
+    res.json({ sections });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || "Could not regenerate this section." });
+  }
+});
+
+// Staff-on-behalf-of-client variant, mirroring the exec-report staff route.
+app.post("/api/staff/clients/:cid/programs/:id/regenerate-section/:key", requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const auth = authorizeStaffForClient(db, req, req.params.cid, analystOwnsClient);
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    const client = auth.client;
+    const key = req.params.key;
+
+    const program = db.data.programs.find(p => p.id === req.params.id && p.userId === client.id);
+    if (!program) return res.status(404).json({ error: "Program not found for this client." });
+    if (program.status !== "complete") {
+      return res.status(400).json({ error: "This program hasn't finished generating yet." });
+    }
+
+    if (key === "riskOverview") {
+      const clientTier = gate.tierOf(client.id);
+      if (!hasCapability(clientTier, "buildPrograms")) {
+        return res.status(402).json({
+          error: `This client's plan (${getTier(clientTier).name}) doesn't include program generation.`,
+          code: "UPGRADE_REQUIRED", capability: "buildPrograms", currentTier: clientTier,
+        });
+      }
+      const riskOverview = await regenerateRiskOverviewSection(program);
+      logClientAction(db, {
+        clientUserId: client.id, actorUserId: req.userId, actorRole: req.isAdmin ? "admin" : "analyst",
+        action: "regenerated_program_section", detail: "Regenerated the Security Program Overview on behalf of client.",
+      });
+      await db.write();
+      return res.json({ sections: { riskOverview } });
+    }
+
+    const cfg = REGENERATABLE_SECTIONS[key];
+    if (!cfg) return res.status(400).json({ error: "Unknown section." });
+    const clientTier = gate.tierOf(client.id);
+    if (!hasCapability(clientTier, cfg.capability)) {
+      return res.status(402).json({
+        error: `This client's plan (${getTier(clientTier).name}) doesn't include this feature.`,
+        code: "UPGRADE_REQUIRED", capability: cfg.capability, currentTier: clientTier,
+      });
+    }
+    const sections = await regenerateProgramSection(program, key);
+    logClientAction(db, {
+      clientUserId: client.id, actorUserId: req.userId, actorRole: req.isAdmin ? "admin" : "analyst",
+      action: "regenerated_program_section", detail: `Regenerated ${cfg.label} on behalf of client.`,
+    });
+    await db.write();
+    res.json({ sections });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || "Could not regenerate this section." });
+  }
+});
+
+// Zero-AI-cost, always-fresh posture numbers for the Overview tab — computed
+// directly from this program's own assessment on every call, never cached.
+app.get("/api/programs/:id/live-posture", requireAuth, (req, res) => {
+  const program = db.data.programs.find(p => p.id === req.params.id && p.userId === req.userId);
+  if (!program) return res.status(404).json({ error: "Program not found" });
+  const assessment = db.data.assessments.find(a => a.id === program.assessmentId);
+  if (!assessment) return res.status(404).json({ error: "This program's assessment no longer exists." });
+  const posture = computePostureScore(assessment.data);
+  res.json({
+    postureScore: posture.postureScore, postureLevel: posture.postureLevel,
+    breakdown: {
+      methodology: posture.methodology, functions: posture.functions, weakestAreas: posture.weakestAreas,
+      complianceNote: posture.complianceNote, frameworkLens: posture.frameworkLens || "NIST CSF",
+      lens: posture.lens || "nist", alternateView: posture.alternateView || null,
+    },
+  });
+});
+
 // Client self-serve: regenerate just the executive report, not the whole
 // 10-step program. Gated the same way as /api/programs/generate, minus the
 // programs-count limit (this doesn't create a new program).
@@ -2116,7 +2456,7 @@ registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClien
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter, gate });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
-registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson });
+registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson, emailSendLimiter });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate, emailSendLimiter });
 registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter });

@@ -1357,6 +1357,64 @@ async function regenerateExecReport(programId) {
   return execReport;
 }
 
+// Regenerate one of the other frozen program sections (Overview, Priorities,
+// Policies, Workflows, Tools, Training preview, Threat Landscape) against
+// current live data — same idea as regenerateExecReport above.
+async function regenerateProgramSection(programId, key) {
+  const res = await authFetch(`${API_BASE}/api/programs/${programId}/regenerate-section/${key}`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to regenerate: ${res.status}`);
+  }
+  const { sections } = await res.json();
+  return sections;
+}
+
+function useRegenerateSection(programId, sectionKey, onDone) {
+  const [regenerating, setRegenerating] = useState(false);
+  const [error, setError] = useState(null);
+  async function run() {
+    setRegenerating(true); setError(null);
+    try {
+      const sections = await regenerateProgramSection(programId, sectionKey);
+      onDone?.(sections);
+    } catch (e) {
+      setError(e.message || "Could not regenerate.");
+    } finally {
+      setRegenerating(false);
+    }
+  }
+  return { regenerating, error, run };
+}
+
+// Shared "🔄 Regenerate" button for the 6 non-exec-report frozen sections,
+// styled like ExecReportSection's regenerate button (that component is left
+// untouched — already shipped/tested separately). Wrapped in a relatively-
+// positioned span so its error banner drops below via absolute positioning —
+// safe to drop into any header layout (flex row, grid, etc.) without
+// disturbing sibling elements.
+function RegenerateSectionButton({ programId, sectionKey, onRegenerated, label = "🔄 Regenerate" }) {
+  const { regenerating, error, run } = useRegenerateSection(programId, sectionKey, onRegenerated);
+  if (!programId) return null; // hidden for Free tier's synthetic (no-program) results
+  return (
+    <span style={{position:"relative",display:"inline-block"}}>
+      <button onClick={run} disabled={regenerating}
+        style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${C.border}`,
+          background:C.surface,color:regenerating?C.textMut:C.text,fontSize:11,fontWeight:600,
+          cursor:regenerating?"not-allowed":"pointer"}}>
+        {regenerating ? "Regenerating…" : label}
+      </button>
+      {error && (
+        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:5,width:260,
+          padding:"8px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,borderRadius:8,
+          color:C.redText,fontSize:12}}>
+          {error}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 //  ANALYSIS PROGRESS SCREEN  (backend-powered)
 // ─────────────────────────────────────────────────────────────
@@ -1487,11 +1545,10 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
 //  DASHBOARD SECTIONS
 // ─────────────────────────────────────────────────────────────
 
-function OverviewSection({ assessment, results }) {
+function OverviewSection({ assessment, results, programId, onRegenerated }) {
   const risk = results?.riskOverview;
   const quickWins = results?.priorities?.quickWins || [];
   const exec = results?.execReport?.executiveReport;
-  const breakdown = risk?.breakdown;
 
   // Live, independently-loaded data that used to live only on the separate
   // "My Console" screen (CompanyConsole) — merged in here so there's one
@@ -1503,6 +1560,12 @@ function OverviewSection({ assessment, results }) {
   const [training, setTraining] = useState(null);
   const [notifications, setNotifications] = useState(null);
   const [compliance, setCompliance] = useState(null);
+  // Posture score/level/breakdown are 100% deterministic (computePostureScore),
+  // so they're fetched fresh on every load rather than relying on the frozen
+  // pipeline-time snapshot in results.riskOverview — no AI cost, no button
+  // needed, always current. Falls back to the frozen value only if this
+  // fetch fails or the client has no program yet (programId is null).
+  const [livePosture, setLivePosture] = useState(null);
   useEffect(() => {
     authFetch(`${API_BASE}/api/client/posture-history`)
       .then(r => r.ok ? r.json() : null).then(setHistory).catch(() => setHistory(null));
@@ -1513,6 +1576,17 @@ function OverviewSection({ assessment, results }) {
     authFetch(`${API_BASE}/api/compliance/overview`)
       .then(r => r.ok ? r.json() : null).then(setCompliance).catch(() => setCompliance(null));
   }, []);
+  // Separate effect keyed on programId (which starts null and is set
+  // asynchronously) so it doesn't re-trigger the four fetches above.
+  useEffect(() => {
+    if (!programId) { setLivePosture(null); return; }
+    authFetch(`${API_BASE}/api/programs/${programId}/live-posture`)
+      .then(r => r.ok ? r.json() : null).then(setLivePosture).catch(() => setLivePosture(null));
+  }, [programId]);
+
+  const postureScore = livePosture?.postureScore ?? risk?.postureScore;
+  const postureLevel = livePosture?.postureLevel ?? risk?.postureLevel;
+  const breakdown = livePosture?.breakdown ?? risk?.breakdown;
   // Real trend points only — no fallback series is generated: fewer than 2
   // points means there's no trend to draw yet, and the panel says so.
   const trendPoints = (history?.points || []).map(p => p.score).filter(v => typeof v === "number");
@@ -1529,7 +1603,7 @@ function OverviewSection({ assessment, results }) {
       <SectionLabel text="Security Program Overview"/>
       <div className="sui-ov-grid" style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,marginBottom:16}}>
         <Card style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-          <PostureGauge score={risk?.postureScore||0} level={risk?.postureLevel||"Unknown"}/>
+          <PostureGauge score={postureScore||0} level={postureLevel||"Unknown"}/>
           <div style={{marginTop:6,display:"flex",alignItems:"center",color:C.textMut,fontSize:11}}>
             What is this?
             <InfoTip>
@@ -1540,7 +1614,13 @@ function OverviewSection({ assessment, results }) {
           </div>
         </Card>
         <Card>
-          <SectionLabel text="Executive Summary"/>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
+            <SectionLabel text="Executive Summary"/>
+            <div style={{marginLeft:"auto"}}>
+              <RegenerateSectionButton programId={programId} sectionKey="riskOverview"
+                label="🔄 Refresh Summary" onRegenerated={onRegenerated}/>
+            </div>
+          </div>
           <p style={{color:C.textSec,fontSize:14,lineHeight:1.75,margin:"0 0 14px"}}>
             {safeText(risk?.executiveSummary) || safeText(exec?.headline)}
           </p>
@@ -1788,15 +1868,16 @@ function OverviewSection({ assessment, results }) {
       <div style={{marginTop:18,padding:"11px 16px",background:`${C.accent}0A`,
         border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
         <span style={{color:C.textSec,fontSize:11}}>
-          Every figure on this page reflects your real data — posture score, trend, compliance,
-          training, and analyst activity. Where something hasn't been set up or scored yet, it says
-          so instead of showing a placeholder number.
+          Your posture score, trend, breakdown, compliance, training, and analyst activity are always
+          current. Use "Refresh Summary" above to update the written summary and top threats to match, or
+          "Refresh Roadmap" on the Priorities tab to update quick wins. Where something hasn't been set up
+          or scored yet, it says so instead of showing a placeholder number.
         </span>
       </div>
     </div>
   );
 }
-function PrioritiesSection({ results }) {
+function PrioritiesSection({ results, programId, onRegenerated }) {
   const items = results?.priorities?.priorities || [];
   const [filter, setFilter] = useState("All");
   const categories = ["All","Identity","Network","Data","Endpoint","Compliance","Awareness","AppSec"];
@@ -1804,7 +1885,13 @@ function PrioritiesSection({ results }) {
 
   return (
     <div>
-      <SectionLabel text="Prioritized Security Roadmap"/>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
+        <SectionLabel text="Prioritized Security Roadmap"/>
+        <div style={{marginLeft:"auto"}}>
+          <RegenerateSectionButton programId={programId} sectionKey="priorities"
+            label="🔄 Refresh Roadmap" onRegenerated={onRegenerated}/>
+        </div>
+      </div>
       <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
         {categories.map(c=>(
           <button key={c} onClick={()=>setFilter(c)}
@@ -1845,7 +1932,7 @@ function PrioritiesSection({ results }) {
     </div>
   );
 }
-function PoliciesSection({ results }) {
+function PoliciesSection({ results, programId, onRegenerated }) {
   // Combine policies from both pipeline steps
   const items = [
     ...(results?.policiesCore?.policies || []),
@@ -1854,7 +1941,13 @@ function PoliciesSection({ results }) {
   const [expanded, setExpanded] = useState(null);
   return (
     <div>
-      <SectionLabel text="Security Policies — Click to Expand"/>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
+        <SectionLabel text="Security Policies — Click to Expand"/>
+        <div style={{marginLeft:"auto"}}>
+          <RegenerateSectionButton programId={programId} sectionKey="policies"
+            label="🔄 Refresh Policies" onRegenerated={onRegenerated}/>
+        </div>
+      </div>
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {items.map((p,i)=>(
           <Card key={p.id||i} style={{cursor:"pointer",padding:"14px 18px"}}
@@ -1908,14 +2001,25 @@ function PoliciesSection({ results }) {
     </div>
   );
 }
-function WorkflowsSection({ results }) {
+function WorkflowsSection({ results, programId, onRegenerated }) {
   const items = results?.workflows?.workflows || [];
   const [active, setActive] = useState(0);
-  if (!items.length) return <div style={{color:C.textSec,padding:20}}>No workflows generated.</div>;
+  const header = (
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+      <SectionLabel text="Incident Response Workflows"/>
+      <div style={{marginLeft:"auto"}}>
+        <RegenerateSectionButton programId={programId} sectionKey="workflows"
+          label="🔄 Regenerate" onRegenerated={onRegenerated}/>
+      </div>
+    </div>
+  );
+  if (!items.length) return <div>{header}<div style={{color:C.textSec,padding:20}}>No workflows generated.</div></div>;
   const w = items[active];
 
   return (
-    <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:16,alignItems:"start"}}>
+    <div>
+      {header}
+      <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:16,alignItems:"start"}}>
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
         {items.map((wf,i)=>(
           <button key={i} onClick={()=>setActive(i)}
@@ -1986,6 +2090,7 @@ function WorkflowsSection({ results }) {
           </div>
         )}
       </Card>
+    </div>
     </div>
   );
 }
@@ -4326,6 +4431,19 @@ function TrainingProgramSection() {
     catch { flash("Copy failed — link: " + url, C.amberText); }
   }
 
+  // Summarizes an emailResults[] array (from assignment/quarter create or a
+  // remind call) into a human-readable suffix for a flash message.
+  function emailSummary(emailResults) {
+    if (!emailResults || !emailResults.length) {
+      // Backend sends an empty array when email isn't configured server-side.
+      return " Email isn't configured on this server yet — share their links manually.";
+    }
+    const sent = emailResults.filter(r => r.emailed).length;
+    if (sent === emailResults.length) return ` ${sent} email${sent===1?"":"s"} sent.`;
+    if (sent === 0) return ` Email failed to send — share the link${emailResults.length===1?"":"s"} manually.`;
+    return ` ${sent} of ${emailResults.length} emails sent.`;
+  }
+
   async function submitAssign() {
     if (!pickLearners.length || !pickTopics.length) { setError("Pick at least one learner and one topic."); return; }
     setBusy(true); setError(null);
@@ -4336,7 +4454,7 @@ function TrainingProgramSection() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Assign failed.");
-      flash(`Assigned to ${d.created} learner(s).`);
+      flash(`Assigned to ${d.created} learner(s).${emailSummary(d.emailResults)}`);
       setPickLearners([]); setPickTopics([]); setAssignDue("");
       await loadAll();
       setTab("overview");
@@ -4353,7 +4471,7 @@ function TrainingProgramSection() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not schedule.");
-      flash(`Scheduled "${d.quarter.label}" for ${d.assigned} learner(s).`);
+      flash(`Scheduled "${d.quarter.label}" for ${d.assigned} learner(s).${emailSummary(d.emailResults)}`);
       setQForm(f => ({ ...f, topicIds: [], label: "" }));
       await loadAll();
     } catch (e) { setError(e.message); }
@@ -4364,8 +4482,11 @@ function TrainingProgramSection() {
     setBusy(true);
     try {
       const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}/remind`, { method: "POST", body: "{}" });
-      if (!res.ok) throw new Error((await res.json()).error || "Reminder failed.");
-      flash("Reminder logged.");
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Reminder failed.");
+      if (d.emailed) flash("Reminder emailed to the learner.");
+      else if (d.sendError) flash(`Reminder saved, but the email failed to send: ${d.sendError}`, C.amberText);
+      else flash("Reminder saved — email isn't configured on this server yet; share the link manually.", C.amberText);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
@@ -5384,7 +5505,7 @@ function EmailSecurityCard() {
   );
 }
 
-function ThreatIntelSection({ results }) {
+function ThreatIntelSection({ results, programId, onRegenerated }) {
   const tl = results?.threatIntel?.threatLandscape;
   // generatedBy lives on the outer threatIntel object (the AI's raw JSON
   // response, tagged server-side with the real provider), one level above tl.
@@ -5437,7 +5558,12 @@ function ThreatIntelSection({ results }) {
       <DarkWebExposureCard key={domainVersion}/>
       <div style={{marginBottom:14}}>
         <Card>
-          <SectionLabel text="Industry Threat Landscape"/>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <SectionLabel text="Industry Threat Landscape"/>
+            <div style={{marginLeft:"auto"}}>
+              <RegenerateSectionButton programId={programId} sectionKey="threatIntel" onRegenerated={onRegenerated}/>
+            </div>
+          </div>
           <div style={{fontSize:11,color:C.textMut,margin:"2px 0 12px"}}>
             AI-generated briefing — context, not live detection.
           </div>
@@ -5459,7 +5585,7 @@ function ThreatIntelSection({ results }) {
     </div>
   );
 }
-function ToolsSection({ results }) {
+function ToolsSection({ results, programId, onRegenerated }) {
   const tools = results?.tools?.toolStack || [];
   const categories = [...new Set(tools.map(t=>t.category))];
   const genBy = results?.tools?.generatedBy;
@@ -5468,7 +5594,10 @@ function ToolsSection({ results }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Recommended Security Tool Stack"/>
-        <div style={{marginLeft:"auto"}}><AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/></div>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          <RegenerateSectionButton programId={programId} sectionKey="tools" onRegenerated={onRegenerated}/>
+          <AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/>
+        </div>
       </div>
       {categories.map(cat=>(
         <div key={cat} style={{marginBottom:18}}>
@@ -5667,7 +5796,7 @@ function PhishingTrialCard() {
   );
 }
 
-function TrainingSection({ results, assessment, canGenerateFull = true }) {
+function TrainingSection({ results, assessment, canGenerateFull = true, programId, onRegenerated }) {
   const [activeModule, setActiveModule] = useState(0);
   const prog = results?.training?.trainingProgram;
 
@@ -5845,7 +5974,10 @@ function TrainingSection({ results, assessment, canGenerateFull = true }) {
         <div>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,marginTop:8}}>
             <SectionLabel text="Quick Preview (from your assessment)"/>
-            <div style={{marginLeft:"auto"}}><AIChip model={prog.generatedBy === "openai" ? "gpt4" : (prog.generatedBy || "claude")}/></div>
+            <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+              <RegenerateSectionButton programId={programId} sectionKey="training" onRegenerated={onRegenerated}/>
+              <AIChip model={prog.generatedBy === "openai" ? "gpt4" : (prog.generatedBy || "claude")}/>
+            </div>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"220px 1fr",gap:14}}>
             <div>
@@ -8344,7 +8476,7 @@ function PolicyLibrarySection({ assessment }) {
 //  (WorkflowsSection, ComplianceSection, ToolsSection, TrainingSection,
 //   ExecReportSection are UNCHANGED — keep your existing versions of those)
 // ─────────────────────────────────────────────────────────────
-function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, onExecReportRegenerated }) {
+function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, onExecReportRegenerated, onSectionsRegenerated }) {
   const [section, setSection] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { can, tier } = useCapabilities();
@@ -8474,13 +8606,13 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   };
 
   const sectionMap = {
-    overview:   <OverviewSection assessment={assessment} results={results}/>,
+    overview:   <OverviewSection assessment={assessment} results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     // Not gated on buildPrograms: Free tier now gets a deterministic
     // equivalent (see generateFreePreview/riskEngine.js), so this renders
     // whenever the data exists, on any tier.
-    priorities: results?.priorities?.priorities?.length ? <PrioritiesSection results={results}/> : lockedSections.priorities,
-    policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results}/>,
-    workflows:  !hasWorkflows ? lockedSections.workflows : <WorkflowsSection results={results}/>,
+    priorities: results?.priorities?.priorities?.length ? <PrioritiesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/> : lockedSections.priorities,
+    policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
+    workflows:  !hasWorkflows ? lockedSections.workflows : <WorkflowsSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     // The live compliance engine, not the AI's prose. ComplianceSection rendered
     // `results.compliance.frameworks` — text generated during program creation —
     // while 624 computed, cited controls sat unused on the server. This reads
@@ -8496,9 +8628,9 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
     calendar:    !hasCalendar ? lockedSections.calendar : <ComplianceCalendarSection onNavigate={setSection}/>,
     vciso:       <VirtualCISOSection/>,
-    threats:    !hasThreatIntel ? lockedSections.threats : <ThreatIntelSection results={results}/>,
-    tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results}/>,
-    training:   !hasTrainingView ? lockedSections.training : <TrainingSection results={results} assessment={assessment} canGenerateFull={hasTrainingFull}/>,
+    threats:    !hasThreatIntel ? lockedSections.threats : <ThreatIntelSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
+    tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
+    training:   !hasTrainingView ? lockedSections.training : <TrainingSection results={results} assessment={assessment} canGenerateFull={hasTrainingFull} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     trainingmgr: !hasTrainingFull ? lockedSections.trainingmgr : <TrainingProgramSection/>,
     // Same reasoning as `priorities` above — data-presence gated, not tier-gated.
     report:     results?.execReport?.executiveReport ? <ExecReportSection assessment={assessment} results={results} programId={programId} onRegenerated={onExecReportRegenerated}/> : lockedSections.report,
@@ -15809,8 +15941,11 @@ function ClientTrainingPanel({ clientId }) {
   const [showAssign, setShowAssign] = useState(false);
   const [pickLearners, setPickLearners] = useState([]);
   const [pickTopics, setPickTopics] = useState([]);
+  const [toast, setToast] = useState(null);
 
   const q = `?clientId=${encodeURIComponent(clientId)}`;
+
+  function flash(msg, tone = SOC.green) { setToast({ msg, tone }); setTimeout(() => setToast(null), 3200); }
 
   async function loadAll() {
     setLoading(true); setError(null);
@@ -15838,7 +15973,12 @@ function ClientTrainingPanel({ clientId }) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId, learnerIds: pickLearners, topicIds: pickTopics }),
       });
-      if (!res.ok) throw new Error((await res.json()).error || "Assign failed.");
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Assign failed.");
+      const sent = (d.emailResults || []).filter(r => r.emailed).length;
+      flash(d.emailResults?.length
+        ? `Assigned to ${d.created} learner(s) — ${sent} of ${d.emailResults.length} email(s) sent.`
+        : `Assigned to ${d.created} learner(s). Email isn't configured — share their links manually.`);
       setShowAssign(false); setPickLearners([]); setPickTopics([]);
       await loadAll();
     } catch (e) { setError(e.message); }
@@ -15852,7 +15992,11 @@ function ClientTrainingPanel({ clientId }) {
         const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}/remind`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId }),
         });
-        if (!res.ok) throw new Error((await res.json()).error || "Failed.");
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "Failed.");
+        if (d.emailed) flash("Reminder emailed to the learner.");
+        else if (d.sendError) flash(`Reminder saved, but the email failed to send: ${d.sendError}`, SOC.amber);
+        else flash("Reminder saved — email isn't configured on this server yet; share the link manually.", SOC.amber);
       } else if (kind === "waive") {
         const res = await authFetch(`${API_BASE}/api/training-program/assignments/${a.id}${q}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, status: "waived" }),
@@ -15877,6 +16021,12 @@ function ClientTrainingPanel({ clientId }) {
             fontWeight:700,padding:"4px 10px",borderRadius:6,cursor:"pointer"}}>
           {showAssign ? "Close" : "+ Assign"}
         </button>}>
+      {toast && (
+        <div style={{marginBottom:10,padding:"7px 10px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:7,color:toast.tone,fontSize:12,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
       {error && <div style={{marginBottom:10,padding:"7px 10px",background:`${SOC.red}15`,
         border:`1px solid ${SOC.red}33`,borderRadius:7,color:SOC.red,fontSize:12}}>{error}</div>}
 
@@ -22843,7 +22993,8 @@ export default function ShieldAI() {
         <div style={{flex:1,overflow:"hidden"}}>
           <Dashboard assessment={assessment} results={results} onReset={reset} onOpenMastermind={openMastermind}
             programId={currentProgramId}
-            onExecReportRegenerated={execReport => setResults(r => ({ ...r, execReport }))}/>
+            onExecReportRegenerated={execReport => setResults(r => ({ ...r, execReport }))}
+            onSectionsRegenerated={sections => setResults(r => ({ ...r, ...sections }))}/>
         </div>
       </div>
       </CapabilityContext.Provider>
