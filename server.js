@@ -87,7 +87,8 @@ import { registerVendorRoutes } from "./vendorRoutes.js";
 // Clients self-serve status/update; staff produce compliance/insurance/legal
 // and deliver them to the client. No new dependencies — same .doc export
 // pattern already used for policies and training curricula.
-import { registerReportRoutes } from "./reportRoutes.js";
+import { registerReportRoutes, gatherReportData, checklistOf, optsFor } from "./reportRoutes.js";
+import { evaluateAllFrameworks } from "./complianceBridge.js";
 import { buildCISPromptBlock, CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 import { POLICY_CATALOG } from "./policyCatalog.js";
 import { buildStructurePrompt } from "./policyFormats.js";
@@ -1262,7 +1263,10 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(text);
-          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
+          if (parsed && typeof parsed === "object") {
+            parsed.generatedBy = provider;
+            if (step.key === "execReport") parsed.generatedAt = new Date().toISOString();
+          }
         } catch (firstErr) {
           console.warn(`Step "${step.key}" first attempt failed (${firstErr.message}); retrying…`);
           const { text: retryText, provider } = await genForStep(step.key, {
@@ -1274,7 +1278,10 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             max_tokens: step.maxTokens,
           });
           parsed = extractJson(retryText);
-          if (parsed && typeof parsed === "object") parsed.generatedBy = provider;
+          if (parsed && typeof parsed === "object") {
+            parsed.generatedBy = provider;
+            if (step.key === "execReport") parsed.generatedAt = new Date().toISOString();
+          }
         }
         program.sections[step.key] = parsed;
         applyShapeGuard(program, step.key);
@@ -1307,6 +1314,173 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
   await db.write();
   progressStore[programId] = { step: PIPELINE.length, total: PIPELINE.length, label: "Complete", status: "complete" };
 }
+
+// ─────────────────────────────────────────────────────────────
+//  On-demand Executive CISO Report regeneration (single pipeline step).
+//  Reruns ONLY the "execReport" step against the client's CURRENT live
+//  posture/compliance/task/training data — via gatherReportData(), the
+//  same "single source of truth" reportRoutes.js's other reports use —
+//  instead of the frozen assessment snapshot from original program
+//  generation. Synchronous: one AI call, no progressStore/polling needed.
+// ─────────────────────────────────────────────────────────────
+async function regenerateExecReportSection(program) {
+  // Client-wide live activity (tasks/evidence/training/etc.) isn't tied to a
+  // specific assessment, so gatherReportData's "single source of truth" is
+  // safe to reuse as-is for those fields.
+  const data = gatherReportData(db, program.userId);
+  if (!data || !data.hasAssessment) {
+    throw Object.assign(new Error("No assessment found for this client."), { status: 400 });
+  }
+
+  // Posture score/compliance % and business context must come from the SAME
+  // assessment: THIS program's own (program.assessmentId), not whichever
+  // assessment is most recent for the client. gatherReportData() picks the
+  // client's latest assessment, which is usually the same one — but a client
+  // can have multiple assessments/programs at once (the "keep old program"
+  // choice on Save & Regenerate), so a stale/old program's report must not
+  // silently pick up a newer, unrelated assessment's numbers.
+  const assessment = db.data.assessments.find(a => a.id === program.assessmentId);
+  if (!assessment) {
+    throw Object.assign(new Error("This program's original assessment no longer exists."), { status: 400 });
+  }
+  const ctx = JSON.stringify(assessment.data);
+  const posture = computePostureScore(assessment.data);
+  const frameworks = evaluateAllFrameworks(checklistOf(assessment), optsFor(assessment));
+
+  const after = posture.postureScore;
+  const levelAfter = posture.postureLevel;
+
+  // "Before" = the score captured on THIS program's own riskOverview step at
+  // original generation. Chosen over postureHistory/postureSnapshots because
+  // it's already guaranteed present on every program that finished the
+  // pipeline and needs no cross-collection merge (postureHistory vs
+  // postureSnapshots is a known pre-existing fragmentation — out of scope to
+  // unify here). Falls back to the client's EARLIEST postureSnapshots entry
+  // if this program's riskOverview is somehow missing, and to `null` (no
+  // baseline — badge hidden client-side) only if neither exists.
+  const ro = program.sections?.riskOverview;
+  let before = null, levelBefore = null, beforeSource = null;
+  if (ro && typeof ro.postureScore === "number") {
+    before = ro.postureScore; levelBefore = ro.postureLevel || null; beforeSource = "program";
+  } else {
+    const snaps = (db.data.postureSnapshots || [])
+      .filter(s => s.userId === program.userId)
+      .sort((a, b) => new Date(a.at) - new Date(b.at));
+    if (snaps[0]) { before = snaps[0].score; levelBefore = snaps[0].level || null; beforeSource = "snapshot"; }
+  }
+  const improvementDelta = before == null ? null : {
+    before, after, delta: after - before, levelBefore, levelAfter, beforeSource,
+  };
+
+  // Only frameworks actually assessed (compliancePct present). nist-csf is
+  // deliberately presentational-only (complianceBridge.js's
+  // evaluateNistCsfPresentational) and must never surface here as a second,
+  // independently-invented percentage.
+  const assessedFrameworks = (frameworks || [])
+    .filter(f => typeof f.compliancePct === "number")
+    .slice(0, 5)
+    .map(f => `${f.name}: ${f.compliancePct}% compliant, ${f.readinessPct}% ready`)
+    .join("; ");
+
+  const authoritative = `COMPUTED CURRENT STATE (authoritative — do not change these numbers, and do not invent a separate compliance percentage for any framework not listed):
+- Current posture score: ${after}/100 (${levelAfter}) — higher is better
+- ${improvementDelta
+      ? `Improvement since this report was first generated: ${improvementDelta.before}/100 (${improvementDelta.levelBefore}) → ${after}/100 (${levelAfter}), a change of ${improvementDelta.delta >= 0 ? "+" : ""}${improvementDelta.delta} points`
+      : "No prior baseline is available — this is the first executive report for this client."}
+- Compliance: ${assessedFrameworks || "no framework has been formally assessed yet"}
+- Remediation tasks: ${data.tasks.done} completed, ${data.tasks.open} open, ${data.tasks.overdue} overdue
+- Evidence on file for completed tasks: ${data.evidence.completedTasksWithEvidence}/${data.evidence.completedTasks}
+- Security awareness training completion: ${data.training.completionPct != null ? data.training.completionPct + "%" : "not yet tracked"}`;
+
+  const execStep = PIPELINE.find(s => s.key === "execReport");
+  const system = `${execStep.system}\n\n${authoritative}\n\nWrite the executive report reflecting this REAL current state and, if a prior baseline is given above, the improvement made since then. Use the numbers given EXACTLY — never state a different posture score, compliance percentage, or task count than the ones given above.`;
+  const userContent = `Business context:\n${ctx}\n\nGenerate the "execReport" section reflecting the current state above. Return ONLY valid JSON matching the schema in your instructions.`;
+
+  let parsed, provider;
+  try {
+    const r = await genForStep("execReport", { system, messages: [{ role: "user", content: userContent }], max_tokens: execStep.maxTokens });
+    parsed = extractJson(r.text); provider = r.provider;
+  } catch (firstErr) {
+    console.warn(`regenerate-exec-report first attempt failed (${firstErr.message}); retrying…`);
+    const r = await genForStep("execReport", {
+      system,
+      messages: [{ role: "user", content: userContent + " Return strictly valid, minified JSON — no trailing commas, no text before or after." }],
+      max_tokens: execStep.maxTokens,
+    });
+    parsed = extractJson(r.text); provider = r.provider;
+  }
+
+  program.sections.execReport = {
+    ...parsed,
+    generatedBy: provider,
+    generatedAt: new Date().toISOString(),
+    improvementDelta,
+  };
+  applyShapeGuard(program, "execReport");
+  await db.write();
+  return program.sections.execReport;
+}
+
+// Client self-serve: regenerate just the executive report, not the whole
+// 10-step program. Gated the same way as /api/programs/generate, minus the
+// programs-count limit (this doesn't create a new program).
+app.post("/api/programs/:id/regenerate-exec-report", requireAuth, gate.capability("buildPrograms"), aiLimiter, async (req, res) => {
+  try {
+    const program = db.data.programs.find(p => p.id === req.params.id && p.userId === req.userId);
+    if (!program) return res.status(404).json({ error: "Program not found" });
+    if (program.status !== "complete") {
+      return res.status(400).json({ error: "This program hasn't finished generating yet." });
+    }
+
+    const execReport = await regenerateExecReportSection(program);
+    logClientAction(db, {
+      clientUserId: req.userId, actorUserId: req.userId, actorRole: "client_admin",
+      action: "regenerated_exec_report",
+      detail: `Regenerated the executive report (posture now ${execReport.improvementDelta?.after ?? "n/a"}).`,
+    });
+    await db.write();
+    res.json({ execReport });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || "Could not regenerate the executive report." });
+  }
+});
+
+// Staff-on-behalf-of-client: same single-step regenerate, authorized and
+// tier-gated against the CLIENT (not the staff user), mirroring
+// /api/staff/clients/:cid/programs/generate.
+app.post("/api/staff/clients/:cid/programs/:id/regenerate-exec-report", requireAuth, aiLimiter, async (req, res) => {
+  try {
+    const auth = authorizeStaffForClient(db, req, req.params.cid, analystOwnsClient);
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+    const client = auth.client;
+
+    const clientTier = gate.tierOf(client.id);
+    if (!hasCapability(clientTier, "buildPrograms")) {
+      return res.status(402).json({
+        error: `This client's plan (${getTier(clientTier).name}) doesn't include program generation.`,
+        code: "UPGRADE_REQUIRED", capability: "buildPrograms", currentTier: clientTier,
+      });
+    }
+
+    const program = db.data.programs.find(p => p.id === req.params.id && p.userId === client.id);
+    if (!program) return res.status(404).json({ error: "Program not found for this client." });
+    if (program.status !== "complete") {
+      return res.status(400).json({ error: "This program hasn't finished generating yet." });
+    }
+
+    const execReport = await regenerateExecReportSection(program);
+    logClientAction(db, {
+      clientUserId: client.id, actorUserId: req.userId,
+      actorRole: req.isAdmin ? "admin" : "analyst",
+      action: "regenerated_exec_report",
+      detail: `Regenerated the executive report on behalf of client.`,
+    });
+    await db.write();
+    res.json({ execReport });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || "Could not regenerate the executive report." });
+  }
+});
 
 app.get("/api/programs/:id/status", requireAuth, (req, res) => {
   const progress = progressStore[req.params.id];

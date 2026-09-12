@@ -1298,7 +1298,7 @@ async function generateFreePreview(assessmentData) {
       // and ExecReportSection render unchanged. generatedBy:"deterministic"
       // marks these as score-derived, not AI-authored — see ExecReportSection.
       priorities: { priorities: preview.priorities || [], quickWins: [], generatedBy: "deterministic" },
-      execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic" },
+      execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic", generatedAt: new Date().toISOString() },
     },
     assessmentId,
     programId: null,
@@ -1342,6 +1342,19 @@ async function regenerateProgram(assessmentId, replaceOld, onProgress) {
   if (!programRes.ok) throw new Error(`Failed to fetch program: ${programRes.status}`);
   const program = await programRes.json();
   return { sections: program.sections, assessmentId, programId };
+}
+
+// Regenerate ONLY the executive report against current live data (posture,
+// compliance %, tasks, training) — a single synchronous call, not the
+// 10-step pipeline. No polling needed.
+async function regenerateExecReport(programId) {
+  const res = await authFetch(`${API_BASE}/api/programs/${programId}/regenerate-exec-report`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to regenerate report: ${res.status}`);
+  }
+  const { execReport } = await res.json();
+  return execReport;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -6494,17 +6507,41 @@ function QuizRunner({ questions, accent }) {
   );
 }
 
-function ExecReportSection({ assessment, results }) {
+function ExecReportSection({ assessment, results, programId, onRegenerated }) {
   const rep = results?.execReport?.executiveReport;
   const risk = results?.riskOverview;
   const genBy = results?.execReport?.generatedBy;
+  const generatedAt = results?.execReport?.generatedAt;
+  const improvementDelta = results?.execReport?.improvementDelta;
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenError, setRegenError] = useState(null);
   if (!rep) return <div style={{color:C.textSec,padding:20}}>Report not generated.</div>;
+
+  async function handleRegenerate() {
+    setRegenerating(true); setRegenError(null);
+    try {
+      const execReport = await regenerateExecReport(programId);
+      onRegenerated?.(execReport);
+    } catch (e) {
+      setRegenError(e.message || "Could not regenerate the report.");
+    } finally {
+      setRegenerating(false);
+    }
+  }
 
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
         <SectionLabel text="Executive CISO Report"/>
-        <div style={{marginLeft:"auto"}}>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          {programId && genBy !== "deterministic" && (
+            <button onClick={handleRegenerate} disabled={regenerating}
+              style={{padding:"5px 12px",borderRadius:20,border:`1px solid ${C.border}`,
+                background:C.surface,color:regenerating?C.textMut:C.text,fontSize:11,fontWeight:600,
+                cursor:regenerating?"not-allowed":"pointer"}}>
+              {regenerating ? "Regenerating…" : "🔄 Regenerate Report"}
+            </button>
+          )}
           {genBy === "deterministic"
             ? <span title="Built from your computed posture score — not AI-authored"
                 style={{display:"inline-flex",alignItems:"center",gap:5,padding:"3px 10px",
@@ -6515,6 +6552,11 @@ function ExecReportSection({ assessment, results }) {
             : <AIChip model={genBy === "openai" ? "gpt4" : (genBy || "claude")}/>}
         </div>
       </div>
+      {regenError && (
+        <div style={{marginBottom:10,padding:"8px 12px",background:`${C.red}15`,border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:12}}>
+          {regenError}
+        </div>
+      )}
       <Card style={{marginBottom:14,padding:"24px"}}>
         <div style={{borderBottom:`1px solid ${C.border}`,paddingBottom:16,marginBottom:16}}>
           <div style={{color:C.textMut,fontSize:11,letterSpacing:2,marginBottom:8}}>
@@ -6522,8 +6564,20 @@ function ExecReportSection({ assessment, results }) {
           </div>
           <h2 style={{color:C.text,margin:"0 0 6px",fontSize:22}}>{safeText(rep.headline)}</h2>
           <div style={{color:C.textSec,fontSize:13}}>
-            {assessment?.company?.name||"Your Company"} · Generated {new Date().toLocaleDateString()}
+            {assessment?.company?.name||"Your Company"} · Generated{" "}
+            {generatedAt
+              ? new Date(generatedAt).toLocaleDateString()
+              : (assessment?.updatedAt || assessment?.createdAt)
+                ? new Date(assessment.updatedAt || assessment.createdAt).toLocaleDateString()
+                : "date unavailable"}
           </div>
+          {improvementDelta && (
+            <div style={{marginTop:8,fontSize:12,fontWeight:600,
+              color: improvementDelta.delta >= 0 ? C.greenText : C.redText}}>
+              {improvementDelta.delta >= 0 ? "▲" : "▼"} {improvementDelta.delta >= 0 ? "+" : ""}{improvementDelta.delta} since last report
+              ({improvementDelta.before} → {improvementDelta.after})
+            </div>
+          )}
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
           <div>
@@ -8290,7 +8344,7 @@ function PolicyLibrarySection({ assessment }) {
 //  (WorkflowsSection, ComplianceSection, ToolsSection, TrainingSection,
 //   ExecReportSection are UNCHANGED — keep your existing versions of those)
 // ─────────────────────────────────────────────────────────────
-function Dashboard({ assessment, results, onReset, onOpenMastermind }) {
+function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, onExecReportRegenerated }) {
   const [section, setSection] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { can, tier } = useCapabilities();
@@ -8447,7 +8501,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind }) {
     training:   !hasTrainingView ? lockedSections.training : <TrainingSection results={results} assessment={assessment} canGenerateFull={hasTrainingFull}/>,
     trainingmgr: !hasTrainingFull ? lockedSections.trainingmgr : <TrainingProgramSection/>,
     // Same reasoning as `priorities` above — data-presence gated, not tier-gated.
-    report:     results?.execReport?.executiveReport ? <ExecReportSection assessment={assessment} results={results}/> : lockedSections.report,
+    report:     results?.execReport?.executiveReport ? <ExecReportSection assessment={assessment} results={results} programId={programId} onRegenerated={onExecReportRegenerated}/> : lockedSections.report,
     reports:    (!hasReports && !hasCompliance) ? lockedSections.reports : <ReportsSection hasFullReports={hasReports} hasEvidenceAccess={hasEvidence}/>,
     library:    !hasPrograms ? lockedSections.library : <PolicyLibrarySection assessment={assessment}/>,
     billing:    <PlanBillingSection/>,
@@ -21993,7 +22047,7 @@ export default function ShieldAI() {
                 // match it exactly, or a page refresh loses Priorities/Exec
                 // Report and silently re-locks them.
                 priorities: { priorities: preview.priorities || [], quickWins: [], generatedBy: "deterministic" },
-                execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic" },
+                execReport: { executiveReport: preview.execSummary, generatedBy: "deterministic", generatedAt: new Date().toISOString() },
               });
               setCurrentAssessmentId(resume.assessmentId);
               setCurrentProgramId(null);
@@ -22787,7 +22841,9 @@ export default function ShieldAI() {
       <div style={{height:"100vh",display:"flex",flexDirection:"column"}}>
         <TopBar/>
         <div style={{flex:1,overflow:"hidden"}}>
-          <Dashboard assessment={assessment} results={results} onReset={reset} onOpenMastermind={openMastermind}/>
+          <Dashboard assessment={assessment} results={results} onReset={reset} onOpenMastermind={openMastermind}
+            programId={currentProgramId}
+            onExecReportRegenerated={execReport => setResults(r => ({ ...r, execReport }))}/>
         </div>
       </div>
       </CapabilityContext.Provider>

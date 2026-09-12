@@ -63,13 +63,13 @@ function latestAssessmentFor(db, userId) {
   );
 }
 
-function checklistOf(assessment) {
+export function checklistOf(assessment) {
   return (
     assessment?.data?.checklist || assessment?.data?.securityChecklist || {}
   );
 }
 
-function optsFor(assessment) {
+export function optsFor(assessment) {
   // Framework scoping answers → per-framework assess opts. Best-effort; a
   // malformed intake must never break a report, so we swallow and skip.
   const stored = assessment?.data?.frameworkIntake || {};
