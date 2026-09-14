@@ -31,6 +31,7 @@
 //    their name.
 
 import React, { useState, useEffect, useCallback } from "react";
+import { C, textSafe } from "./ui/tokens.js";
 
 // Defensive rendering guard. Every value here ultimately comes from the
 // backend — most of it deterministic (framework definitions, computed
@@ -55,13 +56,6 @@ function safeText(value, fallback = "") {
   return String(value);
 }
 
-const C = {
-  bg: "#080D18", surface: "#0D1526", card: "#101C30", cardHov: "#142035",
-  border: "#1A2D47", borderHi: "#254060", accent: "#00C8FF", accentDm: "#0090BB",
-  green: "#00E5A0", amber: "#FFB800", red: "#FF4D6A", purple: "#A855F7",
-  text: "#E2EDFF", textSec: "#7B92B2", textMut: "#2E4A6A",
-};
-
 const STATUS_COLOR = {
   compliant: C.green, partial: C.amber, gap: C.red, unknown: C.textMut,
 };
@@ -77,15 +71,18 @@ function Pill({ text, color, title }) {
     <span title={title} style={{
       display: "inline-block", padding: "2px 8px", borderRadius: 999,
       fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3,
-      background: `${color}1A`, color, border: `1px solid ${color}44`,
+      // `color` (a vivid accent/status token) is fine as a background tint and
+      // border — those just need to be visible shapes. As the TEXT color it's
+      // a saturated brand color on a pale tint of itself, which reads at
+      // ~1.5:1 contrast — essentially invisible. textSafe() swaps in the
+      // light-safe *Text variant tokens.js defines for exactly this.
+      background: `${color}1A`, color: textSafe(color), border: `1px solid ${color}44`,
     }}>{text}</span>
   );
 }
 
 // Small inline glossary tooltip for jargon terms ("control", "readiness") at
-// their first use — kept local (not imported from src/ui/) because this
-// module intentionally stays self-contained and uses its own dark palette
-// (`C` above), not the rest of the app's light theme.
+// their first use.
 function Info({ children }) {
   const [open, setOpen] = useState(false);
   return (
@@ -209,9 +206,9 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
                   }} />
                 </div>
                 <div style={{ display: "flex", gap: 14, fontSize: 11.5, color: C.textSec }}>
-                  <span style={{ color: C.green }}>{f.compliant} met</span>
-                  <span style={{ color: C.amber }}>{f.partial} partial</span>
-                  <span style={{ color: C.red }}>{f.gap} gaps</span>
+                  <span style={{ color: textSafe(C.green) }}>{f.compliant} met</span>
+                  <span style={{ color: textSafe(C.amber) }}>{f.partial} partial</span>
+                  <span style={{ color: textSafe(C.red) }}>{f.gap} gaps</span>
                   {f.unknown > 0 && <span style={{ color: C.textMut }}>{f.unknown} not assessed</span>}
                   <span style={{ marginLeft: "auto" }}>Readiness {pct(f.readinessPct)}</span>
                 </div>
@@ -252,7 +249,7 @@ function ResolutionFeedback({ f, onDismiss }) {
         position: "absolute", top: 8, right: 10, background: "none", border: "none",
         color: C.textMut, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 4,
       }}>×</button>
-      <div style={{ color: tone, fontSize: 12.5, fontWeight: 700, marginBottom: 3, paddingRight: 20 }}>
+      <div style={{ color: textSafe(tone), fontSize: 12.5, fontWeight: 700, marginBottom: 3, paddingRight: 20 }}>
         {heading} · {safeText(f.decisionLabel)}
       </div>
       <div style={{ color: C.textSec, fontSize: 11.5, marginBottom: 4 }}>{safeText(f.question)}</div>
@@ -283,7 +280,7 @@ function ResolutionFeedback({ f, onDismiss }) {
               {f.remediation.failingHosts.map((h, i) => (
                 <span key={i} style={{
                   fontSize: 10, padding: "1px 6px", borderRadius: 4,
-                  background: `${C.red}1A`, color: C.red,
+                  background: `${C.red}1A`, color: textSafe(C.red),
                 }}>{safeText(h)}</span>
               ))}
             </div>
@@ -366,7 +363,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOn
       <div style={{ marginBottom: 16 }}>
         {feedbackNode}
         <div style={{ background: `${C.green}0D`, border: `1px solid ${C.green}33`, borderRadius: 10, padding: "12px 14px" }}>
-          <div style={{ color: C.green, fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}>
+          <div style={{ color: textSafe(C.green), fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}>
             Agent and answers agree
           </div>
           <div style={{ color: C.textSec, fontSize: 11.5 }}>
@@ -381,7 +378,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOn
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <span style={{ color: C.amber, fontSize: 13.5, fontWeight: 700 }}>
+        <span style={{ color: textSafe(C.amber), fontSize: 13.5, fontWeight: 700 }}>
           {data.conflicts.length} conflict{data.conflicts.length > 1 ? "s" : ""} need your decision
         </span>
         <Pill text={`${data.reportingHosts} HOSTS REPORTING`} color={C.textSec} />
@@ -403,13 +400,13 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOn
           {/* Both sources, side by side. Rule 2. */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <div style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-              <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
+              <div style={{ fontSize: 10, color: textSafe(C.accent), fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
                 YOU SAID · DECIDES
               </div>
               <div style={{ color: C.text, fontSize: 12.5 }}>{safeText(c.yourAnswer)}</div>
             </div>
             <div style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
-              <div style={{ fontSize: 10, color: C.purple, fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
+              <div style={{ fontSize: 10, color: textSafe(C.purple), fontWeight: 700, letterSpacing: 0.6, marginBottom: 4 }}>
                 AGENT MEASURED · INFORMS
               </div>
               <div style={{ color: C.text, fontSize: 12.5 }}>{safeText(c.agentObserved.summary)}</div>
@@ -419,7 +416,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOn
                     <span key={i} style={{
                       fontSize: 10, padding: "1px 6px", borderRadius: 4,
                       background: h.status === "pass" ? `${C.green}1A` : `${C.red}1A`,
-                      color: h.status === "pass" ? C.green : C.red,
+                      color: textSafe(h.status === "pass" ? C.green : C.red),
                     }}>{safeText(h.host)}: {safeText(h.observed)}</span>
                   ))}
                 </div>
@@ -443,7 +440,7 @@ export function ConflictQueue({ authFetch, apiBase, clientId, onResolved, readOn
 
           {c.previouslyResolved && (
             <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 10 }}>
-              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, marginBottom: 2 }}>
+              <div style={{ color: textSafe(C.amber), fontSize: 11, fontWeight: 700, marginBottom: 2 }}>
                 Still open — you already decided this
               </div>
               <div style={{ color: C.text, fontSize: 11, lineHeight: 1.5 }}>
@@ -646,7 +643,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
                     textAlign: "left", padding: "7px 10px", borderRadius: 6, fontSize: 12,
                     cursor: (o.locked || readOnly) ? "default" : "pointer",
                     background: sel ? `${C.accent}1A` : C.surface,
-                    color: sel ? C.accent : C.textSec,
+                    color: sel ? textSafe(C.accent) : C.textSec,
                     border: `1px solid ${sel ? C.accent + "66" : C.border}`,
                     display: "flex", alignItems: "center", gap: 8,
                   }}>
@@ -685,7 +682,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
       {/* The payoff, made visible. */}
       {result?.scopeChange && result.scopeChange.scoped !== result.scopeChange.unscoped && (
         <div style={{ marginTop: 12, background: `${C.green}0D`, border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 12px" }}>
-          <div style={{ color: C.green, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
+          <div style={{ color: textSafe(C.green), fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
             Scope narrowed: {result.scopeChange.unscoped} → {result.scopeChange.scoped} controls
           </div>
           <div style={{ color: C.textSec, fontSize: 11, lineHeight: 1.5 }}>
@@ -724,7 +721,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
     <div>
       {onBack && (
         <button onClick={onBack} style={{
-          background: "none", border: "none", color: C.accent, cursor: "pointer",
+          background: "none", border: "none", color: textSafe(C.accent), cursor: "pointer",
           fontSize: 12, padding: 0, marginBottom: 10,
         }}>← All frameworks</button>
       )}
@@ -747,6 +744,10 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
           <FrameworkIntake authFetch={authFetch} apiBase={apiBase} frameworkId={frameworkId}
             clientId={clientId} onSaved={load} readOnly={readOnly} />
 
+          {data.detail?.modelNote && (
+            <Note>{safeText(data.detail.modelNote)}</Note>
+          )}
+
           {data.agent && data.openDecisions?.length > 0 && (
             <Note tone="amber">
               {data.openDecisions.length} of these controls have a conflict between your answers and what
@@ -762,7 +763,7 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
                   padding: "4px 10px", borderRadius: 999, fontSize: 11, cursor: "pointer",
                   border: `1px solid ${filter === f ? C.accent : C.border}`,
                   background: filter === f ? `${C.accent}1A` : "transparent",
-                  color: filter === f ? C.accent : C.textSec,
+                  color: filter === f ? textSafe(C.accent) : C.textSec,
                 }}>
                 {f === "all" ? `All ${data.summary.total}` : `${STATUS_LABEL[f]} ${data.summary[f === "compliant" ? "compliant" : f]}`}
               </button>
@@ -921,7 +922,7 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
     <div style={{ marginTop: 8 }}>
       {!openForm ? (
         <button onClick={() => setOpenForm(true)} style={{
-          background: "transparent", border: `1px solid ${C.border}`, color: C.accent,
+          background: "transparent", border: `1px solid ${C.border}`, color: textSafe(C.accent),
           fontSize: 11, fontWeight: 600, borderRadius: 6, padding: "5px 10px", cursor: "pointer",
         }}>Mark remediated</button>
       ) : (
@@ -949,7 +950,7 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
           </div>
         </div>
       )}
-      {msg && <div style={{ color: msg.tone, fontSize: 11, marginTop: 6 }}>{safeText(msg.text)}</div>}
+      {msg && <div style={{ color: textSafe(msg.tone), fontSize: 11, marginTop: 6 }}>{safeText(msg.text)}</div>}
     </div>
   );
 }
@@ -1016,14 +1017,14 @@ export function RemediationVerifyQueue({ authFetch, apiBase, clientId }) {
               opacity: (busyId === rec.id || !rec.evidenceId) ? 0.6 : 1,
             }}>Verify</button>
             <button onClick={() => act(rec, "reject")} disabled={busyId === rec.id} style={{
-              background: "transparent", border: `1px solid ${C.red}66`, color: C.red,
+              background: "transparent", border: `1px solid ${C.red}66`, color: textSafe(C.red),
               fontSize: 11, fontWeight: 600, borderRadius: 6, padding: "5px 12px",
               cursor: busyId === rec.id ? "default" : "pointer",
             }}>Reject</button>
           </div>
         </div>
       ))}
-      {msg && <div style={{ color: msg.tone, fontSize: 11 }}>{safeText(msg.text)}</div>}
+      {msg && <div style={{ color: textSafe(msg.tone), fontSize: 11 }}>{safeText(msg.text)}</div>}
     </div>
   );
 }
@@ -1056,11 +1057,14 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved,
         <div style={{ padding: "0 14px 12px", borderTop: `1px solid ${C.border}` }}>
           {r.text && <p style={{ color: C.textSec, fontSize: 12, lineHeight: 1.6, margin: "10px 0" }}>{safeText(r.text)}</p>}
           {r.citation && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>{safeText(r.citation)}</div>}
+          {r.stateNote && (
+            <div style={{ color: C.accentText, fontSize: 11.5, lineHeight: 1.5, marginBottom: 8 }}>{safeText(r.stateNote)}</div>
+          )}
 
           {r.controls.map(c => (
             <div key={c.controlId} style={{ background: C.surface, borderRadius: 6, padding: "9px 11px", marginBottom: 6 }}>
               <div style={{ color: C.textSec, fontSize: 11.5, marginBottom: 4 }}>{safeText(c.question)}</div>
-              <div style={{ color: c.meets ? C.green : C.amber, fontSize: 12 }}>
+              <div style={{ color: textSafe(c.meets ? C.green : C.amber), fontSize: 12 }}>
                 {c.answer ? safeText(c.answer) : <span style={{ color: C.textMut }}>Not answered</span>}
                 {c.score !== null && <span style={{ color: C.textMut, marginLeft: 6 }}>({c.score}/100)</span>}
               </div>
@@ -1068,11 +1072,11 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved,
               {/* Rule 2: both sources visible on the control itself. */}
               {c.sources?.agent?.length > 0 && (
                 <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 10, color: C.purple, fontWeight: 700, letterSpacing: 0.5, marginBottom: 3 }}>
+                  <div style={{ fontSize: 10, color: textSafe(C.purple), fontWeight: 700, letterSpacing: 0.5, marginBottom: 3 }}>
                     AGENT MEASURED {c.sources.agree ? "· AGREES" : "· DISAGREES"}
                   </div>
                   {c.sources.agent.map((a, i) => (
-                    <div key={i} style={{ color: c.sources.agree ? C.green : C.amber, fontSize: 11.5 }}>
+                    <div key={i} style={{ color: textSafe(c.sources.agree ? C.green : C.amber), fontSize: 11.5 }}>
                       {a.pass} pass / {a.fail} fail across {a.hosts} host(s)
                     </div>
                   ))}
@@ -1149,11 +1153,11 @@ function ControlAnswerEditor({ c, authFetch, apiBase, clientId, onSaved }) {
     return (
       <div style={{ marginTop: 6 }}>
         <button onClick={() => { setEditing(true); setMsg(null); }}
-          style={{ background: "none", border: "none", color: C.accent, fontSize: 11,
+          style={{ background: "none", border: "none", color: textSafe(C.accent), fontSize: 11,
             fontWeight: 600, cursor: "pointer", padding: 0 }}>
           Update answer
         </button>
-        {msg && <span style={{ color: msg.tone, fontSize: 11, marginLeft: 10 }}>{msg.text}</span>}
+        {msg && <span style={{ color: textSafe(msg.tone), fontSize: 11, marginLeft: 10 }}>{msg.text}</span>}
       </div>
     );
   }
@@ -1168,7 +1172,7 @@ function ControlAnswerEditor({ c, authFetch, apiBase, clientId, onSaved }) {
               cursor: saving ? "wait" : "pointer",
               border: `1px solid ${o.label === c.answer ? C.accent : C.border}`,
               background: o.label === c.answer ? `${C.accent}1A` : "transparent",
-              color: o.label === c.answer ? C.accent : C.textSec,
+              color: o.label === c.answer ? textSafe(C.accent) : C.textSec,
             }}>
             {safeText(o.label)}
           </button>
@@ -1178,7 +1182,7 @@ function ControlAnswerEditor({ c, authFetch, apiBase, clientId, onSaved }) {
           Cancel
         </button>
       </div>
-      {msg && <div style={{ color: msg.tone, fontSize: 11, marginTop: 6 }}>{msg.text}</div>}
+      {msg && <div style={{ color: textSafe(msg.tone), fontSize: 11, marginTop: 6 }}>{msg.text}</div>}
     </div>
   );
 }
@@ -1190,7 +1194,7 @@ function Note({ children, tone }) {
       background: tone ? `${col}0D` : C.surface,
       border: `1px solid ${tone ? col + "33" : C.border}`,
       borderRadius: 8, padding: "11px 13px", marginBottom: 12,
-      color: tone ? col : C.textSec, fontSize: 12, lineHeight: 1.6,
+      color: tone ? textSafe(col) : C.textSec, fontSize: 12, lineHeight: 1.6,
     }}>{children}</div>
   );
 }
@@ -1305,7 +1309,7 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
   return (
     <div>
       <button onClick={onBack} style={{
-        background: "none", border: "none", color: C.accent, cursor: "pointer",
+        background: "none", border: "none", color: textSafe(C.accent), cursor: "pointer",
         fontSize: 12, padding: 0, marginBottom: 10,
       }}>← All custom frameworks</button>
 
@@ -1345,12 +1349,12 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                   {c.category && <div style={{ color: C.textMut, fontSize: 11, marginBottom: 8 }}>Category: {safeText(c.category)}</div>}
 
                   {c.source === "agent" && (
-                    <div style={{ color: C.purple, fontSize: 11, marginBottom: 8 }}>
+                    <div style={{ color: textSafe(C.purple), fontSize: 11, marginBottom: 8 }}>
                       Measured by your monitoring agent{c.note ? `: ${c.note}` : "."}
                     </div>
                   )}
                   {c.agentSuggests && (
-                    <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 8, color: C.amber, fontSize: 11, lineHeight: 1.5 }}>
+                    <div style={{ background: `${C.amber}0D`, borderRadius: 6, padding: "8px 10px", marginBottom: 8, color: textSafe(C.amber), fontSize: 11, lineHeight: 1.5 }}>
                       Your recorded status is "{CT_STATUS_LABEL[c.status]}", but the agent suggests
                       "{CT_STATUS_LABEL[c.agentSuggests]}". Your attestation decides — update it below if the agent is right.
                     </div>
@@ -1365,7 +1369,7 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                           cursor: busy === c.id ? "default" : "pointer",
                           border: `1px solid ${c.status === s ? CT_STATUS_COLOR[s] : C.border}`,
                           background: c.status === s ? `${CT_STATUS_COLOR[s]}1A` : "transparent",
-                          color: c.status === s ? CT_STATUS_COLOR[s] : C.textSec,
+                          color: c.status === s ? textSafe(CT_STATUS_COLOR[s]) : C.textSec,
                           fontWeight: c.status === s ? 700 : 500,
                         }}>{CT_STATUS_LABEL[s]}</button>
                     ))}
@@ -1393,14 +1397,14 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
                       </button>
                       {remediation[c.id] && remediation[c.id] !== "loading" && (
                         remediation[c.id].error ? (
-                          <div style={{ color: C.red, fontSize: 11.5, marginTop: 8 }}>{safeText(remediation[c.id].error)}</div>
+                          <div style={{ color: textSafe(C.red), fontSize: 11.5, marginTop: 8 }}>{safeText(remediation[c.id].error)}</div>
                         ) : (
                           <div style={{ marginTop: 10, background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
                             <div style={{ color: C.text, fontSize: 12, marginBottom: 8 }}>{safeText(remediation[c.id].summary)}</div>
                             <div style={{ display: "grid", gap: 6, marginBottom: 8 }}>
                               {(remediation[c.id].steps || []).map((s, i) => (
                                 <div key={i} style={{ fontSize: 11.5, color: C.textSec, lineHeight: 1.5 }}>
-                                  <span style={{ color: C.accent, fontWeight: 700 }}>{i + 1}.</span> {safeText(s.action)}
+                                  <span style={{ color: textSafe(C.accent), fontWeight: 700 }}>{i + 1}.</span> {safeText(s.action)}
                                   {s.how && <div style={{ color: C.textMut, marginLeft: 14 }}>{safeText(s.how)}</div>}
                                   {s.effort && <span style={{ color: C.textMut, marginLeft: 6 }}>({safeText(s.effort)} effort)</span>}
                                 </div>

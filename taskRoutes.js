@@ -205,6 +205,7 @@ export function registerTaskRoutes(app, {
       factor: q.factor ?? null, options: q.options,
       section: q.section ?? q.nistFunction ?? null,
       affectsPostureScore: q.scoring !== false,
+      appliesTo: q.appliesTo ?? null,
     })));
   });
 

@@ -430,6 +430,7 @@ export const SECURITY_CHECKLIST = [
     id: "personalDataCategories",
     scoring: false,
     section: "Privacy",
+    appliesTo: ["state-privacy", "gdpr"],
     question: "What categories of personal information do you collect about consumers?",
     options: [
       { label: "Sensitive categories (health, biometric, precise geolocation, government ID)", score: 100 },
@@ -442,6 +443,7 @@ export const SECURITY_CHECKLIST = [
     id: "privacyNotice",
     scoring: false,
     section: "Privacy",
+    appliesTo: ["state-privacy", "gdpr"],
     question: "Do you publish a privacy notice describing what you collect and why?",
     options: [
       { label: "Yes — categories, purposes, rights, and updated in the last 12 months", score: 100 },
@@ -454,6 +456,7 @@ export const SECURITY_CHECKLIST = [
     id: "consumerRights",
     scoring: false,
     section: "Privacy",
+    appliesTo: ["state-privacy", "gdpr"],
     question: "Can consumers request access to, or deletion of, their data?",
     options: [
       { label: "Yes — a defined intake channel, identity verification, tracked to a deadline", score: 100 },
@@ -466,6 +469,7 @@ export const SECURITY_CHECKLIST = [
     id: "dataSaleSharing",
     scoring: false,
     section: "Privacy",
+    appliesTo: ["state-privacy", "gdpr"],
     question: "Do you sell or share personal information, or use it for targeted advertising?",
     options: [
       { label: "No — and we've confirmed our ad/analytics tools don't either", score: 100 },
@@ -478,6 +482,7 @@ export const SECURITY_CHECKLIST = [
     id: "privacyRequestVolume",
     scoring: false,
     section: "Privacy",
+    appliesTo: ["state-privacy", "gdpr"],
     question: "Do you track and log privacy requests and how you responded?",
     options: [
       { label: "Yes — logged with dates, outcomes, and metrics we could report", score: 100 },

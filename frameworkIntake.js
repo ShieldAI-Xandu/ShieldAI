@@ -38,6 +38,7 @@
 //    never blocks one. `defaultsFor()` returns what you get if you skip.
 
 import { ISO27001_ANNEX_A } from "./iso27001.js";
+import { SELECTABLE_STATES } from "./statePrivacyByState.js";
 
 export const FRAMEWORK_INTAKE = {
   "pci-dss": {
@@ -278,6 +279,26 @@ export const FRAMEWORK_INTAKE = {
     },
   },
 
+  "state-privacy": {
+    frameworkId: "state-privacy",
+    title: "State Privacy scoping",
+    why: "State privacy laws mostly rhyme, but not entirely — Texas has no revenue threshold, Utah has no right to correct, Maryland bans selling sensitive data outright rather than requiring an opt-out. Telling us which state(s) your consumers are mostly in sharpens which obligations and citations you're actually assessed against, instead of the shared template every state's law was averaged into.",
+    questions: [
+      {
+        id: "states",
+        type: "multi",
+        question: "Which state(s) do most of the consumers whose data you hold live in?",
+        help: "Pick one state for a state-specific breakdown. Picking several — or skipping this — keeps you on the shared common-obligation template, since a mixed footprint means no single state's law is the whole story.",
+        options: SELECTABLE_STATES.map(s => ({ label: s, value: s })),
+      },
+    ],
+    toOpts(answers = {}) {
+      return { states: Array.isArray(answers.states) ? answers.states : [] };
+    },
+    suggestionNote:
+      "Selecting a state sharpens which obligations we score and which statute we cite. It is not a determination that state's law applies to you — that turns on resident counts, revenue, and data-sale volume this assessment doesn't collect. See the Applicability note on this framework's page.",
+  },
+
   "ftc-safeguards": {
     frameworkId: "ftc-safeguards",
     title: "FTC Safeguards scoping",
@@ -345,6 +366,7 @@ export function defaultsFor(frameworkId) {
     "cmmc": "Level inferred from your assessment; defaults to the broader scope when unclear.",
     "hipaa-security": "Assessed as a provider, plan, or business associate — not a clearinghouse.",
     "ftc-safeguards": "No exemption applied — all nine elements assessed in full.",
+    "state-privacy": "No state selected — assessed against the common-obligation template shared across states, not any one state's statute.",
   };
   return defaults[frameworkId] || "Assessed with the module's documented defaults.";
 }

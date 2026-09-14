@@ -237,7 +237,7 @@ export const FRAMEWORKS = [
     assess: assessStatePrivacy,
     helpers: { applicabilityPrompt, roster: STATE_ROSTER },
     legalReviewRequired: true,
-    note: "Obligation-mapped, not state-by-state. We assess the common template and flag where states diverge; we never determine whether a given state's law applies to you — that's a legal question with fines attached.",
+    note: "Obligation-mapped against a common template shared across states by default. Tell us which state your consumers are mostly in in this framework's scoping questionnaire for a state-specific breakdown where we've reviewed that state's law individually. Either way, we never determine whether a given state's law applies to you — that's a legal question with fines attached.",
   },
 ];
 

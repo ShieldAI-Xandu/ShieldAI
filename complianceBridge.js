@@ -176,6 +176,11 @@ function toRequirement(c, group, checklist) {
     failingControls: controls.filter(c2 => !c2.meets).map(c2 => c2.controlId),
     citation: c.citation || null,
     required: c.required ?? null,
+    // State Privacy's per-state deltas attach an informational note to a
+    // control that still applies but differs from the shared template (e.g.
+    // Maryland banning the sale of sensitive data outright rather than
+    // requiring an opt-out). Other modules never set this — passthrough only.
+    stateNote: c.stateNote || null,
   };
 }
 

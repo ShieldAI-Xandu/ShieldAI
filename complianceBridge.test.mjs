@@ -75,10 +75,31 @@ const ecomQs = visibleQuestions("pci-dss", { channel: "ecommerce" }).map(q => q.
 const cardQs = visibleQuestions("pci-dss", { channel: "card-present" }).map(q => q.id);
 ok(ecomQs.includes("ecommerceIntegration") && !ecomQs.includes("terminalType"), "e-commerce path skips terminal questions");
 ok(cardQs.includes("terminalType") && !cardQs.includes("ecommerceIntegration"), "card-present path skips iframe questions");
-ok(frameworksWithIntake().length === 6, `6 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
+ok(frameworksWithIntake().length === 7, `7 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
 const st = intakeStatus("pci-dss", { isServiceProvider: false });
 ok(st.complete === false && st.missing.length > 0, "incomplete intake reports what's missing");
 ok(/worst case/.test(st.defaultIfSkipped), "states what an unscoped assessment assumed");
+
+console.log("\nState Privacy scoping — a selected state sharpens the assessment:");
+const txOpts = toAssessOpts("state-privacy", { states: ["Texas"] });
+const txReport = evaluateFramework("state-privacy", answers, txOpts);
+ok(txReport.detail.model === "state-specific", `Texas -> state-specific model (got ${txReport.detail.model})`);
+ok(/Texas/.test(txReport.detail.modelNote), "modelNote names the selected state");
+
+const utOpts = toAssessOpts("state-privacy", { states: ["Utah"] });
+const utReport = evaluateFramework("state-privacy", answers, utOpts);
+const utExcludedIds = utReport.excluded.map(e => e.id);
+ok(["SP-5", "SP-7", "SP-17"].every(id => utExcludedIds.includes(id)),
+  `Utah excludes right-to-correct/opt-out/DPA obligations it doesn't share (got ${utExcludedIds.join(", ")})`);
+ok(utReport.summary.total === 15, `Utah: 15 assessable obligations, not 18 (got ${utReport.summary.total})`);
+
+const noStateReport = evaluateFramework("state-privacy", answers, toAssessOpts("state-privacy", {}));
+ok(noStateReport.detail.model === "common-obligation", "no state selected -> stays on the common-obligation template");
+
+const genericOpts = toAssessOpts("state-privacy", { states: ["Oregon"] });
+const genericReport = evaluateFramework("state-privacy", answers, genericOpts);
+ok(genericReport.detail.model === "common-obligation" && /Oregon/.test(genericReport.detail.modelNote),
+  "a roster state without a deep profile stays generic and says so by name");
 
 console.log("\n── Agent evidence ──");
 const mkReport = (hostname, overrides = {}) => ({

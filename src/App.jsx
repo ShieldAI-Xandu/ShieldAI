@@ -11443,6 +11443,7 @@ function useSecurityChecklist() {
           options: q.options,
           section: q.section || q.nistFunction,
           affectsPostureScore: q.affectsPostureScore !== false,
+          appliesTo: q.appliesTo || null,
         }));
         if (live && rows.length) { _checklistCache = rows; setList(rows); }
       })
@@ -11647,6 +11648,30 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
   const requiredGroups = Object.entries(groupedRequired);
   const optionalGroups = Object.entries(groupedOptional);
 
+  // Optional sections whose questions feed a framework the client just
+  // selected — e.g. selecting State Privacy makes the Privacy section the
+  // difference between a real score and "not yet assessed" forever. These
+  // default open on the optional step instead of sitting collapsed and
+  // indistinguishable from every other evidence section. Keyed by section
+  // name -> the selected framework name(s) that need it, so the header can
+  // say why it's flagged rather than just that it is.
+  const recommendedBy = {};
+  for (const q of optional) {
+    const hit = q.appliesTo?.filter(id => frameworks.includes(id));
+    if (!hit?.length) continue;
+    const section = q.section || "Additional detail";
+    const names = hit.map(id => COMPLIANCE_FRAMEWORKS.find(f => f.id === id)?.name || id);
+    recommendedBy[section] = new Set([...(recommendedBy[section] || []), ...names]);
+  }
+  const recommendedSections = new Set(Object.keys(recommendedBy));
+  // Recommended sections surface first so they're not lost among unrelated
+  // ones — stable otherwise, so ordering doesn't jump around as answers change.
+  const sortedOptionalGroups = [...optionalGroups].sort((a, b) => {
+    const ra = recommendedSections.has(a[0]) ? 0 : 1;
+    const rb = recommendedSections.has(b[0]) ? 0 : 1;
+    return ra - rb;
+  });
+
   const steps = [
     { kind: "frameworks" },
     ...requiredGroups.map(([fn, questions]) => ({ kind: "required", fn, questions })),
@@ -11668,6 +11693,20 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
     onProgress?.({ step, answers, frameworks, cisIG });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, answers, frameworks, cisIG]);
+
+  // Auto-expand sections recommended for the client's chosen frameworks once
+  // they reach the optional step — a manual collapse afterward still sticks,
+  // this only sets the starting state.
+  useEffect(() => {
+    if (stepInfo.kind !== "optional" || recommendedSections.size === 0) return;
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const s of recommendedSections) if (!next.has(s)) { next.add(s); changed = true; }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepInfo.kind]);
 
   function selectAnswer(qId, option) {
     setAnswers(prev => ({ ...prev, [qId]: option }));
@@ -11890,17 +11929,27 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
               your compliance frameworks assessable instead of "not yet assessed." Answer what
               you can, skip the rest, or come back to it later from your dashboard.
             </p>
-            {optionalGroups.map(([section, questions]) => {
+            {sortedOptionalGroups.map(([section, questions]) => {
               const open = openSections.has(section);
               const answeredInSection = questions.filter(q => answers[q.id] !== undefined).length;
+              const recommendFor = recommendedBy[section];
               return (
-                <div key={section} style={{marginBottom:12,border:`1px solid ${C.border}`,
+                <div key={section} style={{marginBottom:12,
+                  border:`1px solid ${recommendFor ? C.accent : C.border}`,
                   borderRadius:12,overflow:"hidden"}}>
                   <button onClick={() => toggleSection(section)}
                     style={{width:"100%",textAlign:"left",padding:"14px 16px",background:C.card,
                       border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:10,
-                      fontFamily:FONT_BODY}}>
-                    <span style={{color:C.text,fontSize:14,fontWeight:600,flex:1}}>{section}</span>
+                      fontFamily:FONT_BODY,flexWrap:"wrap"}}>
+                    <span style={{color:C.text,fontSize:14,fontWeight:600}}>{section}</span>
+                    {recommendFor && (
+                      <span style={{color:C.accentText,fontSize:10.5,fontWeight:700,
+                        letterSpacing:0.3,background:`${C.accent}18`,border:`1px solid ${C.accent}44`,
+                        borderRadius:999,padding:"2px 8px"}}>
+                        Unlocks {[...recommendFor].join(", ")}
+                      </span>
+                    )}
+                    <span style={{flex:1}}/>
                     <span style={{color:C.textMut,fontSize:12}}>{answeredInSection} of {questions.length} answered</span>
                     <span style={{color:C.textMut,fontSize:11}}>{open ? "▲" : "▼"}</span>
                   </button>

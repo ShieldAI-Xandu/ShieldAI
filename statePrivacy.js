@@ -53,6 +53,8 @@
 //   CPPA regulations — Cal. Code Regs. tit. 11, § 7000 et seq.
 //   IAPP tracker     — https://iapp.org/resources/article/us-state-privacy-legislation-tracker/
 
+import { stateProfile } from "./statePrivacyByState.js";
+
 export const STATE_PRIVACY_META = {
   id: "state-privacy",
   name: "State Privacy Laws",
@@ -318,7 +320,18 @@ export function applicabilityPrompt(evidence = {}) {
 }
 
 // ── Assessment ────────────────────────────────────────────────
-const STATUS = { MET: "met", PARTIAL: "partial", GAP: "gap", UNKNOWN: "unknown" };
+const STATUS = { MET: "met", PARTIAL: "partial", GAP: "gap", UNKNOWN: "unknown", NOT_APPLICABLE: "not-applicable" };
+
+// Which obligation a deep state profile's boolean flags govern. Only the
+// three we have a confirmed, stable basis to say vary state-to-state — see
+// statePrivacyByState.js's own comment on why the rest stay on the shared
+// template rather than getting an obligation-by-obligation rewrite we can't
+// back up.
+const OBLIGATION_FLAG = {
+  "SP-5": { flag: "rightToCorrect", label: "a right to correct" },
+  "SP-7": { flag: "universalOptOutRequired", label: "a universal opt-out signal duty" },
+  "SP-17": { flag: "dataProtectionAssessmentRequired", label: "a data protection assessment requirement" },
+};
 
 function scoreObligation(o, answers) {
   const scores = (o.evidence || [])
@@ -329,11 +342,46 @@ function scoreObligation(o, answers) {
   return { ...o, score: s, status: s >= 80 ? STATUS.MET : s >= 45 ? STATUS.PARTIAL : STATUS.GAP };
 }
 
-export function assessStatePrivacy(checklistAnswers = {}) {
+// Applies one deep state profile's known deltas to a single obligation. Only
+// ever REMOVES an obligation the state's law doesn't share with the
+// template (via OBLIGATION_FLAG) or attaches an informational `stateNote` —
+// never invents a new obligation the template doesn't already have.
+function applyStateDelta(o, profile) {
+  const rule = OBLIGATION_FLAG[o.id];
+  if (rule && profile[rule.flag] === false) {
+    return {
+      ...o,
+      status: STATUS.NOT_APPLICABLE,
+      score: null,
+      applicable: false,
+      exclusionReason: `${profile.statute} does not include ${rule.label} — this obligation is part of the shared template but not this state's law.`,
+    };
+  }
+  if (o.id === "SP-13" && profile.sensitiveDataSaleBanned) {
+    return { ...o, stateNote: `${profile.statute} bans the sale of sensitive personal information outright rather than requiring an opt-out — stricter than the shared template assumes.` };
+  }
+  if (o.id === "SP-1" && profile.note && profile.state === "Rhode Island") {
+    return { ...o, stateNote: profile.note };
+  }
+  return o;
+}
+
+export function assessStatePrivacy(checklistAnswers = {}, opts = {}) {
   // A business holding no consumer data isn't "compliant" — the questions are
   // largely moot. Saying "100% met" there would be a lie in the flattering
   // direction, which is the worst kind.
   const noConsumerData = checklistAnswers.personalDataCategories?.score === 0;
+
+  const selectedStates = Array.isArray(opts.states)
+    ? [...new Set(opts.states.filter(s => typeof s === "string" && s))]
+    : [];
+  // Only a single selection gets a state-specific view — a mixed footprint
+  // means no one state's law is the whole story, so we stay on the shared
+  // template rather than picking one arbitrarily or averaging incompatible
+  // laws together.
+  const singleState = selectedStates.length === 1 ? selectedStates[0] : null;
+  const deepProfile = singleState ? stateProfile(singleState) : null;
+  const isDeepModel = deepProfile?.modeled === "deep";
 
   const areas = STATE_PRIVACY_AREAS.map(a => {
     const obligations = STATE_PRIVACY_OBLIGATIONS
@@ -345,8 +393,9 @@ export function assessStatePrivacy(checklistAnswers = {}) {
       // obligation citing it as evidence, dragging it into GAP status and
       // surfacing in topGaps — the exact "18 gaps this business will never
       // receive a request about" lie noConsumerDataNote below says we avoid.
-      .map(o => noConsumerData ? { ...o, status: STATUS.UNKNOWN, score: null } : scoreObligation(o, checklistAnswers));
-    const scored = obligations.filter(o => o.status !== STATUS.UNKNOWN);
+      .map(o => noConsumerData ? { ...o, status: STATUS.UNKNOWN, score: null } : scoreObligation(o, checklistAnswers))
+      .map(o => isDeepModel ? applyStateDelta(o, deepProfile) : o);
+    const scored = obligations.filter(o => o.status !== STATUS.UNKNOWN && o.status !== STATUS.NOT_APPLICABLE);
     const avg = scored.length ? Math.round(scored.reduce((s, o) => s + o.score, 0) / scored.length) : null;
     return {
       ...a,
@@ -359,16 +408,35 @@ export function assessStatePrivacy(checklistAnswers = {}) {
   });
 
   const all = areas.flatMap(a => a.obligations);
-  const scored = all.filter(o => o.status !== STATUS.UNKNOWN);
+  const scored = all.filter(o => o.status !== STATUS.UNKNOWN && o.status !== STATUS.NOT_APPLICABLE);
   const gaps = scored.filter(o => o.status === STATUS.GAP);
   const met = scored.filter(o => o.status === STATUS.MET);
+  const notApplicable = all.filter(o => o.status === STATUS.NOT_APPLICABLE);
+
+  const model = isDeepModel ? "state-specific" : "common-obligation";
+  const modelNote = isDeepModel
+    ? `Assessed against ${singleState}'s ${deepProfile.statute} specifically (${deepProfile.citation}), not the shared template — obligations that state's law doesn't share with the template are marked not applicable rather than scored as gaps.`
+    : singleState && !deepProfile
+      ? `You selected ${singleState}, but it hasn't been individually reviewed yet — showing the shared common-obligation template rather than pretending state-specific precision we don't have. ${STATE_ROSTER.sourceNote}`
+      : selectedStates.length > 1
+        ? `You selected ${selectedStates.length} states. A mixed footprint means no single state's law is the whole story, so this stays on the shared common-obligation template — pick one state on this framework's scoping page for a state-specific breakdown.`
+        : "We assess the obligations the state laws share, not any single state's statute. Roughly twenty states have comprehensive laws and they follow a common template — so a business that meets these is in reasonable shape in most of them. Where a state diverges sharply (California's private right of action, Maryland's minimisation, Texas's missing revenue threshold), we flag it rather than average it away.";
 
   return {
     framework: STATE_PRIVACY_META,
     depth: "control-mapped",
-    model: "common-obligation",
-    modelNote:
-      "We assess the obligations the state laws share, not any single state's statute. Roughly twenty states have comprehensive laws and they follow a common template — so a business that meets these is in reasonable shape in most of them. Where a state diverges sharply (California's private right of action, Maryland's minimisation, Texas's missing revenue threshold), we flag it rather than average it away.",
+    model,
+    modelNote,
+    stateLaw: isDeepModel ? {
+      state: singleState,
+      statute: deepProfile.statute,
+      citation: deepProfile.citation,
+      effectiveDate: deepProfile.effectiveDate,
+      thresholdNote: deepProfile.thresholdNote,
+      curePeriod: deepProfile.curePeriod,
+      privateRightOfAction: deepProfile.privateRightOfAction,
+      asOf: deepProfile.asOf,
+    } : null,
     volatilityNote: STATE_PRIVACY_META.volatilityNote,
     scopeNote: STATE_PRIVACY_META.scopeNote,
     roster: STATE_ROSTER,
@@ -385,7 +453,8 @@ export function assessStatePrivacy(checklistAnswers = {}) {
       met: met.length,
       partial: scored.filter(o => o.status === STATUS.PARTIAL).length,
       gaps: gaps.length,
-      unknown: all.length - scored.length,
+      unknown: all.length - scored.length - notApplicable.length,
+      notApplicable: notApplicable.length,
       // A business holding no consumer data reports null, not 0%.
       //
       // We already set noConsumerData and refuse to determine applicability —
@@ -405,7 +474,7 @@ export function assessStatePrivacy(checklistAnswers = {}) {
       .map(a => ({ id: a.id, name: a.name, score: a.score })),
 
     methodology:
-      "Eighteen obligations common to the US state consumer privacy laws, each mapped to your assessment answers by a fixed rule and computed — not written by an AI. Obligations with no answering evidence report 'not yet assessed' rather than being assumed met.",
+      "Eighteen obligations common to the US state consumer privacy laws, each mapped to your assessment answers by a fixed rule and computed — not written by an AI. Obligations with no answering evidence report 'not yet assessed' rather than being assumed met. When a single state with a deep profile is selected, obligations that state's law doesn't share with the template are marked not applicable rather than scored.",
     disclaimer:
       "This is a gap analysis against the common obligations of US state consumer privacy laws. It is not legal advice, not a determination that any particular law applies to you, and not a substitute for counsel. Privacy compliance is a legal question with statutory penalties; the state roster here is a dated snapshot and the landscape changes every legislative session.",
     legalReviewRequired: true,
