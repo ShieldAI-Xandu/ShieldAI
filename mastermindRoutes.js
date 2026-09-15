@@ -779,7 +779,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         const u = resolveClient(input.clientIdOrEmail);
         if (!u) return { error: "Client not found." };
         const learners = (db.data.learners || []).filter(l => l.clientUserId === u.id);
-        const assigns = (db.data.trainingAssignments || []).filter(a => a.clientUserId === u.id);
+        // Excludes completed/waived the same way the calendar's own merge
+        // does (complianceCalendarRoutes.js) — a closed assignment's due
+        // date is a historical fact, not something that should be newly
+        // reachable for Mastermind to propose rescheduling just because this
+        // tool exists.
+        const assigns = (db.data.trainingAssignments || [])
+          .filter(a => a.clientUserId === u.id && a.status !== "completed" && a.status !== "waived");
         const policies = (db.data.policyDocs || []).filter(p => p.userId === u.id);
         const curricula = (db.data.trainingPrograms || []).filter(t => t.userId === u.id);
         const customEntries = (db.data.complianceCalendarEntries || []).filter(e => e.userId === u.id && !e.completedAt);
@@ -1268,9 +1274,14 @@ Limit findings to 6 and recommendations to 5.`;
         quartersScheduled: (db.data.trainingQuarters || []).filter(q => q.clientUserId === userId).length,
         // Real ids/fields so a "proposed_edit" block can reference an actual
         // record — Mastermind must never invent an id. Capped since this is
-        // for chat-context, not a full export.
+        // for chat-context, not a full export. Completed/waived assignments
+        // are excluded — same convention the calendar's own merge uses — so
+        // a closed assignment's due date can't be proposed for reschedule;
+        // `assignments`/`completed` above still count every status, only
+        // this editable list is narrowed.
         learnerList: learners.slice(0, 50).map(l => ({ id: l.id, name: l.name, email: l.email, department: l.department || "", status: l.status })),
-        assignmentList: assigns.slice(0, 50).map(a => ({ id: a.id, title: a.title, learnerId: a.learnerId, dueDate: a.dueDate, status: a.status })),
+        assignmentList: assigns.filter(a => a.status !== "completed" && a.status !== "waived")
+          .slice(0, 50).map(a => ({ id: a.id, title: a.title, learnerId: a.learnerId, dueDate: a.dueDate, status: a.status })),
       };
       // Same capability that gates campaign creation (phishingRoutes.js) —
       // a Starter client's single free trial campaign isn't reflected here,

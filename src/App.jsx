@@ -7953,6 +7953,10 @@ function PolicyAssignModal({ policies, onClose, onAssigned }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Set once the assign call(s) succeed — kept in-modal (instead of closing
+  // immediately) so a partial email failure is something the person actually
+  // sees, not silently swallowed behind "They'll get an email right away."
+  const [doneSummary, setDoneSummary] = useState(null);
 
   useEffect(() => {
     authFetch(`${API_BASE}/api/training-program/learners`).then(r => r.json()).then(data => {
@@ -7969,6 +7973,7 @@ function PolicyAssignModal({ policies, onClose, onAssigned }) {
     if (!selectedIds.length) return;
     setBusy(true); setError(null);
     try {
+      let emailResults = [];
       for (const policy of policies) {
         const res = await authFetch(`${API_BASE}/api/client/policies/${policy.id}/assign`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -7977,8 +7982,17 @@ function PolicyAssignModal({ policies, onClose, onAssigned }) {
         const data = await res.json();
         if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
         if (!res.ok) throw new Error(data.error || `Could not assign "${policy.policyName}".`);
+        emailResults = emailResults.concat(data.emailResults || []);
       }
-      onAssigned();
+      const sent = emailResults.filter(r => r.emailed).length;
+      const summary = !emailResults.length
+        ? "Assigned. Email isn't configured on this server yet — share the link(s) manually."
+        : sent === emailResults.length
+        ? `Assigned — ${sent} email${sent === 1 ? "" : "s"} sent.`
+        : sent === 0
+        ? "Assigned, but email failed to send to everyone — share the link(s) manually."
+        : `Assigned — ${sent} of ${emailResults.length} email(s) sent. Share the rest manually.`;
+      setDoneSummary(summary);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
@@ -8002,45 +8016,59 @@ function PolicyAssignModal({ policies, onClose, onAssigned }) {
             border:`1px solid ${C.red}33`,borderRadius:7,color:C.redText,fontSize:12.5}}>{error}</div>
         )}
 
-        {loading ? <Spinner/> : learners.length === 0 ? (
-          <p style={{fontSize:12.5,color:C.textMut}}>
-            Your team roster is empty. Add people to your roster above first, then come back to assign.
-          </p>
+        {doneSummary ? (
+          <>
+            <div style={{marginBottom:18,padding:"9px 12px",background:`${C.green}15`,
+              border:`1px solid ${C.green}33`,borderRadius:7,color:C.greenText,fontSize:12.5,fontWeight:600}}>
+              ✓ {doneSummary}
+            </div>
+            <div style={{display:"flex",justifyContent:"flex-end"}}>
+              <button onClick={onAssigned} style={{...miniBtn(C.accent,false),padding:"9px 16px",fontWeight:700}}>Done</button>
+            </div>
+          </>
         ) : (
           <>
-            <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
-              <button onClick={() => setSelectedIds(selectedIds.length === learners.length ? [] : learners.map(l => l.id))}
-                style={{marginLeft:"auto",padding:"3px 10px",background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:6,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
-                {selectedIds.length === learners.length ? "Clear all" : "Select all"}
+            {loading ? <Spinner/> : learners.length === 0 ? (
+              <p style={{fontSize:12.5,color:C.textMut}}>
+                Your team roster is empty. Add people to your roster above first, then come back to assign.
+              </p>
+            ) : (
+              <>
+                <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
+                  <button onClick={() => setSelectedIds(selectedIds.length === learners.length ? [] : learners.map(l => l.id))}
+                    style={{marginLeft:"auto",padding:"3px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:6,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
+                    {selectedIds.length === learners.length ? "Clear all" : "Select all"}
+                  </button>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+                  {learners.map(l => (
+                    <label key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
+                      background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontSize:12.5}}>
+                      <input type="checkbox" checked={selectedIds.includes(l.id)} onChange={()=>toggle(l.id)}/>
+                      <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
+                      <span style={{color:C.textMut}}>{l.email}</span>
+                    </label>
+                  ))}
+                </div>
+                <label style={{display:"block",fontSize:11.5,color:C.textSec,marginBottom:16}}>
+                  Due date
+                  <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+                    style={{display:"block",marginTop:4,padding:"7px 10px",background:C.surface,
+                      border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5}}/>
+                </label>
+              </>
+            )}
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
+              <button onClick={submit} disabled={busy||!selectedIds.length}
+                style={{...miniBtn(C.accent,busy||!selectedIds.length),padding:"9px 16px",fontWeight:700}}>
+                {busy ? "Assigning…" : `Assign to ${selectedIds.length || ""}`.trim()}
               </button>
             </div>
-            <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
-              {learners.map(l => (
-                <label key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
-                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontSize:12.5}}>
-                  <input type="checkbox" checked={selectedIds.includes(l.id)} onChange={()=>toggle(l.id)}/>
-                  <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
-                  <span style={{color:C.textMut}}>{l.email}</span>
-                </label>
-              ))}
-            </div>
-            <label style={{display:"block",fontSize:11.5,color:C.textSec,marginBottom:16}}>
-              Due date
-              <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
-                style={{display:"block",marginTop:4,padding:"7px 10px",background:C.surface,
-                  border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5}}/>
-            </label>
           </>
         )}
-
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
-          <button onClick={submit} disabled={busy||!selectedIds.length}
-            style={{...miniBtn(C.accent,busy||!selectedIds.length),padding:"9px 16px",fontWeight:700}}>
-            {busy ? "Assigning…" : `Assign to ${selectedIds.length || ""}`.trim()}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -22246,8 +22274,14 @@ function ProposedEditCard({ proposal, scope = "client", onApplied }) {
   // Every operation needs a real entityId except creating a brand-new custom
   // calendar reminder, which has nothing to reference yet.
   const needsId = !(op === "create" && proposal?.entityType === "calendarEntry");
+  // Every operation but delete acts on `fields` — a malformed or truncated
+  // model response with an empty/missing fields object would otherwise still
+  // render an Apply button that sends an effectively no-op write and reports
+  // "✓ Applied" as if a real change happened.
+  const needsFields = op !== "delete";
   if (!proposal || !handler) return null;
   if (needsId && !proposal.entityId) return null;
+  if (needsFields && !(proposal.fields && Object.keys(proposal.fields).length)) return null;
   if (isStaff && !scope.clientId) return null; // can't safely target a client without one
 
   async function apply() {

@@ -33,6 +33,16 @@ import { pushHistory } from "./taskRoutes.js";
 const nowIso = () => new Date().toISOString();
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Same default window policyAcknowledgmentRoutes.js gives a NEW assignment
+// (see its own defaultDueDate()) — duplicated rather than imported since it's
+// one small pure function and this file already treats policy rows as a
+// read-only source it merges, never writes to directly.
+function fallbackAckDueDate(assignedAtIso) {
+  const d = assignedAtIso ? new Date(assignedAtIso) : new Date();
+  d.setDate(d.getDate() + 14);
+  return d.toISOString();
+}
+
 // Every item the unified view returns is keyed "sourceType:rawId" so a later
 // PATCH/DELETE knows which table to touch without a second lookup. A bare id
 // with no prefix is treated as "custom" for back-compat.
@@ -124,11 +134,18 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     }
 
     // Pending policy acknowledgments — real due date since Phase 1 added one.
+    // Rows assigned before that field existed have none; without a fallback
+    // they'd resolve to dueStatus(undefined) === "not_set" and silently drop
+    // out of the overdue/due_soon buckets forever, having lost the old
+    // assignedAt-aging heuristic this field replaced. Compute the same
+    // default a new assignment gets rather than storing it, so an old
+    // assignment doesn't jump the queue relative to when it was actually assigned.
     for (const p of (db.data.policyAcknowledgments || [])) {
       if (p.clientUserId !== targetId || p.acknowledgedAt) continue;
+      const dueDate = p.dueDate || fallbackAckDueDate(p.assignedAt);
       items.push({
         id: `policy:${p.id}`, sourceType: "policy", title: `Policy sign-off pending: ${p.learnerName}`, category: "policy",
-        dueDate: p.dueDate || null, reviewStatus: dueStatus(p.dueDate),
+        dueDate, reviewStatus: dueStatus(dueDate),
         detailPath: "library", notes: p.policyName, recurrenceMonths: null, completedAt: null,
         editable: true, removable: true,
       });
@@ -248,7 +265,15 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
       // directly. Translate the requested date into an interval from the
       // last assessment so there's still exactly one source of truth.
       const baseline = v.lastAssessedAt || v.contractStartDate || v.createdAt || nowIso();
-      const months = Math.max(1, Math.round((new Date(req.body.dueDate) - new Date(baseline)) / (30.44 * DAY_MS)));
+      const months = Math.round((new Date(req.body.dueDate) - new Date(baseline)) / (30.44 * DAY_MS));
+      // A date on/before the last assessment has no positive interval that
+      // expresses it — silently clamping to 1 month would save a date the
+      // caller never asked for and report it back as if it matched.
+      if (months < 1) {
+        return res.status(400).json({
+          error: "That date is too close to (or before) the vendor's last assessment to express as a reassessment interval. Reassess the vendor now if it's due sooner than that.",
+        });
+      }
       updateVendor(db, targetId, rawId, { reassessmentIntervalMonths: months });
       await db.write();
       const updated = (db.data.vendors || []).find(x => x.id === rawId);
@@ -345,8 +370,15 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     if (sourceType === "training") {
       const a = (db.data.trainingAssignments || []).find(x => x.id === rawId && x.clientUserId === targetId);
       if (!a) return res.status(404).json({ error: "Not found." });
-      applyAssignmentEdit(db, { assignment: a, body: { status: "waived" }, actorUserId: req.userId, actorRole, logClientAction });
-      await db.write();
+      // applyAssignmentEdit logs a client action unconditionally, even when
+      // nothing actually changes — re-waiving an already-waived assignment
+      // (a double-click, or two tabs) would otherwise overwrite waivedBy/
+      // waivedAt with a second actor/timestamp and log a second, misleading
+      // "updated" entry for a change that didn't happen.
+      if (a.status !== "waived") {
+        applyAssignmentEdit(db, { assignment: a, body: { status: "waived" }, actorUserId: req.userId, actorRole, logClientAction });
+        await db.write();
+      }
       return res.json({ ok: true, deleted: req.params.id, waived: true });
     }
 
