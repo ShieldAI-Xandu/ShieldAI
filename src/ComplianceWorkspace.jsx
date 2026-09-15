@@ -843,6 +843,17 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { text, tone }
+  const [existingEvidenceId, setExistingEvidenceId] = useState("");
+  const [evidenceList, setEvidenceList] = useState(null); // lazy-loaded once the form opens
+
+  useEffect(() => {
+    if (!openForm || evidenceList !== null) return;
+    const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
+    authFetch(`${apiBase}/api/evidence${q}`).then(r2 => r2.json())
+      .then(d => setEvidenceList(Array.isArray(d) ? d : []))
+      .catch(() => setEvidenceList([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openForm]);
 
   if (existing && existing.status !== "rejected") {
     const verified = existing.status === "verified";
@@ -880,8 +891,8 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
     if (!note.trim()) { setMsg({ text: "Describe what you changed.", tone: C.red }); return; }
     setBusy(true); setMsg(null);
     try {
-      let evidenceId = null;
-      if (file) {
+      let evidenceId = existingEvidenceId || null;
+      if (!evidenceId && file) {
         if (file.size > REMEDIATION_EVIDENCE_MAX) throw new Error("File is over the 3.5MB limit.");
         const up = await readFileAsUpload(file);
         const evRes = await authFetch(`${apiBase}/api/evidence`, {
@@ -911,7 +922,7 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
         }`,
         tone: C.green,
       });
-      setOpenForm(false); setNote(""); setFile(null);
+      setOpenForm(false); setNote(""); setFile(null); setExistingEvidenceId("");
       onSaved?.();
     } catch (e) {
       setMsg({ text: e.message, tone: C.red });
@@ -936,8 +947,32 @@ function RemediationAttest({ r, frameworkId, authFetch, apiBase, clientId, onSav
               width: "100%", boxSizing: "border-box", background: C.card, color: C.text,
               border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 11.5, padding: "6px 8px", resize: "vertical",
             }} />
-          <input type="file" onChange={e => setFile(e.target.files?.[0] || null)}
-            style={{ color: C.textSec, fontSize: 11, marginTop: 6, display: "block" }} />
+          {existingEvidenceId ? (
+            <div style={{ marginTop: 6, fontSize: 11, color: C.textSec }}>
+              Using existing evidence — {" "}
+              <button onClick={() => setExistingEvidenceId("")} style={{
+                background: "none", border: "none", color: textSafe(C.accent), cursor: "pointer",
+                fontSize: 11, padding: 0, textDecoration: "underline",
+              }}>upload a file instead</button>
+            </div>
+          ) : (
+            <>
+              <input type="file" onChange={e => setFile(e.target.files?.[0] || null)}
+                style={{ color: C.textSec, fontSize: 11, marginTop: 6, display: "block" }} />
+              {evidenceList?.length > 0 && (
+                <select value="" onChange={e => { setExistingEvidenceId(e.target.value); setFile(null); }}
+                  style={{ marginTop: 6, width: "100%", padding: "5px 7px", borderRadius: 5, fontSize: 11,
+                    background: C.card, color: C.textSec, border: `1px solid ${C.border}` }}>
+                  <option value="">…or use something already on file</option>
+                  {evidenceList.map(ev => (
+                    <option key={ev.id} value={ev.id}>
+                      {ev.title} ({ev.kind}, {new Date(ev.uploadedAt).toLocaleDateString()})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={submit} disabled={busy} style={{
               background: C.accent, border: "none", color: "#03121A", fontSize: 11, fontWeight: 700,

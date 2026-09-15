@@ -55,7 +55,10 @@ const ALLOWED = {
   "application/vnd.ms-excel": ".xls",
 };
 
-export const EVIDENCE_KINDS = ["task", "control", "assessment", "general"];
+// "policy" and "training" are system-created only (see createEvidenceRecord
+// below) — a policy acknowledgment or a finished training module becomes
+// evidence automatically, the same way a task's "Attach proof" always has.
+export const EVIDENCE_KINDS = ["task", "control", "assessment", "policy", "training", "general"];
 
 function ensure(db) {
   db.data.evidence ||= [];
@@ -146,6 +149,34 @@ export function evidenceSummary(db, depth = "summary") {
   };
 }
 
+/**
+ * System-created, note-only evidence — used when completing something in
+ * another area (acknowledging a policy, finishing training) should also
+ * leave audit-ready proof behind, without a human uploading anything.
+ * Never touches storage; there's no file, just a record of what happened.
+ * Caller is responsible for `db.write()`.
+ */
+export function createEvidenceRecord(db, { ownerUserId, kind, refId, title, note, uploadedBy = null }) {
+  const record = {
+    id: randomUUID(), ownerUserId, kind, refId: refId || null,
+    title: String(title || "Evidence note").slice(0, 160),
+    note: String(note || "").slice(0, 2000),
+    filename: null, mimeType: null, bytes: 0, sha256: null, storagePath: null,
+    uploadedBy, uploadedAt: nowIso(),
+  };
+  ensure(db).push(record);
+  return record;
+}
+
+function mirrorOntoTask(db, record) {
+  if (record.kind !== "task") return;
+  const t = (db.data.tasks || []).find(x => x.id === record.refId);
+  if (!t) return;
+  t.evidence = t.evidence || [];
+  t.evidence.push({ id: record.id, title: record.title, filename: record.filename, at: record.uploadedAt });
+  t.updatedAt = nowIso();
+}
+
 export function registerEvidenceRoutes(app, {
   db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds,
 }) {
@@ -178,6 +209,18 @@ export function registerEvidenceRoutes(app, {
       return { ok: true };
     }
     if (kind === "control") return { ok: true }; // refId is a control id string
+    if (kind === "policy") {
+      const row = (db.data.policyAcknowledgments || []).find(x => x.id === refId);
+      if (!row) return { ok: false, error: "Policy acknowledgment not found." };
+      if (row.clientUserId !== ownerUserId) return { ok: false, error: "That acknowledgment belongs to a different client." };
+      return { ok: true };
+    }
+    if (kind === "training") {
+      const a = (db.data.trainingAssignments || []).find(x => x.id === refId);
+      if (!a) return { ok: false, error: "Training assignment not found." };
+      if (a.clientUserId !== ownerUserId) return { ok: false, error: "That assignment belongs to a different client." };
+      return { ok: true };
+    }
     return { ok: false, error: "Unknown kind." };
   }
 
@@ -252,16 +295,8 @@ export function registerEvidenceRoutes(app, {
     };
 
     ensure(db).push(record);
-
     // Mirror onto the task so the task card can show evidence without a join.
-    if (kind === "task") {
-      const t = (db.data.tasks || []).find(x => x.id === refId);
-      if (t) {
-        t.evidence = t.evidence || [];
-        t.evidence.push({ id: record.id, title: record.title, filename: record.filename, at: record.uploadedAt });
-        t.updatedAt = nowIso();
-      }
-    }
+    mirrorOntoTask(db, record);
 
     if (logClientAction) {
       try {
@@ -269,6 +304,59 @@ export function registerEvidenceRoutes(app, {
           clientUserId: owner, actorUserId: req.userId,
           actorRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
           action: "evidence_added", detail: record.title,
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    await db.write();
+    res.status(201).json(publicEvidence(db, record));
+  });
+
+  // ── Link: reuse an existing evidence item as proof somewhere else ──
+  // A policy that already satisfies one control shouldn't have to be
+  // re-uploaded to satisfy a task, or vice versa. This creates a NEW metadata
+  // row (so it shows up independently in both listings, with its own
+  // kind/refId) but points at the SAME stored file/hash as the source — no
+  // duplicate bytes on disk. Note-only source evidence links the same way,
+  // just with no file fields to copy.
+  app.post("/api/evidence/:id/link", requireAuth, async (req, res) => {
+    const actor = userById(req.userId);
+    const source = ensure(db).find(x => x.id === req.params.id);
+    if (!source) return res.status(404).json({ error: "Evidence not found." });
+    if (!canAccess(actor, source.ownerUserId)) return res.status(403).json({ error: "Not permitted." });
+
+    const { kind, refId } = req.body || {};
+    if (!EVIDENCE_KINDS.includes(kind)) {
+      return res.status(400).json({ error: `kind must be one of: ${EVIDENCE_KINDS.join(", ")}` });
+    }
+    const ref = validateRef(kind, refId, source.ownerUserId);
+    if (!ref.ok) return res.status(400).json({ error: ref.error });
+
+    const record = {
+      id: randomUUID(),
+      ownerUserId: source.ownerUserId,
+      kind,
+      refId: refId || null,
+      title: String(req.body?.title || source.title).slice(0, 160),
+      note: source.note,
+      filename: source.filename,
+      mimeType: source.mimeType,
+      bytes: source.bytes,
+      sha256: source.sha256,
+      storagePath: source.storagePath,
+      uploadedBy: req.userId,
+      uploadedAt: nowIso(),
+      linkedFrom: source.id,
+    };
+    ensure(db).push(record);
+    mirrorOntoTask(db, record);
+
+    if (logClientAction) {
+      try {
+        logClientAction(db, {
+          clientUserId: source.ownerUserId, actorUserId: req.userId,
+          actorRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+          action: "evidence_linked", detail: `Reused "${source.title}" as evidence for ${kind}.`,
         });
       } catch { /* non-fatal */ }
     }
@@ -340,9 +428,14 @@ export function registerEvidenceRoutes(app, {
         t.evidence = t.evidence.filter(ev => ev.id !== removed.id);
       }
     }
-    // Best-effort file cleanup; metadata removal is what matters.
+    // Best-effort file cleanup; metadata removal is what matters. A linked
+    // evidence row shares its storagePath with the row it was linked from —
+    // only unlink the file once nothing else on record still points at it.
     if (removed.storagePath) {
-      try { await fs.unlink(removed.storagePath); } catch { /* already gone */ }
+      const stillReferenced = list.some(e => e.storagePath === removed.storagePath);
+      if (!stillReferenced) {
+        try { await fs.unlink(removed.storagePath); } catch { /* already gone */ }
+      }
     }
     await db.write();
     res.json({ ok: true });

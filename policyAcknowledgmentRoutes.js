@@ -22,6 +22,7 @@
 import { randomUUID } from "crypto";
 import { sendEmail, emailConfigured } from "./emailService.js";
 import { notify } from "./notificationDispatch.js";
+import { createEvidenceRecord } from "./evidenceRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -47,8 +48,31 @@ function ensureCollections(db) {
   // collection IS the audit trail for this feature, not just working state.
   db.data.policyAcknowledgments ||= [];
   // { id, clientUserId, policyId, policyName, learnerId, learnerName,
-  //   learnerEmail, assignedAt, assignedBy, assignedByRole, remindedAt,
-  //   acknowledgedAt }
+  //   learnerEmail, assignedAt, assignedBy, assignedByRole, dueDate,
+  //   remindedAt, acknowledgedAt }
+}
+
+const DEFAULT_DUE_DAYS = 14;
+function defaultDueDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + DEFAULT_DUE_DAYS);
+  return d.toISOString();
+}
+
+function policyAckLink(learner) {
+  return `${process.env.APP_URL || "http://localhost:5173"}/train/${learner.token}`;
+}
+
+function policyAckEmailHtml(learner, policyName, dueDate) {
+  const link = policyAckLink(learner);
+  const dueLine = dueDate
+    ? `<p>Please review and acknowledge it by <strong>${new Date(dueDate).toLocaleDateString()}</strong>.</p>`
+    : `<p>Please take a moment to read it and confirm you've reviewed it.</p>`;
+  return `<p>Hi ${esc(learner.name.split(" ")[0])},</p>
+<p>You have a company policy waiting for your review: <strong>${esc(policyName)}</strong>.</p>
+${dueLine}
+<p><a href="${link}">${link}</a></p>
+<p>Thanks,<br/>Your security team</p>`;
 }
 
 // Same contract as trainingProgramRoutes.js's resolveClientScope — duplicated
@@ -105,12 +129,17 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
   });
 
   // ── Client: assign a generated policy to one or more roster members ──
-  app.post("/api/client/policies/:policyId/assign", requireAuth, gateRoster, async (req, res) => {
+  app.post("/api/client/policies/:policyId/assign", requireAuth, gateRoster, emailLimit, async (req, res) => {
     const scope = resolveClientScope(db, req, { analystOwnsClient });
     if (!scope.ok) return res.status(403).json({ error: scope.error });
 
     const policy = (db.data.policyDocs || []).find(p => p.id === req.params.policyId && p.userId === scope.clientUserId);
     if (!policy) return res.status(404).json({ error: "Policy not found." });
+
+    if (req.body?.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
+      return res.status(400).json({ error: "dueDate must be an ISO date." });
+    }
+    const dueDate = req.body?.dueDate || defaultDueDate();
 
     const ids = Array.isArray(req.body?.learnerIds) ? req.body.learnerIds : [];
     const learners = (db.data.learners || []).filter(l =>
@@ -123,17 +152,19 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
         .map(r => r.learnerId));
 
     const created = [];
+    const createdLearners = [];
     for (const learner of learners) {
       if (existingPending.has(learner.id)) continue; // already awaiting their sign-off — don't spam a duplicate row
       const row = {
         id: randomUUID(), clientUserId: scope.clientUserId,
         policyId: policy.id, policyName: policy.policyName,
         learnerId: learner.id, learnerName: learner.name, learnerEmail: learner.email,
-        assignedAt: nowIso(), assignedBy: req.userId, assignedByRole: scope.role,
+        assignedAt: nowIso(), assignedBy: req.userId, assignedByRole: scope.role, dueDate,
         remindedAt: null, acknowledgedAt: null,
       };
       db.data.policyAcknowledgments.push(row);
       created.push(row);
+      createdLearners.push(learner);
     }
     await db.write();
     logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
@@ -147,7 +178,40 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
         severity: "info", actionable: false,
       });
     }
-    res.json({ ok: true, assigned: created.length, skipped: learners.length - created.length, rows: created });
+
+    // Deliver the link by email immediately, same as assigning training —
+    // "assign" should actually reach the employee, not wait for someone to
+    // remember to click Remind. Never blocks the assignment on send failure.
+    let emailResults = [];
+    if (emailConfigured() && created.length > 0) {
+      emailResults = await Promise.all(created.map(async (row, i) => {
+        const learner = createdLearners[i];
+        const result = await sendEmail({
+          to: learner.email, subject: `Please review: ${row.policyName}`,
+          html: policyAckEmailHtml(learner, row.policyName, row.dueDate), fromLocal: "notifications",
+        });
+        return { learnerId: learner.id, emailed: result.ok, sendError: result.ok ? null : result.error };
+      }));
+    }
+    res.json({ ok: true, assigned: created.length, skipped: learners.length - created.length, rows: created, emailResults });
+  });
+
+  // ── Client: reschedule one acknowledgment's due date ─────────
+  // Deliberately narrow — only dueDate is editable here. Everything else on
+  // the row (who/what/when-assigned) is the audit trail and stays immutable.
+  app.patch("/api/client/policies/acknowledgments/:id", requireAuth, gateRoster, async (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    const row = (db.data.policyAcknowledgments || []).find(r => r.id === req.params.id && r.clientUserId === scope.clientUserId);
+    if (!row) return res.status(404).json({ error: "Not found." });
+    if (req.body?.dueDate !== undefined) {
+      if (req.body.dueDate && Number.isNaN(Date.parse(req.body.dueDate))) {
+        return res.status(400).json({ error: "dueDate must be an ISO date." });
+      }
+      row.dueDate = req.body.dueDate || null;
+    }
+    await db.write();
+    res.json({ ok: true, row });
   });
 
   // ── Client: unassign one acknowledgment row ──────────────────
@@ -229,6 +293,14 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
     if (!req.body?.confirmed) return res.status(400).json({ error: "Please confirm you've read the policy first." });
     if (!row.acknowledgedAt) {
       row.acknowledgedAt = nowIso();
+      // Acknowledging a policy IS proof — an auditor asking "can you show me
+      // sign-off on this policy" should find it in Evidence without anyone
+      // having to remember to upload it separately.
+      createEvidenceRecord(db, {
+        ownerUserId: row.clientUserId, kind: "policy", refId: row.id,
+        title: `Policy acknowledgment: ${row.policyName}`,
+        note: `${learner.name} (${learner.email}) acknowledged this policy on ${new Date(row.acknowledgedAt).toLocaleDateString()}.`,
+      });
       await db.write();
       logClientAction(db, { clientUserId: row.clientUserId, actorUserId: null, actorRole: "learner",
         action: "policy_acknowledged", detail: `${learner.name} acknowledged "${row.policyName}".` });

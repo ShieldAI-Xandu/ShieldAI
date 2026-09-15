@@ -30,6 +30,7 @@ import { randomUUID, randomBytes } from "crypto";
 import { TRAINING_TOPICS } from "./trainingCatalog.js";
 import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
 import { sendEmail, sendBatch, emailConfigured } from "./emailService.js";
+import { createEvidenceRecord } from "./evidenceRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 const newToken = () => randomBytes(24).toString("base64url"); // ~32 chars, URL-safe
@@ -884,6 +885,17 @@ export function registerTrainingProgramRoutes(app, {
     rollup(a);
     if (a.status === "completed" && !wasComplete) {
       a.completedAt = nowIso();
+      // Same reasoning as policy acknowledgment: a finished training
+      // assignment is proof of completion an auditor or insurer would ask
+      // for, so it should already be sitting in Evidence, not something
+      // someone has to remember to document separately.
+      const moduleScores = Object.entries(a.moduleState || {})
+        .map(([topicId, s]) => `${topicId}: ${s.score}%`).join(", ");
+      createEvidenceRecord(db, {
+        ownerUserId: a.clientUserId, kind: "training", refId: a.id,
+        title: `Training completed: ${a.title}`,
+        note: `${learner.name} (${learner.email}) completed this training on ${new Date(a.completedAt).toLocaleDateString()}.${moduleScores ? ` Scores — ${moduleScores}.` : ""}`,
+      });
       logClientAction(db, { clientUserId: a.clientUserId, actorUserId: null, actorRole: "learner",
         action: "training_completed", detail: `${learner.name} completed "${a.title}".` });
     }

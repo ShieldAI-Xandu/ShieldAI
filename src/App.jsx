@@ -1932,13 +1932,32 @@ function PrioritiesSection({ results, programId, onRegenerated }) {
     </div>
   );
 }
-function PoliciesSection({ results, programId, onRegenerated }) {
+// Loose but conservative name match — these are two different systems (this
+// section's narrative policies come from the AI program build; Policy
+// Library's are separately generated documents) with no shared id, only a
+// name in common. Normalizing punctuation/case catches "Password &
+// Authentication Policy" vs "password authentication policy" while still
+// requiring the names to be effectively identical — never a fuzzy/partial
+// match, since a wrong positive here would tell a client something is done
+// when it isn't.
+function normalizePolicyName(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function PoliciesSection({ results, programId, onRegenerated, onNavigate }) {
   // Combine policies from both pipeline steps
   const items = [
     ...(results?.policiesCore?.policies || []),
     ...(results?.policiesOps?.policies || []),
   ];
   const [expanded, setExpanded] = useState(null);
+  const [savedPolicies, setSavedPolicies] = useState([]);
+  useEffect(() => {
+    authFetch(`${API_BASE}/api/policies`).then(r => r.ok ? r.json() : []).then(list => {
+      setSavedPolicies(Array.isArray(list) ? list : []);
+    }).catch(() => {});
+  }, []);
+  const savedByName = new Map(savedPolicies.map(p => [normalizePolicyName(p.policyName), p]));
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
@@ -1949,7 +1968,9 @@ function PoliciesSection({ results, programId, onRegenerated }) {
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        {items.map((p,i)=>(
+        {items.map((p,i)=>{
+          const saved = savedByName.get(normalizePolicyName(p.name));
+          return (
           <Card key={p.id||i} style={{cursor:"pointer",padding:"14px 18px"}}
             onClick={()=>setExpanded(expanded===i?null:i)}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -1958,7 +1979,16 @@ function PoliciesSection({ results, programId, onRegenerated }) {
                 <div style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.name)}</div>
                 <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{safeText(p.purpose)}</div>
               </div>
-              <div style={{display:"flex",gap:6}}>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {saved ? (
+                  <Badge label="✓ Generated" color={C.green}/>
+                ) : (
+                  <span onClick={(e)=>{e.stopPropagation(); onNavigate?.("library");}}
+                    style={{fontSize:11,color:C.accentText,fontWeight:600,cursor:"pointer",
+                      textDecoration:"underline",textUnderlineOffset:2}}>
+                    Not yet generated →
+                  </span>
+                )}
                 <Badge label={p.reviewCycle||"Annual"}/>
                 <span style={{color:C.textMut,fontSize:16}}>{expanded===i?"▲":"▼"}</span>
               </div>
@@ -1996,7 +2026,8 @@ function PoliciesSection({ results, programId, onRegenerated }) {
               </div>
             )}
           </Card>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -3044,6 +3075,8 @@ function EvidenceSection() {
   // Attach-proof and delete confirmations (in-app modals, not window.prompt/confirm)
   const [attachTask, setAttachTask] = useState(null); // {id, title} or null
   const [proofDraft, setProofDraft] = useState("");
+  const [attachMode, setAttachMode] = useState("note"); // "note" | "existing"
+  const [existingEvidenceId, setExistingEvidenceId] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null); // evidence item or null
 
   async function loadAll() {
@@ -3094,6 +3127,8 @@ function EvidenceSection() {
   // Opens the in-app modal below; submitProof() does the actual save.
   function openAttach(taskId, taskTitle) {
     setProofDraft("");
+    setAttachMode("note");
+    setExistingEvidenceId("");
     setAttachTask({ id: taskId, title: taskTitle });
   }
 
@@ -3109,6 +3144,26 @@ function EvidenceSection() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not attach evidence.");
+      flash("Evidence attached to task.");
+      setAttachTask(null);
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Reuse something already on file (a policy acknowledgment, another
+  // control's evidence, a prior upload) instead of re-documenting the same
+  // proof twice.
+  async function linkExistingEvidence() {
+    if (!attachTask || !existingEvidenceId) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/evidence/${existingEvidenceId}/link`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "task", refId: attachTask.id }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not link that evidence.");
       flash("Evidence attached to task.");
       setAttachTask(null);
       await loadAll();
@@ -3258,15 +3313,64 @@ function EvidenceSection() {
         title="Attach proof"
         footer={<>
           <Button variant="ghost" onClick={()=>setAttachTask(null)}>Cancel</Button>
-          <Button onClick={submitProof} disabled={busy || !proofDraft.trim()}>{busy ? "Saving…" : "Save"}</Button>
+          {attachMode === "existing" ? (
+            <Button onClick={linkExistingEvidence} disabled={busy || !existingEvidenceId}>{busy ? "Saving…" : "Use this"}</Button>
+          ) : (
+            <Button onClick={submitProof} disabled={busy || !proofDraft.trim()}>{busy ? "Saving…" : "Save"}</Button>
+          )}
         </>}
       >
-        <p style={{margin:"0 0 12px",fontSize:13,color:C.textSec,lineHeight:1.5}}>
-          Describe the evidence for "{safeText(attachTask?.title)}" — e.g. "MFA screenshot filed in IT drive; confirmed with admin."
-        </p>
-        <TextField label="Evidence description" multiline rows={3} value={proofDraft}
-          onChange={e=>setProofDraft(e.target.value)}
-          placeholder="What proof do you have, and where is it kept?"/>
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          <button onClick={()=>setAttachMode("note")}
+            style={{flex:1,padding:"7px 10px",borderRadius:7,fontSize:12,cursor:"pointer",
+              background:attachMode==="note"?`${C.accent}18`:C.surface,
+              border:`1px solid ${attachMode==="note"?C.accent:C.border}`,
+              color:attachMode==="note"?C.accentText:C.textSec,fontWeight:600}}>
+            Write a note
+          </button>
+          <button onClick={()=>setAttachMode("existing")}
+            style={{flex:1,padding:"7px 10px",borderRadius:7,fontSize:12,cursor:"pointer",
+              background:attachMode==="existing"?`${C.accent}18`:C.surface,
+              border:`1px solid ${attachMode==="existing"?C.accent:C.border}`,
+              color:attachMode==="existing"?C.accentText:C.textSec,fontWeight:600}}>
+            Use existing evidence
+          </button>
+        </div>
+
+        {attachMode === "existing" ? (
+          items.length === 0 ? (
+            <p style={{margin:0,fontSize:12.5,color:C.textMut}}>
+              Nothing on file yet — a completed policy, training, or another control's proof will show up
+              here once you have some.
+            </p>
+          ) : (
+            <>
+              <p style={{margin:"0 0 10px",fontSize:13,color:C.textSec,lineHeight:1.5}}>
+                Point "{safeText(attachTask?.title)}" at something already on file — a policy
+                acknowledgment or evidence from another control works just as well as new proof.
+              </p>
+              <select value={existingEvidenceId} onChange={e=>setExistingEvidenceId(e.target.value)}
+                style={{width:"100%",padding:"9px 10px",borderRadius:8,border:`1px solid ${C.border}`,
+                  background:C.card,color:C.text,fontSize:13}}>
+                <option value="">Select evidence…</option>
+                {items.map(ev => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title} ({ev.kind}, {new Date(ev.uploadedAt).toLocaleDateString()})
+                  </option>
+                ))}
+              </select>
+            </>
+          )
+        ) : (
+          <>
+            <p style={{margin:"0 0 12px",fontSize:13,color:C.textSec,lineHeight:1.5}}>
+              Describe the evidence for "{safeText(attachTask?.title)}" — e.g. "MFA screenshot filed in IT drive; confirmed with admin."
+            </p>
+            <TextField label="Evidence description" multiline rows={3} value={proofDraft}
+              onChange={e=>setProofDraft(e.target.value)}
+              placeholder="What proof do you have, and where is it kept?"/>
+          </>
+        )}
       </Modal>
 
       <ConfirmDialog
@@ -3602,7 +3706,7 @@ function VendorQuestionnaireLockedCard() {
 //  types in for things ShieldAI can't know about (insurance, licenses,
 //  audits). Reads/writes /api/client/calendar*.
 // ─────────────────────────────────────────────────────────────
-const CALENDAR_SOURCE_ICON = { vendor: "🤝", policy: "📄", training: "🎓", custom: "🗓️" };
+const CALENDAR_SOURCE_ICON = { vendor: "🤝", policy: "📄", training: "🎓", task: "🛠️", custom: "🗓️" };
 const CALENDAR_STATUS_TONE = {
   overdue:  { color: C.redText,    label: "Overdue" },
   due_soon: { color: C.amberText,  label: "Due soon" },
@@ -3612,24 +3716,60 @@ const CALENDAR_STATUS_TONE = {
 const CALENDAR_CATEGORY_LABEL = {
   insurance: "Insurance", license: "License", audit: "Audit",
   contract: "Contract", regulatory: "Regulatory", other: "Other",
-  vendor: "Vendor", policy: "Policy", training: "Training",
+  vendor: "Vendor", policy: "Policy", training: "Training", task: "Task",
 };
 
 function emptyCalendarForm() {
   return { title: "", category: "other", dueDate: "", recurrenceMonths: "", notes: "" };
 }
 
-function CalendarEntryModal({ initial, onSave, onClose, busy }) {
+// Rescheduling a non-custom item (vendor/policy/training/task) only ever
+// edits that one date — title/category/recurrence belong to the real record
+// this item is projected from, not the calendar.
+const CALENDAR_RESCHEDULE_NOTE = {
+  vendor: "This adjusts the vendor's reassessment interval so its next review lands on this date.",
+  policy: "This changes when this employee's sign-off is due.",
+  training: "This changes the training assignment's due date.",
+  task: "This changes the task's due date.",
+};
+
+function CalendarEntryModal({ initial, dueDateOnly, newPreset, onSave, onClose, busy }) {
   const [form, setForm] = useState(initial ? {
     title: initial.title || "", category: ["insurance","license","audit","contract","regulatory","other"].includes(initial.category) ? initial.category : "other",
     dueDate: (initial.dueDate || "").slice(0, 10),
     recurrenceMonths: initial.recurrenceMonths ? String(initial.recurrenceMonths) : "",
     notes: initial.notes || "",
-  } : emptyCalendarForm());
+  } : { ...emptyCalendarForm(), ...newPreset });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const lbl = { display:"block", fontSize:11.5, color:C.textSec, fontWeight:600, marginBottom:5, marginTop:10 };
   const inp = { width:"100%", padding:"9px 11px", background:C.surface, border:`1px solid ${C.border}`,
     borderRadius:7, color:C.text, fontSize:13, fontFamily:"Inter,system-ui,sans-serif", boxSizing:"border-box" };
+
+  if (dueDateOnly) {
+    return (
+      <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
+        alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}
+        onClick={onClose}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+          borderRadius:14,padding:24,width:"100%",maxWidth:420,maxHeight:"88vh",overflowY:"auto"}}>
+          <div style={{fontSize:16,fontWeight:700,color:C.text,marginBottom:4}}>Reschedule</div>
+          <p style={{fontSize:12.5,color:C.textSec,margin:"0 0 4px",lineHeight:1.5}}>{safeText(initial?.title)}</p>
+          <p style={{fontSize:11.5,color:C.textMut,margin:"0 0 14px",lineHeight:1.5}}>
+            {CALENDAR_RESCHEDULE_NOTE[initial?.sourceType] || ""}
+          </p>
+          <label style={lbl}>Due date</label>
+          <input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)} style={inp}/>
+          <div style={{display:"flex",gap:10,marginTop:18,justifyContent:"flex-end"}}>
+            <button onClick={onClose} style={{...miniBtn(C.textSec,false),padding:"9px 16px"}}>Cancel</button>
+            <button onClick={()=>onSave(form)} disabled={busy||!form.dueDate}
+              style={{...miniBtn(C.accent,busy||!form.dueDate),padding:"9px 16px",fontWeight:700}}>
+              {busy ? "Saving…" : "Save date"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
@@ -3687,6 +3827,7 @@ function ComplianceCalendarSection({ onNavigate }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState(null); // null | "new" | custom item being edited
+  const [newPreset, setNewPreset] = useState(null); // prefill for the next "new" reminder, or null
   const [removeTarget, setRemoveTarget] = useState(null); // calendar item pending removal, or null
 
   async function load() {
@@ -3708,14 +3849,19 @@ function ComplianceCalendarSection({ onNavigate }) {
     try {
       const editing = modal && modal !== "new";
       const url = editing ? `${API_BASE}/api/client/calendar/${modal.id}` : `${API_BASE}/api/client/calendar`;
-      const body = { ...form, recurrenceMonths: form.recurrenceMonths ? Number(form.recurrenceMonths) : null };
+      // Rescheduling a non-custom item only ever sends a due date — the
+      // backend rejects/ignores the rest for those source types anyway, but
+      // sending just the one field keeps the intent obvious here too.
+      const body = editing && modal.sourceType !== "custom"
+        ? { dueDate: form.dueDate }
+        : { ...form, recurrenceMonths: form.recurrenceMonths ? Number(form.recurrenceMonths) : null };
       const res = await authFetch(url, {
         method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (res.status === 402) { setModal(null); return showUpgradePrompt(data); }
+      if (res.status === 402) { setModal(null); setNewPreset(null); return showUpgradePrompt(data); }
       if (!res.ok) throw new Error(data.error || "Could not save that reminder.");
-      setModal(null);
+      setModal(null); setNewPreset(null);
       await load();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -3746,10 +3892,11 @@ function ComplianceCalendarSection({ onNavigate }) {
   const customCount = items.filter(i => i.sourceType === "custom").length;
   const atCap = cap != null && customCount >= cap;
 
-  function handleAddClick() {
+  function handleAddClick(preset = null) {
     if (atCap) {
       return showUpgradePrompt({ error: `You've used all ${cap} custom reminder slots on your current plan.`, code: "LIMIT_REACHED", resource: "calendarEntries", currentTier: null });
     }
+    setNewPreset(preset);
     setModal("new");
   }
 
@@ -3768,8 +3915,13 @@ function ComplianceCalendarSection({ onNavigate }) {
             {customCount} of {cap} custom reminders used
           </span>
         )}
-        <button onClick={handleAddClick}
-          style={{marginLeft:"auto",padding:"7px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+        <button onClick={()=>handleAddClick({category:"audit",recurrenceMonths:"12"})}
+          style={{marginLeft:"auto",padding:"7px 16px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:8,color:C.textSec,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+          + Audit / assessment reminder
+        </button>
+        <button onClick={()=>handleAddClick()}
+          style={{padding:"7px 16px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
             borderRadius:8,color:C.accentText,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
           + Add reminder
         </button>
@@ -3802,7 +3954,7 @@ function ComplianceCalendarSection({ onNavigate }) {
                 will show up here automatically as you use those features — or add your own reminder for
                 things like insurance renewals or audit dates.
               </p>
-              <button onClick={handleAddClick}
+              <button onClick={()=>handleAddClick()}
                 style={{padding:"9px 18px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
                   borderRadius:8,color:C.accentText,fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
                 + Add your first reminder
@@ -3826,15 +3978,24 @@ function ComplianceCalendarSection({ onNavigate }) {
                         </div>
                       </div>
                       <span style={{color:tone.color,fontWeight:700,fontSize:12,whiteSpace:"nowrap"}}>{tone.label}</span>
-                      {item.sourceType === "custom" ? (
-                        <div style={{display:"flex",gap:6}}>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {item.sourceType === "custom" && (
                           <button onClick={()=>completeEntry(item)} disabled={busy} style={miniBtn(C.green,busy)}>Mark done</button>
-                          <button onClick={()=>setModal(item)} disabled={busy} style={miniBtn(C.accent,busy)}>Edit</button>
-                          <button onClick={()=>setRemoveTarget(item)} disabled={busy} style={miniBtn(C.textMut,busy)}>Remove</button>
-                        </div>
-                      ) : item.detailPath ? (
-                        <button onClick={()=>onNavigate && onNavigate(item.detailPath)} style={miniBtn(C.accent,false)}>View</button>
-                      ) : null}
+                        )}
+                        {item.editable && (
+                          <button onClick={()=>setModal(item)} disabled={busy} style={miniBtn(C.accent,busy)}>
+                            {item.sourceType === "custom" ? "Edit" : "Reschedule"}
+                          </button>
+                        )}
+                        {item.detailPath && (
+                          <button onClick={()=>onNavigate && onNavigate(item.detailPath)} style={miniBtn(C.textSec,false)}>View</button>
+                        )}
+                        {item.removable && (
+                          <button onClick={()=>setRemoveTarget(item)} disabled={busy} style={miniBtn(C.textMut,busy)}>
+                            {item.sourceType === "policy" ? "Unassign" : item.sourceType === "training" ? "Waive" : "Remove"}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 );
@@ -3847,9 +4008,11 @@ function ComplianceCalendarSection({ onNavigate }) {
       {modal && (
         <CalendarEntryModal
           initial={modal === "new" ? null : modal}
+          newPreset={newPreset}
+          dueDateOnly={modal !== "new" && modal.sourceType !== "custom"}
           busy={busy}
           onSave={saveEntry}
-          onClose={()=>setModal(null)}
+          onClose={()=>{ setModal(null); setNewPreset(null); }}
         />
       )}
 
@@ -3857,9 +4020,14 @@ function ComplianceCalendarSection({ onNavigate }) {
         open={!!removeTarget}
         onClose={()=>setRemoveTarget(null)}
         onConfirm={()=>removeEntry(removeTarget)}
-        title="Remove this reminder?"
-        message={`Remove "${removeTarget?.title || ""}"?`}
-        confirmLabel="Remove"
+        title={removeTarget?.sourceType === "policy" ? "Unassign this policy?"
+          : removeTarget?.sourceType === "training" ? "Waive this training?" : "Remove this reminder?"}
+        message={removeTarget?.sourceType === "policy"
+          ? `"${removeTarget?.notes || removeTarget?.title || ""}" will no longer be pending for this person.`
+          : removeTarget?.sourceType === "training"
+          ? `"${removeTarget?.title || ""}" will be marked waived instead of overdue.`
+          : `Remove "${removeTarget?.title || ""}"?`}
+        confirmLabel={removeTarget?.sourceType === "policy" ? "Unassign" : removeTarget?.sourceType === "training" ? "Waive" : "Remove"}
         danger
       />
     </div>
@@ -7768,9 +7936,20 @@ function TeamRosterPanel() {
   );
 }
 
-function PolicyAssignModal({ policy, onClose, onAssigned }) {
+function defaultAckDueDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 14);
+  return d.toISOString().slice(0, 10);
+}
+
+// Assigns one or more policies (bulk "Assign selected" or the single-policy
+// "👥 Assign" button, which just passes a one-item array) to one or more
+// learners, fanning out one POST per policy — the backend route itself
+// already handles multiple learners per call.
+function PolicyAssignModal({ policies, onClose, onAssigned }) {
   const [learners, setLearners] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [dueDate, setDueDate] = useState(defaultAckDueDate());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -7790,17 +7969,21 @@ function PolicyAssignModal({ policy, onClose, onAssigned }) {
     if (!selectedIds.length) return;
     setBusy(true); setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/api/client/policies/${policy.id}/assign`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ learnerIds: selectedIds }),
-      });
-      const data = await res.json();
-      if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
-      if (!res.ok) throw new Error(data.error || "Could not assign this policy.");
+      for (const policy of policies) {
+        const res = await authFetch(`${API_BASE}/api/client/policies/${policy.id}/assign`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ learnerIds: selectedIds, dueDate: dueDate ? new Date(dueDate).toISOString() : undefined }),
+        });
+        const data = await res.json();
+        if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
+        if (!res.ok) throw new Error(data.error || `Could not assign "${policy.policyName}".`);
+      }
       onAssigned();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
+
+  const multi = policies.length > 1;
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(3,7,15,0.72)",display:"flex",
@@ -7810,7 +7993,8 @@ function PolicyAssignModal({ policy, onClose, onAssigned }) {
         borderRadius:14,padding:24,width:"100%",maxWidth:440,maxHeight:"80vh",overflowY:"auto"}}>
         <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>Assign for acknowledgment</div>
         <p style={{fontSize:12.5,color:C.textSec,margin:"0 0 14px"}}>
-          {policy.policyName} — pick who needs to read and confirm it.
+          {multi ? `${policies.length} policies` : policies[0]?.policyName} — pick who needs to read
+          and confirm {multi ? "them" : "it"}. They'll get an email with a link right away.
         </p>
 
         {error && (
@@ -7823,16 +8007,31 @@ function PolicyAssignModal({ policy, onClose, onAssigned }) {
             Your team roster is empty. Add people to your roster above first, then come back to assign.
           </p>
         ) : (
-          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
-            {learners.map(l => (
-              <label key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
-                background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontSize:12.5}}>
-                <input type="checkbox" checked={selectedIds.includes(l.id)} onChange={()=>toggle(l.id)}/>
-                <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
-                <span style={{color:C.textMut}}>{l.email}</span>
-              </label>
-            ))}
-          </div>
+          <>
+            <div style={{display:"flex",alignItems:"center",marginBottom:6}}>
+              <button onClick={() => setSelectedIds(selectedIds.length === learners.length ? [] : learners.map(l => l.id))}
+                style={{marginLeft:"auto",padding:"3px 10px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:6,color:C.textSec,fontSize:11.5,cursor:"pointer"}}>
+                {selectedIds.length === learners.length ? "Clear all" : "Select all"}
+              </button>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+              {learners.map(l => (
+                <label key={l.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",
+                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontSize:12.5}}>
+                  <input type="checkbox" checked={selectedIds.includes(l.id)} onChange={()=>toggle(l.id)}/>
+                  <span style={{color:C.text,fontWeight:600}}>{l.name}</span>
+                  <span style={{color:C.textMut}}>{l.email}</span>
+                </label>
+              ))}
+            </div>
+            <label style={{display:"block",fontSize:11.5,color:C.textSec,marginBottom:16}}>
+              Due date
+              <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+                style={{display:"block",marginTop:4,padding:"7px 10px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:7,color:C.text,fontSize:12.5}}/>
+            </label>
+          </>
         )}
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -7866,13 +8065,15 @@ function PolicyLibrarySection({ assessment }) {
   const [ackRows, setAckRows] = useState([]); // full acknowledgment rows, for the per-person breakdown
   const [expandedAckPolicyId, setExpandedAckPolicyId] = useState(null);
   const [ackActionBusy, setAckActionBusy] = useState(null); // id of the row currently being acted on
-  const [assignModalPolicy, setAssignModalPolicy] = useState(null); // {id, policyName} | null
+  const [assignModalPolicies, setAssignModalPolicies] = useState(null); // [{id, policyName}, ...] | null
   const [unassignTarget, setUnassignTarget] = useState(null); // acknowledgment row pending unassign, or null
   const [deletePolicyTarget, setDeletePolicyTarget] = useState(null); // {id, name} pending delete, or null
   const [recentlyDeletedPolicies, setRecentlyDeletedPolicies] = useState([]); // [{id,name}] this session, for quick Undo
   const [editingPolicy, setEditingPolicy] = useState(false);
   const [policyEditForm, setPolicyEditForm] = useState({ policyName: "", content: "" });
   const [savingPolicy, setSavingPolicy] = useState(false);
+  const [selectedPolicyIds, setSelectedPolicyIds] = useState([]); // bulk download/assign selection
+  const [bulkDownloading, setBulkDownloading] = useState(false);
 
   async function loadAcknowledgments() {
     if (!hasRoster) return;
@@ -8093,12 +8294,12 @@ function PolicyLibrarySection({ assessment }) {
     return html;
   }
 
-  function downloadAsWord() {
-    if (!generated?.content) return;
-    const body = mdToHtml(generated.content);
+  function downloadPolicyDoc(doc) {
+    if (!doc?.content) return;
+    const body = mdToHtml(doc.content);
     const companyName = assessment?.company?.name || "";
     const full = buildBrandedWordDoc({
-      title: generated.policyName,
+      title: doc.policyName,
       docKicker: "Security Policy",
       subtitle: companyName ? `Prepared for ${companyName}` : "",
       bodyHtml: body,
@@ -8107,13 +8308,49 @@ function PolicyLibrarySection({ assessment }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${generated.policyName.replace(/\s+/g, "_")}.doc`;
-    a.click();
-    URL.revokeObjectURL(url);
+    a.download = `${doc.policyName.replace(/\s+/g, "_")}.doc`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  function downloadAsWord() {
+    downloadPolicyDoc(generated);
+  }
+
+  // "Download all" (nothing selected) or "Download selected" — fetches each
+  // saved policy's full content (the list endpoint omits it) and triggers one
+  // .doc download per policy, staggered slightly so the browser doesn't treat
+  // a burst of a.click() calls as a pop-up-style multi-download to block.
+  async function downloadPolicies() {
+    const targets = selectedPolicyIds.length
+      ? savedPolicies.filter(p => selectedPolicyIds.includes(p.id))
+      : savedPolicies;
+    if (!targets.length) return;
+    setBulkDownloading(true);
+    try {
+      for (const p of targets) {
+        try {
+          const res = await authFetch(`${API_BASE}/api/policies/${p.id}`);
+          if (!res.ok) continue;
+          const doc = await res.json();
+          downloadPolicyDoc(doc);
+        } catch { /* skip this one, keep going */ }
+        await new Promise(r => setTimeout(r, 250));
+      }
+    } finally {
+      setBulkDownloading(false);
+    }
+  }
+
+  function togglePolicySelected(id) {
+    setSelectedPolicyIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
   }
 
   const categories = ["All", ...new Set(catalog.map(p => p.category))];
   const filtered = categoryFilter === "All" ? catalog : catalog.filter(p => p.category === categoryFilter);
+  // Which catalog templates already have a generated doc — turns the catalog
+  // from "browse templates" into "what's done, what's still needed."
+  const savedByPolicyId = new Map(savedPolicies.map(p => [p.policyId, p]));
 
   const allFieldsFilled = selected && selected.fields.every(f => answers[f.id]?.trim());
 
@@ -8287,13 +8524,38 @@ function PolicyLibrarySection({ assessment }) {
 
       {/* My Saved Policies */}
       <div style={{marginBottom:28}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
           <SectionLabel text="My Policies"/>
           {savedPolicies.length > 0 && (
             <span style={{fontSize:11,color:C.textMut,
               padding:"2px 10px",background:C.surface,borderRadius:20}}>
               {savedPolicies.length} saved
             </span>
+          )}
+          {savedPolicies.length > 1 && (
+            <>
+              <button onClick={() => setSelectedPolicyIds(
+                  selectedPolicyIds.length === savedPolicies.length ? [] : savedPolicies.map(p => p.id))}
+                style={{marginLeft:"auto",padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+                {selectedPolicyIds.length === savedPolicies.length ? "Clear all" : "Select all"}
+              </button>
+              {canDownload && (
+                <button onClick={downloadPolicies} disabled={bulkDownloading}
+                  style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:7,color:C.textSec,fontSize:12,cursor:bulkDownloading?"wait":"pointer"}}>
+                  {bulkDownloading ? "Downloading…" : selectedPolicyIds.length ? `⬇ Download selected (${selectedPolicyIds.length})` : "⬇ Download all"}
+                </button>
+              )}
+              {hasRoster && selectedPolicyIds.length > 0 && (
+                <button onClick={() => setAssignModalPolicies(
+                    savedPolicies.filter(p => selectedPolicyIds.includes(p.id)).map(p => ({ id: p.id, policyName: p.policyName })))}
+                  style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+                  👥 Assign selected ({selectedPolicyIds.length})
+                </button>
+              )}
+            </>
           )}
         </div>
 
@@ -8320,6 +8582,10 @@ function PolicyLibrarySection({ assessment }) {
               return (
               <Card key={p.id} style={{padding:"14px 18px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                  {savedPolicies.length > 1 && (
+                    <input type="checkbox" checked={selectedPolicyIds.includes(p.id)}
+                      onChange={() => togglePolicySelected(p.id)}/>
+                  )}
                   <span style={{fontSize:20}}>📄</span>
                   <div style={{flex:1,minWidth:160}}>
                     <div style={{color:C.text,fontWeight:600,fontSize:14}}>{p.policyName}</div>
@@ -8335,7 +8601,7 @@ function PolicyLibrarySection({ assessment }) {
                     </div>
                   </div>
                   {hasRoster && (
-                    <button onClick={() => setAssignModalPolicy({ id: p.id, policyName: p.policyName })}
+                    <button onClick={() => setAssignModalPolicies([{ id: p.id, policyName: p.policyName }])}
                       style={{padding:"8px 14px",background:C.surface,border:`1px solid ${C.border}`,
                         borderRadius:8,color:C.textSec,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
                       👥 Assign
@@ -8399,9 +8665,9 @@ function PolicyLibrarySection({ assessment }) {
         )}
       </div>
 
-      {assignModalPolicy && (
-        <PolicyAssignModal policy={assignModalPolicy} onClose={()=>setAssignModalPolicy(null)}
-          onAssigned={()=>{ setAssignModalPolicy(null); loadAcknowledgments(); }}/>
+      {assignModalPolicies && (
+        <PolicyAssignModal policies={assignModalPolicies} onClose={()=>setAssignModalPolicies(null)}
+          onAssigned={()=>{ setAssignModalPolicies(null); setSelectedPolicyIds([]); loadAcknowledgments(); }}/>
       )}
 
       <SectionLabel text="Policy Library — Request a Custom Policy"/>
@@ -8425,24 +8691,31 @@ function PolicyLibrarySection({ assessment }) {
         <Spinner/>
       ) : (
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
-          {filtered.map(p => (
-            <Card key={p.id} style={{cursor:"pointer",padding:"16px 18px"}}
-              onClick={() => openPolicy(p)}>
+          {filtered.map(p => {
+            const saved = savedByPolicyId.get(p.id);
+            return (
+            <Card key={p.id} style={{cursor:"pointer",padding:"16px 18px",
+              ...(saved ? {borderColor:C.greenText} : {})}}
+              onClick={() => saved ? openSavedPolicy(saved.id) : openPolicy(p)}>
               <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8}}>
                 <span style={{fontSize:20}}>📄</span>
                 <div style={{flex:1}}>
                   <div style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.name)}</div>
-                  <div style={{marginTop:4}}><Badge label={p.category} color={C.purple}/></div>
+                  <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                    <Badge label={p.category} color={C.purple}/>
+                    {saved && <Badge label="✓ Generated" color={C.green}/>}
+                  </div>
                 </div>
               </div>
               <p style={{color:C.textSec,fontSize:12,margin:"0 0 10px",lineHeight:1.6}}>
                 {safeText(p.description)}
               </p>
-              <div style={{color:C.accentText,fontSize:12,fontWeight:600}}>
-                Request this policy →
+              <div style={{color:saved?C.greenText:C.accentText,fontSize:12,fontWeight:600}}>
+                {saved ? "✓ View / Download →" : "Request this policy →"}
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -8611,7 +8884,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     // equivalent (see generateFreePreview/riskEngine.js), so this renders
     // whenever the data exists, on any tier.
     priorities: results?.priorities?.priorities?.length ? <PrioritiesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/> : lockedSections.priorities,
-    policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
+    policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated} onNavigate={setSection}/>,
     workflows:  !hasWorkflows ? lockedSections.workflows : <WorkflowsSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     // The live compliance engine, not the AI's prose. ComplianceSection rendered
     // `results.compliance.frameworks` — text generated during program creation —

@@ -2458,7 +2458,7 @@ registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extract
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });
 registerTrainingProgramRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds, callAI, extractJson, emailSendLimiter });
 registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, gate, emailSendLimiter });
-registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient });
+registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient, logClientAction });
 registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSendLimiter });
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate, callClaudeText, aiLimiter });
