@@ -17061,7 +17061,9 @@ function AnalystMastermindPanel({ mmOpen, setMmOpen, active, mmThread, mmThinkin
 
           {/* Thread */}
           <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
-            {mmThread.map((m,i)=>(
+            {mmThread.map((m,i)=>{
+              const { prose, proposal } = m.from === "mm" ? extractProposedEdit(m.text) : { prose: m.text, proposal: null };
+              return (
               <div key={i} style={{alignSelf:m.from==="analyst"?"flex-end":"flex-start",maxWidth:"88%"}}>
                 {m.from==="mm" && (
                   <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
@@ -17071,11 +17073,13 @@ function AnalystMastermindPanel({ mmOpen, setMmOpen, active, mmThread, mmThinkin
                   color:m.from==="analyst"?SOC.bg:SOC.text,
                   border:m.from==="analyst"?"none":`1px solid ${SOC.border}`}}>
                   {m.from==="analyst"
-                    ? m.text
-                    : <ChatMarkdown text={m.text} color={SOC.text} mutedColor={SOC.textSec}/>}
+                    ? prose
+                    : <ChatMarkdown text={prose} color={SOC.text} mutedColor={SOC.textSec}/>}
+                  {proposal && <ProposedEditCard proposal={proposal} scope={{staff:true, clientId: proposal.clientId}}/>}
                 </div>
               </div>
-            ))}
+              );
+            })}
             {mmThinking && (
               <div style={{alignSelf:"flex-start"}}>
                 <div style={{fontSize:9,color:SOC.purple,marginBottom:3,letterSpacing:0.5,fontWeight:700}}>✦ MASTERMIND</div>
@@ -21096,16 +21100,20 @@ function MastermindConsole({ onClose }) {
         {tab==="chat" && (
           <div>
             <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
-              {msgs.map((m,i)=>(
+              {msgs.map((m,i)=>{
+                const { prose, proposal } = m.role === "assistant" ? extractProposedEdit(m.content) : { prose: m.content, proposal: null };
+                return (
                 <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
                   <div style={{maxWidth:"80%",padding:"11px 15px",borderRadius:12,fontSize:13.5,lineHeight:1.55,
                     background:m.role==="user"?`${C.accent}1F`:C.card,
                     border:`1px solid ${m.role==="user"?C.accent+"44":C.border}`,
                     color:C.text}}>
-                    {m.role==="user" ? m.content : <ChatMarkdown text={m.content} color={C.text} mutedColor={C.textSec}/>}
+                    {m.role==="user" ? prose : <ChatMarkdown text={prose} color={C.text} mutedColor={C.textSec}/>}
+                    {proposal && <ProposedEditCard proposal={proposal} scope={{staff:true, clientId: proposal.clientId}}/>}
                   </div>
                 </div>
-              ))}
+                );
+              })}
               {thinking && <div style={{color:C.textMut,fontSize:13}}>Mastermind is thinking…</div>}
             </div>
             <div style={{display:"flex",gap:8,position:"sticky",bottom:16}}>
@@ -22142,15 +22150,66 @@ function SupportCenter({ onClose, onOpenMastermind }) {
 // gesture that calls the real edit route (the same one a manual edit uses),
 // so actorRole/actorUserId on the resulting write are always the human who
 // clicked, never the AI — the CLAUDE.md "AI advises, humans act" boundary.
-const PROPOSED_EDIT_ROUTES = {
-  learner: { client: id => `/api/training-program/learners/${id}`,
-    staff: (id, cid) => `/api/staff/clients/${cid}/training-program/learners/${id}` },
-  trainingAssignment: { client: id => `/api/training-program/assignments/${id}`,
-    staff: (id, cid) => `/api/staff/clients/${cid}/training-program/assignments/${id}` },
-  policyDoc: { client: id => `/api/policies/${id}`,
-    staff: (id, cid) => `/api/staff/clients/${cid}/policies/${id}` },
-  trainingCurriculum: { client: id => `/api/training/${id}`,
-    staff: (id, cid) => `/api/staff/clients/${cid}/training/${id}` },
+// Each entity type maps operation ("edit"/"create"/"delete") to how to turn a
+// proposal into one authFetch call. `scope` is "client", or
+// {staff:true, clientId} when admin/analyst is chatting on a client's behalf.
+// The 4 original entity types have genuinely separate staff routes
+// (staffRoutes.js); calendarEntry/policyAssignment reuse the SAME
+// client-facing route for both scopes — those routes already accept a
+// userId/clientId param to act on a client's behalf, the same mechanism a
+// staff member driving the UI directly uses (see resolveTarget in
+// complianceCalendarRoutes.js, resolveClientScope in
+// policyAcknowledgmentRoutes.js). evidenceLink needs no scope distinction at
+// all — ownership is derived from the evidence row itself (canAccess in
+// evidenceRoutes.js already permits admin/owning-analyst).
+const PROPOSED_EDIT_HANDLERS = {
+  learner: { edit: {
+    method: "PATCH",
+    url: (id, scope) => scope.staff
+      ? `/api/staff/clients/${encodeURIComponent(scope.clientId)}/training-program/learners/${encodeURIComponent(id)}`
+      : `/api/training-program/learners/${encodeURIComponent(id)}`,
+  } },
+  trainingAssignment: { edit: {
+    method: "PATCH",
+    url: (id, scope) => scope.staff
+      ? `/api/staff/clients/${encodeURIComponent(scope.clientId)}/training-program/assignments/${encodeURIComponent(id)}`
+      : `/api/training-program/assignments/${encodeURIComponent(id)}`,
+  } },
+  policyDoc: { edit: {
+    method: "PATCH",
+    url: (id, scope) => scope.staff
+      ? `/api/staff/clients/${encodeURIComponent(scope.clientId)}/policies/${encodeURIComponent(id)}`
+      : `/api/policies/${encodeURIComponent(id)}`,
+  } },
+  trainingCurriculum: { edit: {
+    method: "PATCH",
+    url: (id, scope) => scope.staff
+      ? `/api/staff/clients/${encodeURIComponent(scope.clientId)}/training/${encodeURIComponent(id)}`
+      : `/api/training/${encodeURIComponent(id)}`,
+  } },
+  calendarEntry: {
+    create: {
+      method: "POST", url: () => `/api/client/calendar`,
+      body: (fields, scope) => scope.staff ? { ...fields, userId: scope.clientId } : fields,
+    },
+    edit: {
+      method: "PATCH", url: id => `/api/client/calendar/${encodeURIComponent(id)}`,
+      body: (fields, scope) => scope.staff ? { ...fields, userId: scope.clientId } : fields,
+    },
+    delete: {
+      method: "DELETE",
+      url: (id, scope) => `/api/client/calendar/${encodeURIComponent(id)}${scope.staff ? `?userId=${encodeURIComponent(scope.clientId)}` : ""}`,
+    },
+  },
+  policyAssignment: {
+    create: {
+      method: "POST", url: id => `/api/client/policies/${encodeURIComponent(id)}/assign`,
+      body: (fields, scope) => scope.staff ? { ...fields, clientId: scope.clientId } : fields,
+    },
+  },
+  evidenceLink: {
+    create: { method: "POST", url: id => `/api/evidence/${encodeURIComponent(id)}/link` },
+  },
 };
 
 function extractProposedEdit(content) {
@@ -22163,22 +22222,44 @@ function extractProposedEdit(content) {
   return { prose, proposal };
 }
 
+const PROPOSAL_ENTITY_LABEL = {
+  learner: "team member", trainingAssignment: "training assignment", policyDoc: "policy",
+  trainingCurriculum: "training curriculum", calendarEntry: "calendar reminder",
+  policyAssignment: "policy assignment", evidenceLink: "evidence link",
+};
+// Fallback for a proposal that arrives (or was cached from before this
+// existed) without a model-supplied `summary`.
+function describeProposal(proposal) {
+  const op = proposal.operation || "edit";
+  const label = PROPOSAL_ENTITY_LABEL[proposal.entityType] || proposal.entityType;
+  return op === "create" ? `Create a new ${label}.` : op === "delete" ? `Delete this ${label}.` : `Edit this ${label}.`;
+}
+
 // `scope`: "client", or {staff:true, clientId} for admin/analyst chatting on a client's behalf.
 function ProposedEditCard({ proposal, scope = "client", onApplied }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [applied, setApplied] = useState(false);
-  const routeFor = proposal ? PROPOSED_EDIT_ROUTES[proposal.entityType] : null;
-  if (!proposal || !routeFor || !proposal.entityId || !proposal.fields) return null;
+  const isStaff = !!(scope && scope.staff);
+  const op = proposal?.operation || "edit";
+  const handler = proposal ? PROPOSED_EDIT_HANDLERS[proposal.entityType]?.[op] : null;
+  // Every operation needs a real entityId except creating a brand-new custom
+  // calendar reminder, which has nothing to reference yet.
+  const needsId = !(op === "create" && proposal?.entityType === "calendarEntry");
+  if (!proposal || !handler) return null;
+  if (needsId && !proposal.entityId) return null;
+  if (isStaff && !scope.clientId) return null; // can't safely target a client without one
 
   async function apply() {
     setBusy(true); setErr(null);
     try {
-      const url = (scope && scope.staff) ? routeFor.staff(proposal.entityId, scope.clientId) : routeFor.client(proposal.entityId);
-      const res = await authFetch(`${API_BASE}${url}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(proposal.fields),
-      });
-      const data = await res.json();
+      const url = handler.url(proposal.entityId, scope);
+      const opts = { method: handler.method, headers: { "Content-Type": "application/json" } };
+      if (handler.method !== "DELETE") {
+        opts.body = JSON.stringify((handler.body ? handler.body(proposal.fields || {}, scope) : proposal.fields) || {});
+      }
+      const res = await authFetch(`${API_BASE}${url}`, opts);
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not apply that change.");
       setApplied(true);
       onApplied?.(data);
@@ -22188,10 +22269,15 @@ function ProposedEditCard({ proposal, scope = "client", onApplied }) {
 
   return (
     <div style={{marginTop:8,padding:"10px 12px",background:C.surface,border:`1px solid ${C.accent}44`,borderRadius:8}}>
-      <div style={{fontSize:11,color:C.accentText,fontWeight:700,marginBottom:6,letterSpacing:0.5}}>PROPOSED CHANGE</div>
-      {Object.entries(proposal.fields).map(([k,v]) => (
-        <div key={k} style={{fontSize:12.5,color:C.textSec,marginBottom:2}}>
-          <strong style={{color:C.text}}>{k}</strong>: {String(v)}
+      <div style={{fontSize:11,color:C.accentText,fontWeight:700,marginBottom:6,letterSpacing:0.5}}>
+        PROPOSED {op === "create" ? "ACTION" : op === "delete" ? "DELETE" : "CHANGE"}
+      </div>
+      <div style={{fontSize:12.5,color:C.text,marginBottom:proposal.fields && Object.keys(proposal.fields).length ? 6 : 0}}>
+        {safeText(proposal.summary) || describeProposal(proposal)}
+      </div>
+      {proposal.fields && Object.entries(proposal.fields).map(([k,v]) => (
+        <div key={k} style={{fontSize:11.5,color:C.textSec,marginBottom:2}}>
+          <strong style={{color:C.textSec}}>{k}</strong>: {Array.isArray(v) ? v.join(", ") : String(v)}
         </div>
       ))}
       {err && <div style={{fontSize:12,color:C.redText,marginTop:6}}>{err}</div>}
@@ -22201,7 +22287,7 @@ function ProposedEditCard({ proposal, scope = "client", onApplied }) {
         <button onClick={apply} disabled={busy}
           style={{marginTop:8,padding:"6px 16px",background:C.accent,border:"none",borderRadius:7,
             color:"#04121F",fontSize:12,fontWeight:700,cursor:busy?"default":"pointer",opacity:busy?0.6:1}}>
-          {busy ? "Applying…" : "Apply this change"}
+          {busy ? "Applying…" : op === "delete" ? "Apply — delete" : op === "create" ? "Apply — create" : "Apply this change"}
         </button>
       )}
     </div>

@@ -38,6 +38,33 @@ import { manualAsText } from "./helpManual.js";
 
 const nowIso = () => new Date().toISOString();
 
+// Shared by both staff-facing chats (admin, analyst) — identical mechanism to
+// the client-facing chat's own proposed_edit block (see clientSnapshot's
+// callers below), except every staff proposal must name WHICH client it
+// targets, since one staff conversation can span many clients. The human's
+// Apply click still fires the real PATCH/POST/DELETE through the client's
+// own routes (with a userId/clientId identifying the target the same way a
+// staff member driving the UI directly would) — never a path that writes
+// without that click, per CLAUDE.md's "AI advises, humans act" boundary.
+function staffProposedEditInstructions(roleLabel) {
+  return `PROPOSING A SPECIFIC ACTION — the one exception to "advisory only" being purely descriptive: if fixing something for ONE client means a single concrete edit, create, or delete on one of their records, first call get_client_editable_records for that client to get real ids (never invent one), then end your reply with EXACTLY ONE fenced block:
+\`\`\`proposed_edit
+{"operation":"edit"|"create"|"delete","entityType":"learner"|"trainingAssignment"|"policyDoc"|"trainingCurriculum"|"calendarEntry"|"policyAssignment"|"evidenceLink","clientId":"<the real client id get_client_editable_records returned>","entityId":"<a real id from that tool's result, or omit for create>","fields":{...},"summary":"<one short plain-English sentence describing exactly what Apply will do>"}
+\`\`\`
+This still never performs the action — it renders as a card with an "Apply" button ${roleLabel} must click themselves for anything to actually change, and the resulting record shows ${roleLabel} (not Mastermind) as the actor. clientId is REQUIRED on every proposal here — never omit it, and never mix an id from one client with a clientId naming a different one.
+
+Field shapes per entity type:
+- "learner" — edit only. fields = {department?, status?}.
+- "trainingAssignment" — edit only. fields = {dueDate?} (ISO date).
+- "policyDoc" — edit only. fields = {policyName?, content?}.
+- "trainingCurriculum" — edit only. fields = {overview?}.
+- "calendarEntry" — a CUSTOM reminder only (never a system-surfaced due date, which uses its own entity type above): create (no entityId; fields = {title, category: "insurance"|"license"|"audit"|"contract"|"regulatory"|"other", dueDate (ISO), recurrenceMonths?, notes?}), edit (entityId = a customCalendarEntries id; fields = {dueDate}), or delete (entityId = a customCalendarEntries id, no fields).
+- "policyAssignment" — create only. entityId = a policies id (the policy to assign). fields = {learnerIds: [...ids], dueDate?}.
+- "evidenceLink" — create only. entityId = an evidence id (the item to reuse). fields = {kind: "task", refId: "<an openTasks id>"}.
+
+Omit the block entirely for anything broader than one concrete action on one record — just give the advice in prose.`;
+}
+
 // Policy library & sign-off status — without this, Mastermind could explain
 // the acknowledgment feature from the manual but never confirm whether a
 // client's actual policies have gone out for sign-off or been read. Used by
@@ -397,6 +424,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         clientIdOrEmail: { type: "string", description: "Optional. If given, returns that client's vendor list." },
       }, required: [] },
     },
+    {
+      name: "get_client_editable_records",
+      description: "Get the real record ids for one client needed to propose a specific edit/create/delete on their behalf (learners, training assignments, policy documents, saved curricula, custom calendar reminders, evidence items, open tasks). Call this BEFORE writing a proposed_edit block — never invent an id. Read-only.",
+      input_schema: { type: "object", properties: {
+        clientIdOrEmail: { type: "string", description: "The client." },
+      }, required: ["clientIdOrEmail"] },
+    },
   ];
 
   // The most recent report from each host. An agent reports repeatedly; using
@@ -741,6 +775,28 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         }
         return { overdueQueue: queue };
       }
+      case "get_client_editable_records": {
+        const u = resolveClient(input.clientIdOrEmail);
+        if (!u) return { error: "Client not found." };
+        const learners = (db.data.learners || []).filter(l => l.clientUserId === u.id);
+        const assigns = (db.data.trainingAssignments || []).filter(a => a.clientUserId === u.id);
+        const policies = (db.data.policyDocs || []).filter(p => p.userId === u.id);
+        const curricula = (db.data.trainingPrograms || []).filter(t => t.userId === u.id);
+        const customEntries = (db.data.complianceCalendarEntries || []).filter(e => e.userId === u.id && !e.completedAt);
+        const evidence = (db.data.evidence || []).filter(e => e.ownerUserId === u.id);
+        const openTasks = (db.data.tasks || []).filter(t => t.ownerUserId === u.id && !["done", "cancelled"].includes(t.status));
+        return {
+          client: u.companyName || u.email, clientId: u.id,
+          learners: learners.slice(0, 50).map(l => ({ id: l.id, name: l.name, email: l.email, department: l.department || "", status: l.status })),
+          trainingAssignments: assigns.slice(0, 50).map(a => ({ id: a.id, title: a.title, learnerId: a.learnerId, dueDate: a.dueDate, status: a.status })),
+          policies: policies.slice(0, 50).map(p => ({ id: p.id, policyName: p.policyName })),
+          curricula: curricula.slice(0, 20).map(t => ({ id: t.id, overview: t.curriculum?.overview || "" })),
+          customCalendarEntries: customEntries.slice(0, 50).map(e => ({ id: `custom:${e.id}`, title: e.title, category: e.category, dueDate: e.dueDate })),
+          evidence: evidence.slice(0, 50).map(e => ({ id: e.id, title: e.title, kind: e.kind, uploadedAt: e.uploadedAt })),
+          openTasks: openTasks.slice(0, 50).map(t => ({ id: t.id, title: t.title, priority: t.priority, dueDate: t.dueDate })),
+          note: "Use clientId as the proposed_edit block's clientId field. Never invent an id not listed here.",
+        };
+      }
       case "list_recommendations": {
         let recs = (db.data.recommendations || []);
         if (input.clientIdOrEmail) {
@@ -810,7 +866,9 @@ You have read-only situational awareness of the whole platform: every account (a
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. Frame every remediation as concrete steps a human takes — the client's admin acts on their own systems, or an assigned analyst acts with the client's permission. When you spot something actionable (e.g. an at-risk endpoint, an outdated agent, an overdue recommendation), say so clearly and explain what a human should do; the admin can then act through the platform's human-gated controls.
 
-Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand — list_clients, get_client_detail, list_recommendations, get_cve_exposure, get_darkweb_exposure, and recent_events. Prefer starting from the attached summary snapshot, and call a tool when you need specifics you don't already have (e.g. one client's full endpoint list or CVE detail). These tools only READ data; they never change anything.
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand — list_clients, get_client_detail, list_recommendations, get_cve_exposure, get_darkweb_exposure, get_client_editable_records, and recent_events. Prefer starting from the attached summary snapshot, and call a tool when you need specifics you don't already have (e.g. one client's full endpoint list or CVE detail). These tools only READ data; they never change anything.
+
+${staffProposedEditInstructions("the admin")}
 
 ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.stringify(snapshot)}` : "No platform context was attached to this message."}`;
 
@@ -872,7 +930,9 @@ You have read-only situational awareness of ONLY this analyst's assigned clients
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. The analyst acts with the client's permission through the platform's human-gated controls (recommendations, review decisions) — you help them decide what to do and in what order, you don't do it.
 
-Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand for any client assigned to this analyst — list_clients, get_client_detail, analyze_gaps, check_compliance, check_agent_evidence, and more. These tools only READ data scoped to this analyst's own clients; they never change anything and cannot reach a client outside their assignments.
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand for any client assigned to this analyst — list_clients, get_client_detail, analyze_gaps, check_compliance, check_agent_evidence, get_client_editable_records, and more. These tools only READ data scoped to this analyst's own clients; they never change anything and cannot reach a client outside their assignments — get_client_editable_records will simply fail to find a client that isn't assigned to this analyst, the same as every other tool here.
+
+${staffProposedEditInstructions("the analyst")}
 
 ${snapshot ? `Read-only snapshot of this analyst's assigned clients (current):\n${JSON.stringify(snapshot)}` : "No client context was attached to this message."}`;
 
@@ -1167,7 +1227,24 @@ Limit findings to 6 and recommendations to 5.`;
           open: open.length,
           overdue: open.filter(t => t.dueDate && new Date(t.dueDate) < new Date()).length,
           done: tasks.filter(t => t.status === "done").length,
-          topOpen: open.slice(0, 8).map(t => ({ title: t.title, priority: t.priority, status: t.status, dueDate: t.dueDate, controlId: t.controlId })),
+          // id included (unlike most summary lists this isn't shown to the
+          // client directly) so a "proposed_edit" evidenceLink block can
+          // target a real open task.
+          topOpen: open.slice(0, 8).map(t => ({ id: t.id, title: t.title, priority: t.priority, status: t.status, dueDate: t.dueDate, controlId: t.controlId })),
+        };
+      }
+    }
+
+    // ── Evidence on file (any tier — not capability-gated) ───────
+    // Real ids so a "proposed_edit" block can reuse an existing piece of
+    // evidence elsewhere (evidenceLink) instead of Mastermind suggesting the
+    // client re-upload something that's already on file.
+    {
+      const items = (db.data.evidence || []).filter(e => e.ownerUserId === userId);
+      if (items.length) {
+        snap.evidence = {
+          total: items.length,
+          list: items.slice(0, 50).map(e => ({ id: e.id, title: e.title, kind: e.kind, uploadedAt: e.uploadedAt })),
         };
       }
     }
@@ -1199,6 +1276,32 @@ Limit findings to 6 and recommendations to 5.`;
       // a Starter client's single free trial campaign isn't reflected here,
       // matching what the client's own phishing tab actually unlocks.
       snap.phishing = clientPhishingSummary(db, userId);
+    }
+
+    // ── Employee roster (Starter+, independent of paid training delivery) ──
+    // Policy assignment only needs employeeRoster, not full trainingDelivery
+    // — without this block, a client who has a roster but not the training
+    // add-on would have no learner ids for Mastermind to propose a
+    // policyAssignment against, even though the feature works for them.
+    if (has("employeeRoster")) {
+      const learners = (db.data.learners || []).filter(l => l.clientUserId === userId);
+      snap.roster = {
+        total: learners.length,
+        list: learners.slice(0, 50).map(l => ({ id: l.id, name: l.name, email: l.email, department: l.department || "", status: l.status })),
+      };
+    }
+
+    // ── Compliance calendar — custom reminders only (Starter+) ──
+    // Real ids so a "proposed_edit" block can create/edit/delete a custom
+    // reminder. Auto-surfaced items (vendor/policy/training/task due dates)
+    // are edited through their OWN entity type above, not through here.
+    if (has("complianceCalendar")) {
+      const entries = (db.data.complianceCalendarEntries || []).filter(e => e.userId === userId && !e.completedAt);
+      snap.calendar = {
+        customReminders: entries.slice(0, 50).map(e => ({
+          id: `custom:${e.id}`, title: e.title, category: e.category, dueDate: e.dueDate, recurrenceMonths: e.recurrenceMonths || null,
+        })),
+      };
     }
 
     // ── Vendor risk registry (Starter+) ─────────────────────────
@@ -1294,11 +1397,22 @@ TIER SCOPING — this is critical:
 ADVISORY ONLY:
 - You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
 
-PROPOSING A SPECIFIC EDIT — the one exception to "advisory only" being purely descriptive: if fixing something means changing one field on one existing record (a team member's department or status in trainingDelivery.learnerList, a training assignment's due date in trainingDelivery.assignmentList, a policy's name in policies.list, or a saved curriculum's overview/module text in curricula), you may end your reply with EXACTLY ONE fenced block in this form:
+PROPOSING A SPECIFIC ACTION — the one exception to "advisory only" being purely descriptive: if fixing something means one concrete edit, create, or delete on one record, you may end your reply with EXACTLY ONE fenced block in this form:
 \`\`\`proposed_edit
-{"entityType":"learner"|"trainingAssignment"|"policyDoc"|"trainingCurriculum","entityId":"<a real id from the data below>","fields":{"<field>":"<new value>"}}
+{"operation":"edit"|"create"|"delete","entityType":"<see below>","entityId":"<a real id from the data below, or omit for create>","fields":{...},"summary":"<one short plain-English sentence describing exactly what Apply will do>"}
 \`\`\`
-This still never performs the edit — it renders as a card with an "Apply" button that the client must click themselves for anything to actually change. Only ever use an id that appears in the client's data below; never invent one. Omit this block entirely for anything that isn't a single concrete field change on an existing record (e.g. creating something new, or a broad recommendation) — just give the advice in prose.
+This still never performs the action — it renders as a card with an "Apply" button that the client must click themselves for anything to actually change. Only ever use an id that appears in the client's data below; never invent one. Omit this block entirely for anything that isn't a single concrete action on an existing or new record (e.g. a broad recommendation, or something spanning multiple records) — just give the advice in prose.
+
+Entity types, what each operation means, and where their real ids live in the data below:
+- "learner" — edit only. entityId = a trainingDelivery.learnerList id or roster.list id. fields = {department?, status?}.
+- "trainingAssignment" — edit only. entityId = a trainingDelivery.assignmentList id. fields = {dueDate?} (ISO date).
+- "policyDoc" — edit only. entityId = a policies.list id. fields = {policyName?, content?}.
+- "trainingCurriculum" — edit only. entityId = a curricula id. fields = {overview?}.
+- "calendarEntry" — create, edit, or delete a CUSTOM calendar reminder (insurance renewal, license, audit date — not a system-surfaced due date, which is edited through its own entity type above). create: no entityId; fields = {title, category ("insurance"|"license"|"audit"|"contract"|"regulatory"|"other"), dueDate (ISO), recurrenceMonths?, notes?}. edit/delete: entityId = a calendar.customReminders id (looks like "custom:<uuid>"); edit fields = {dueDate} only.
+- "policyAssignment" — create only. entityId = a policies.list id (the policy to assign). fields = {learnerIds: [ids from roster.list or trainingDelivery.learnerList], dueDate?}.
+- "evidenceLink" — create only. entityId = an evidence.list id (the existing evidence item to reuse). fields = {kind: "task", refId: "<a task id from tasks.topOpen>"}.
+
+Never fabricate an id for any of these — if the data below doesn't contain a real id for what you want to propose, describe the action in prose instead and tell the client where to do it themselves.
 
 Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
 
