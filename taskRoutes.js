@@ -128,7 +128,7 @@ function publicTask(db, t) {
   };
 }
 
-function pushHistory(task, actorType, actorId, action, note) {
+export function pushHistory(task, actorType, actorId, action, note) {
   task.history = task.history || [];
   task.history.push({ at: nowIso(), actorType, actorId: actorId || null, action, note: note || "" });
 }

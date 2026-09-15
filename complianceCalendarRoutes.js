@@ -28,6 +28,7 @@ import { randomUUID } from "crypto";
 import { dueStatus, updateVendor } from "./vendorRiskService.js";
 import { getTier } from "./tiers.js";
 import { applyAssignmentEdit } from "./trainingProgramRoutes.js";
+import { pushHistory } from "./taskRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -263,6 +264,11 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
         }
         t.dueDate = req.body.dueDate || null;
         t.updatedAt = nowIso();
+        // Same history entry taskRoutes.js's own PATCH /api/tasks/:id writes
+        // for a dueDate change — a reschedule from the calendar shouldn't be
+        // invisible in the task's own audit trail.
+        const taskActorType = req.isAdmin ? "admin" : req.isAnalyst ? "analyst" : "client";
+        pushHistory(t, taskActorType, req.userId, "due_date", req.body.dueDate || "cleared");
       }
       await db.write();
       return res.json({ id: req.params.id, sourceType, dueDate: t.dueDate });
