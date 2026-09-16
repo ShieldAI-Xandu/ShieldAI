@@ -580,6 +580,7 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
   const [answers, setAnswers] = useState({});
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
   const q = clientId ? `?clientId=${encodeURIComponent(clientId)}` : "";
 
   useEffect(() => {
@@ -589,16 +590,19 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
   }, [apiBase, frameworkId, clientId]);
 
   async function save() {
-    setSaving(true);
+    setSaving(true); setError(null);
     try {
       const res = await authFetch(`${apiBase}/api/compliance/intake/${frameworkId}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers, clientId }),
       });
       const d = await res.json();
+      if (!res.ok) { setError(d.error || "Could not save this scoping."); return; }
       setResult(d);
       setData(s => ({ ...s, questions: d.questions, status: d.status }));
       onSaved && onSaved();
+    } catch (e) {
+      setError(e.message || "Could not save this scoping.");
     } finally { setSaving(false); }
   }
 
@@ -679,6 +683,10 @@ export function FrameworkIntake({ authFetch, apiBase, frameworkId, clientId, onS
           }}>{saving ? "Saving…" : "Save scoping"}</button>
       )}
 
+      {error && (
+        <div style={{ color: textSafe(C.red), fontSize: 11.5, marginTop: 8 }}>{safeText(error)}</div>
+      )}
+
       {/* The payoff, made visible. */}
       {result?.scopeChange && result.scopeChange.scoped !== result.scopeChange.unscoped && (
         <div style={{ marginTop: 12, background: `${C.green}0D`, border: `1px solid ${C.green}33`, borderRadius: 8, padding: "10px 12px" }}>
@@ -747,6 +755,9 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
           {data.detail?.modelNote && (
             <Note>{safeText(data.detail.modelNote)}</Note>
           )}
+
+          <OutstandingQuestions requirements={data.requirements} authFetch={authFetch} apiBase={apiBase}
+            clientId={clientId} onSaved={load} readOnly={readOnly} />
 
           {data.agent && data.openDecisions?.length > 0 && (
             <Note tone="amber">
@@ -1150,6 +1161,28 @@ function RequirementRow({ r, frameworkId, authFetch, apiBase, clientId, onSaved,
   );
 }
 
+// Shared by ControlAnswerEditor (below) and OutstandingQuestions — the same
+// option-button picker, whether it's revealed behind an "Update answer" click
+// (there's an existing answer to protect) or shown immediately (there isn't).
+function AnswerOptionButtons({ options, currentLabel, onPick, saving }) {
+  return (
+    <>
+      {(options || []).map(o => (
+        <button key={o.label} onClick={() => onPick(o)} disabled={saving}
+          style={{
+            padding: "5px 10px", borderRadius: 6, fontSize: 11, textAlign: "left",
+            cursor: saving ? "wait" : "pointer",
+            border: `1px solid ${o.label === currentLabel ? C.accent : C.border}`,
+            background: o.label === currentLabel ? `${C.accent}1A` : "transparent",
+            color: o.label === currentLabel ? textSafe(C.accent) : C.textSec,
+          }}>
+          {safeText(o.label)}
+        </button>
+      ))}
+    </>
+  );
+}
+
 // Inline "fix this answer" editor for one control. Calls the already-built
 // POST /api/compliance/answer (had no frontend caller before this) — a
 // client no longer has to go through the blunt whole-checklist "Edit
@@ -1200,22 +1233,94 @@ function ControlAnswerEditor({ c, authFetch, apiBase, clientId, onSaved }) {
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {c.options.map(o => (
-          <button key={o.label} onClick={() => pick(o)} disabled={saving}
-            style={{
-              padding: "5px 10px", borderRadius: 6, fontSize: 11, textAlign: "left",
-              cursor: saving ? "wait" : "pointer",
-              border: `1px solid ${o.label === c.answer ? C.accent : C.border}`,
-              background: o.label === c.answer ? `${C.accent}1A` : "transparent",
-              color: o.label === c.answer ? textSafe(C.accent) : C.textSec,
-            }}>
-            {safeText(o.label)}
-          </button>
-        ))}
+        <AnswerOptionButtons options={c.options} currentLabel={c.answer} onPick={pick} saving={saving} />
         <button onClick={() => setEditing(false)} disabled={saving}
           style={{ background: "none", border: "none", color: C.textMut, fontSize: 11, cursor: "pointer" }}>
           Cancel
         </button>
+      </div>
+      {msg && <div style={{ color: textSafe(msg.tone), fontSize: 11, marginTop: 6 }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+// The "populate this framework" panel. A framework's requirements can share
+// the same underlying evidence question — State Privacy's 18 obligations cite
+// only 5 checklist questions between them — so hunting for "not answered"
+// requirement-by-requirement means answering the same question repeatedly.
+// This collects every unanswered control across the whole framework, deduped
+// by controlId, in one place. Answering one here (via the same
+// POST /api/compliance/answer every other inline editor on this page uses)
+// re-scores every requirement that cites it, without touching Edit Assessment.
+function OutstandingQuestions({ requirements, authFetch, apiBase, clientId, onSaved, readOnly }) {
+  if (!authFetch || readOnly) return null;
+
+  const byId = new Map();
+  for (const r of requirements || []) {
+    for (const c of (r.controls || [])) {
+      if (c.answered) continue;
+      const existing = byId.get(c.controlId);
+      if (existing) existing.count += 1;
+      else byId.set(c.controlId, { ...c, count: 1 });
+    }
+  }
+  const outstanding = [...byId.values()];
+  if (!outstanding.length) return null;
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.accent}44`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+      <div style={{ color: C.text, fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+        {outstanding.length} outstanding question{outstanding.length === 1 ? "" : "s"}
+      </div>
+      <p style={{ color: C.textSec, fontSize: 11.5, lineHeight: 1.5, margin: "0 0 12px" }}>
+        Answer these to populate this framework — each answer updates every requirement below that depends on it,
+        no full reassessment needed.
+      </p>
+      <div style={{ display: "grid", gap: 8 }}>
+        {outstanding.map(c => (
+          <OutstandingQuestionRow key={c.controlId} c={c} authFetch={authFetch} apiBase={apiBase}
+            clientId={clientId} onSaved={onSaved} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OutstandingQuestionRow({ c, authFetch, apiBase, clientId, onSaved }) {
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null); // { text, tone }
+
+  async function pick(option) {
+    if (saving) return;
+    setSaving(true); setMsg(null);
+    try {
+      const res = await authFetch(`${apiBase}/api/compliance/answer`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ controlId: c.controlId, answer: option.label, clientId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save that answer.");
+      setMsg({ text: "Saved.", tone: C.green });
+      onSaved?.();
+    } catch (e) {
+      setMsg({ text: e.message, tone: C.red });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ background: C.surface, borderRadius: 6, padding: "9px 11px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+        <div style={{ color: C.text, fontSize: 12, flex: 1 }}>{safeText(c.question)}</div>
+        {c.count > 1 && (
+          <span style={{ color: C.textMut, fontSize: 10.5, whiteSpace: "nowrap" }}>
+            affects {c.count} requirements
+          </span>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <AnswerOptionButtons options={c.options} currentLabel={c.answer} onPick={pick} saving={saving} />
       </div>
       {msg && <div style={{ color: textSafe(msg.tone), fontSize: 11, marginTop: 6 }}>{msg.text}</div>}
     </div>
