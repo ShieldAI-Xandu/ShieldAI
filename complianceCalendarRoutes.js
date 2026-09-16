@@ -26,9 +26,10 @@
 
 import { randomUUID } from "crypto";
 import { dueStatus, updateVendor } from "./vendorRiskService.js";
-import { getTier } from "./tiers.js";
+import { getTier, hasCapability } from "./tiers.js";
 import { applyAssignmentEdit } from "./trainingProgramRoutes.js";
 import { pushHistory } from "./taskRoutes.js";
+import { buildIcsFeed } from "./icsBuilder.js";
 
 const nowIso = () => new Date().toISOString();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -59,6 +60,84 @@ function ensureCollections(db) {
   db.data.complianceCalendarEntries ||= [];
   // { id, userId, title, category, dueDate, recurrenceMonths, notes,
   //   completedAt, createdAt, updatedAt, createdByStaff }
+  db.data.calendarFeeds ||= [];
+  // { id, ownerUserId, token, enabled, createdAt, updatedAt, lastFetchedAt, fetchCount }
+}
+
+// The 5-source merge behind the unified calendar view, pulled out so the
+// public .ics feed route (below) can build the exact same item set the
+// authenticated list view uses, without a second copy of this logic drifting
+// out of sync with it. Deliberately returns the raw, unsorted items with no
+// summary — sorting and the overdue/due-soon/current tally are specific to
+// how the list view presents them, not to what the calendar actually
+// contains, so each caller does its own thing with this same set.
+function buildCalendarItems(db, targetId) {
+  const items = [];
+
+  // Custom entries
+  for (const e of (db.data.complianceCalendarEntries || [])) {
+    if (e.userId !== targetId) continue;
+    items.push({
+      id: `custom:${e.id}`, sourceType: "custom", title: e.title, category: e.category,
+      dueDate: e.dueDate, reviewStatus: e.completedAt ? "current" : dueStatus(e.dueDate),
+      detailPath: null, notes: e.notes || "", recurrenceMonths: e.recurrenceMonths || null,
+      completedAt: e.completedAt || null, editable: true, removable: true,
+    });
+  }
+
+  // Vendor reassessments — reads vendorRiskService's own data shape
+  // directly rather than re-deriving it, so the two stay in lockstep.
+  for (const v of (db.data.vendors || [])) {
+    if (v.userId !== targetId || v.status !== "active") continue;
+    items.push({
+      id: `vendor:${v.id}`, sourceType: "vendor", title: `Reassess vendor: ${v.name}`, category: "vendor",
+      dueDate: v.nextReassessmentDue, reviewStatus: dueStatus(v.nextReassessmentDue),
+      detailPath: "vendors", notes: `Criticality: ${v.criticality}`, recurrenceMonths: v.reassessmentIntervalMonths || null,
+      completedAt: null, editable: true, removable: false,
+    });
+  }
+
+  // Pending policy acknowledgments — real due date since Phase 1 added one.
+  // Rows assigned before that field existed have none; without a fallback
+  // they'd resolve to dueStatus(undefined) === "not_set" and silently drop
+  // out of the overdue/due_soon buckets forever, having lost the old
+  // assignedAt-aging heuristic this field replaced. Compute the same
+  // default a new assignment gets rather than storing it, so an old
+  // assignment doesn't jump the queue relative to when it was actually assigned.
+  for (const p of (db.data.policyAcknowledgments || [])) {
+    if (p.clientUserId !== targetId || p.acknowledgedAt) continue;
+    const dueDate = p.dueDate || fallbackAckDueDate(p.assignedAt);
+    items.push({
+      id: `policy:${p.id}`, sourceType: "policy", title: `Policy sign-off pending: ${p.learnerName}`, category: "policy",
+      dueDate, reviewStatus: dueStatus(dueDate),
+      detailPath: "library", notes: p.policyName, recurrenceMonths: null, completedAt: null,
+      editable: true, removable: true,
+    });
+  }
+
+  // Training assignments with a due date, not yet completed.
+  for (const a of (db.data.trainingAssignments || [])) {
+    if (a.clientUserId !== targetId || a.status === "completed" || a.status === "waived" || !a.dueDate) continue;
+    items.push({
+      id: `training:${a.id}`, sourceType: "training", title: `Training due: ${a.title}`, category: "training",
+      dueDate: a.dueDate, reviewStatus: dueStatus(a.dueDate),
+      detailPath: "trainingmgr", notes: `${a.progress || 0}% complete`, recurrenceMonths: null, completedAt: null,
+      editable: true, removable: true,
+    });
+  }
+
+  // Open tasks with a due date — the one source that wasn't surfaced here at all.
+  for (const t of (db.data.tasks || [])) {
+    if (t.ownerUserId !== targetId || t.status === "done" || t.status === "cancelled" || !t.dueDate) continue;
+    items.push({
+      id: `task:${t.id}`, sourceType: "task", title: `Task due: ${t.title}`, category: "task",
+      dueDate: t.dueDate, reviewStatus: dueStatus(t.dueDate),
+      detailPath: "remediation", notes: t.priority ? `Priority: ${t.priority}` : "", recurrenceMonths: null,
+      completedAt: null, editable: true, removable: false,
+    });
+  }
+
+  return items;
 }
 
 // Same resolveTarget contract as domainRoutes.js/vendorRoutes.js — duplicated
@@ -102,76 +181,19 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
 
   const gateCalendar = (gate && gate.capability) ? gate.capability("complianceCalendar") : (req, res, next) => next();
   const gateCalendarLimit = (gate && gate.limit) ? gate.limit("calendarEntries", countActiveCustomEntries) : (req, res, next) => next();
+  // The subscribe feed is an export in spirit (compliance data leaving the
+  // app on an ongoing basis), so it's gated the same way every other
+  // download/export button in the product is — a client can have the
+  // calendar itself (complianceCalendar) without being entitled to pull data
+  // out of it (downloadExports), same as Starter today.
+  const gateExports = (gate && gate.capability) ? gate.capability("downloadExports") : (req, res, next) => next();
 
   // ── The unified view ─────────────────────────────────────────
   app.get("/api/client/calendar", requireAuth, gateCalendar, (req, res) => {
     const targetId = resolveTarget(req, res, db, analystOwnsClient, req.query.userId);
     if (!targetId) return;
 
-    const items = [];
-
-    // Custom entries
-    for (const e of (db.data.complianceCalendarEntries || [])) {
-      if (e.userId !== targetId) continue;
-      items.push({
-        id: `custom:${e.id}`, sourceType: "custom", title: e.title, category: e.category,
-        dueDate: e.dueDate, reviewStatus: e.completedAt ? "current" : dueStatus(e.dueDate),
-        detailPath: null, notes: e.notes || "", recurrenceMonths: e.recurrenceMonths || null,
-        completedAt: e.completedAt || null, editable: true, removable: true,
-      });
-    }
-
-    // Vendor reassessments — reads vendorRiskService's own data shape
-    // directly rather than re-deriving it, so the two stay in lockstep.
-    for (const v of (db.data.vendors || [])) {
-      if (v.userId !== targetId || v.status !== "active") continue;
-      items.push({
-        id: `vendor:${v.id}`, sourceType: "vendor", title: `Reassess vendor: ${v.name}`, category: "vendor",
-        dueDate: v.nextReassessmentDue, reviewStatus: dueStatus(v.nextReassessmentDue),
-        detailPath: "vendors", notes: `Criticality: ${v.criticality}`, recurrenceMonths: v.reassessmentIntervalMonths || null,
-        completedAt: null, editable: true, removable: false,
-      });
-    }
-
-    // Pending policy acknowledgments — real due date since Phase 1 added one.
-    // Rows assigned before that field existed have none; without a fallback
-    // they'd resolve to dueStatus(undefined) === "not_set" and silently drop
-    // out of the overdue/due_soon buckets forever, having lost the old
-    // assignedAt-aging heuristic this field replaced. Compute the same
-    // default a new assignment gets rather than storing it, so an old
-    // assignment doesn't jump the queue relative to when it was actually assigned.
-    for (const p of (db.data.policyAcknowledgments || [])) {
-      if (p.clientUserId !== targetId || p.acknowledgedAt) continue;
-      const dueDate = p.dueDate || fallbackAckDueDate(p.assignedAt);
-      items.push({
-        id: `policy:${p.id}`, sourceType: "policy", title: `Policy sign-off pending: ${p.learnerName}`, category: "policy",
-        dueDate, reviewStatus: dueStatus(dueDate),
-        detailPath: "library", notes: p.policyName, recurrenceMonths: null, completedAt: null,
-        editable: true, removable: true,
-      });
-    }
-
-    // Training assignments with a due date, not yet completed.
-    for (const a of (db.data.trainingAssignments || [])) {
-      if (a.clientUserId !== targetId || a.status === "completed" || a.status === "waived" || !a.dueDate) continue;
-      items.push({
-        id: `training:${a.id}`, sourceType: "training", title: `Training due: ${a.title}`, category: "training",
-        dueDate: a.dueDate, reviewStatus: dueStatus(a.dueDate),
-        detailPath: "trainingmgr", notes: `${a.progress || 0}% complete`, recurrenceMonths: null, completedAt: null,
-        editable: true, removable: true,
-      });
-    }
-
-    // Open tasks with a due date — the one source that wasn't surfaced here at all.
-    for (const t of (db.data.tasks || [])) {
-      if (t.ownerUserId !== targetId || t.status === "done" || t.status === "cancelled" || !t.dueDate) continue;
-      items.push({
-        id: `task:${t.id}`, sourceType: "task", title: `Task due: ${t.title}`, category: "task",
-        dueDate: t.dueDate, reviewStatus: dueStatus(t.dueDate),
-        detailPath: "remediation", notes: t.priority ? `Priority: ${t.priority}` : "", recurrenceMonths: null,
-        completedAt: null, editable: true, removable: false,
-      });
-    }
+    const items = buildCalendarItems(db, targetId);
 
     const order = { overdue: 0, due_soon: 1, not_set: 2, current: 3 };
     items.sort((a, b) => {
@@ -394,6 +416,95 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     if ((db.data.complianceCalendarEntries || []).length === before) return res.status(404).json({ error: "Not found." });
     await db.write();
     res.json({ ok: true, deleted: req.params.id });
+  });
+
+  // ════════════════════════════════════════════════════════════
+  //  SUBSCRIBE FEED — a live .ics link a client adds to Google Calendar /
+  //  Outlook / Apple Calendar, which then poll it on their own schedule.
+  //  Same "public, token-gated, read-only URL a client shares outside the
+  //  app" house pattern trustRoutes.js documents and uses (which itself
+  //  copies phishingRoutes.js's /api/phish/:token, trainingProgramRoutes.js's
+  //  /api/train/:token): a dedicated collection keyed by a random token,
+  //  authenticated routes to create/toggle/regenerate it, and one public
+  //  route with no requireAuth that looks the token up directly.
+  // ════════════════════════════════════════════════════════════
+
+  function myCalendarFeed(userId) {
+    return (db.data.calendarFeeds || []).find(f => f.ownerUserId === userId);
+  }
+  function feedView(f) {
+    return {
+      enabled: !!f?.enabled, token: f?.token || null,
+      updatedAt: f?.updatedAt || null, lastFetchedAt: f?.lastFetchedAt || null,
+      fetchCount: f?.fetchCount || 0,
+    };
+  }
+
+  app.get("/api/client/calendar/feed", requireAuth, gateCalendar, gateExports, (req, res) => {
+    res.json(feedView(myCalendarFeed(req.userId)));
+  });
+
+  app.put("/api/client/calendar/feed", requireAuth, gateCalendar, gateExports, async (req, res) => {
+    const enabled = !!req.body?.enabled;
+    let f = myCalendarFeed(req.userId);
+    if (!f) {
+      f = {
+        id: randomUUID(), ownerUserId: req.userId, token: randomUUID(), enabled,
+        createdAt: nowIso(), updatedAt: nowIso(), lastFetchedAt: null, fetchCount: 0,
+      };
+      db.data.calendarFeeds.push(f);
+    } else {
+      f.enabled = enabled;
+      f.updatedAt = nowIso();
+    }
+    await db.write();
+    res.json(feedView(f));
+  });
+
+  // Rotates the subscribe link, invalidating the old one — same
+  // "regenerate the credential to invalidate anything issued before it"
+  // idea auth.js's password-reset nonce and trustRoutes.js's regenerate use.
+  app.post("/api/client/calendar/feed/regenerate", requireAuth, gateCalendar, gateExports, async (req, res) => {
+    const f = myCalendarFeed(req.userId);
+    if (!f) return res.status(404).json({ error: "No subscribe link to regenerate yet — enable one first." });
+    f.token = randomUUID();
+    f.updatedAt = nowIso();
+    await db.write();
+    res.json(feedView(f));
+  });
+
+  // ── PUBLIC ROUTE — no requireAuth, matching /api/trust/:token exactly. ──
+  // Routed on a plain :tokenParam (not a literal ".ics" suffix in the path
+  // pattern) and the extension is stripped in the handler — the URL a client
+  // is given still ends in ".ics" (calendar apps use the extension as a
+  // hint), this just avoids depending on how the router's path matching
+  // treats a literal dot.
+  app.get("/api/calendar/feed/:tokenParam", async (req, res) => {
+    const token = req.params.tokenParam.endsWith(".ics")
+      ? req.params.tokenParam.slice(0, -4)
+      : req.params.tokenParam;
+    const f = (db.data.calendarFeeds || []).find(x => x.token === token);
+    if (!f || !f.enabled) return res.status(404).type("text/plain").send("Not found.");
+
+    // If the owner's plan no longer includes the calendar, or no longer
+    // includes exports, the public link stops resolving even though the DB
+    // record still says enabled — a tier downgrade shouldn't leave a feature
+    // reachable from outside the product. Same safety check trustRoutes.js
+    // applies to its own public route.
+    const tier = gate?.tierOf ? gate.tierOf(f.ownerUserId) : null;
+    if (!tier || !hasCapability(tier, "complianceCalendar") || !hasCapability(tier, "downloadExports")) {
+      return res.status(404).type("text/plain").send("Not found.");
+    }
+
+    f.lastFetchedAt = nowIso();
+    f.fetchCount = (f.fetchCount || 0) + 1;
+    await db.write();
+
+    const owner = (db.data.users || []).find(u => u.id === f.ownerUserId);
+    const items = buildCalendarItems(db, f.ownerUserId);
+    const ics = buildIcsFeed(items, { companyName: owner?.companyName || "ShieldAI Client" });
+    res.set("Content-Type", "text/calendar; charset=utf-8");
+    res.send(ics);
   });
 
   console.log("ShieldAI compliance-calendar routes registered.");
