@@ -299,7 +299,17 @@ export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
   // explicitly refuse to decide that. The bridge computes its own percentage
   // from control statuses, so without this check it would cheerfully report the
   // 0% the module just declined to state.
-  const moduleVetoedPct = result?.summary?.coveragePct === null && assessed > 0;
+  //
+  // `assessed > 0` alone isn't enough: State Privacy's veto forces EVERY
+  // obligation to unknown status, evidence answered or not, so a full veto
+  // always computes assessed === 0 here — the same number a genuinely blank
+  // assessment produces. Without also checking for the module's own
+  // explanation, a real veto and plain silence were indistinguishable, and
+  // the guard picked silence — dropping pctSuppressedReason exactly when a
+  // client most needed to see it (everything reads "not yet assessed" with
+  // no explanation, even though the evidence behind it was fully answered).
+  const moduleVetoedPct = result?.summary?.coveragePct === null
+    && (assessed > 0 || !!result?.noConsumerDataNote);
 
   return {
     framework: def,
