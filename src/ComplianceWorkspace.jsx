@@ -752,6 +752,14 @@ export function FrameworkDetail({ authFetch, apiBase, frameworkId, clientId, onB
           <FrameworkIntake authFetch={authFetch} apiBase={apiBase} frameworkId={frameworkId}
             clientId={clientId} onSaved={load} readOnly={readOnly} />
 
+          {/* A module can veto its own percentage (State Privacy does this when
+              you've said you hold no consumer data) — every obligation still
+              reads "not yet assessed" the same as an unanswered one, so without
+              this the two are indistinguishable and look like nothing worked. */}
+          {data.summary?.pctSuppressedReason && (
+            <Note tone="amber">{safeText(data.summary.pctSuppressedReason)}</Note>
+          )}
+
           {data.detail?.modelNote && (
             <Note>{safeText(data.detail.modelNote)}</Note>
           )}
