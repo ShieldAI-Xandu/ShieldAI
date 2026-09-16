@@ -1546,7 +1546,81 @@ function AnalysisScreen({ assessment, regenerate, onComplete, freePreview }) {
 //  DASHBOARD SECTIONS
 // ─────────────────────────────────────────────────────────────
 
-function OverviewSection({ assessment, results, programId, onRegenerated }) {
+// The Compliance Progress card's contents — cycles through every tracked
+// framework one at a time instead of only ever showing the weakest one.
+// Ordering still leads with the weakest framework first (same "client and
+// analyst never see conflicting 'which framework needs attention' answers"
+// principle the single-framework version documented), it's just no longer
+// the ONLY one shown.
+function ComplianceSlideshow({ frameworks, onOpenFramework }) {
+  const frames = [...(frameworks || [])]
+    .filter(f => !f.notControlMapped && f.assessed > 0)
+    .sort((a, b) => (a.readinessPct ?? 101) - (b.readinessPct ?? 101));
+  const [index, setIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(true);
+
+  useEffect(() => {
+    if (!isPlaying || frames.length <= 1) return;
+    const id = setInterval(() => setIndex(i => (i + 1) % frames.length), 5000);
+    return () => clearInterval(id);
+  }, [isPlaying, frames.length]);
+
+  if (!frames.length) {
+    return <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>;
+  }
+
+  // Framework list can shrink between renders (e.g. a framework dropped from
+  // the plan) — clamp rather than trust a stale index into a shorter array.
+  const cur = frames[index % frames.length];
+  const pct = cur.readinessPct;
+
+  function step(delta) {
+    setIsPlaying(false);
+    setIndex(i => (i + delta + frames.length) % frames.length);
+  }
+
+  return (
+    <div>
+      <div
+        key={cur.id}
+        onClick={() => onOpenFramework && onOpenFramework(cur.id)}
+        style={{cursor:"pointer", animation:"shieldai-fadein 0.4s ease"}}>
+        <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{cur.short || cur.name}</div>
+        {pct === null ? (
+          <div style={{fontSize:12.5,color:C.textMut,lineHeight:1.6,minHeight:56}}>
+            {cur.pctSuppressedReason || "Not scored as a percentage — see this framework for why."}
+          </div>
+        ) : (
+          <>
+            <div style={{fontSize:28,fontWeight:800,color:C.purpleText,marginBottom:8}}>{pct}%</div>
+            <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
+              <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
+            </div>
+          </>
+        )}
+        <div style={{fontSize:11,color:C.textMut,marginTop:6}}>readiness</div>
+      </div>
+
+      {frames.length > 1 && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:12}}>
+          <button onClick={(e) => { e.stopPropagation(); step(-1); }}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,
+              fontSize:12,cursor:"pointer",padding:"4px 9px"}}>‹</button>
+          <button onClick={(e) => { e.stopPropagation(); setIsPlaying(p => !p); }}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,
+              fontSize:12,cursor:"pointer",padding:"4px 9px"}}>{isPlaying ? "⏸" : "▶"}</button>
+          <button onClick={(e) => { e.stopPropagation(); step(1); }}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,
+              fontSize:12,cursor:"pointer",padding:"4px 9px"}}>›</button>
+          <span style={{fontSize:10.5,color:C.textMut,marginLeft:"auto"}}>{(index % frames.length) + 1} of {frames.length}</span>
+        </div>
+      )}
+      <style>{`@keyframes shieldai-fadein{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}`}</style>
+    </div>
+  );
+}
+
+function OverviewSection({ assessment, results, programId, onRegenerated, onOpenFramework }) {
   const risk = results?.riskOverview;
   const quickWins = results?.priorities?.quickWins || [];
   const exec = results?.execReport?.executiveReport;
@@ -1741,29 +1815,9 @@ function OverviewSection({ assessment, results, programId, onRegenerated }) {
             <div style={{color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
               {compliance.note || "No assessment on file. Compliance can't be determined without answers."}
             </div>
-          ) : (() => {
-            // Lead with the weakest framework — same convention as the
-            // analyst's rollup, so client and analyst never see conflicting
-            // "which framework needs attention" answers.
-            const rows = compliance.frameworks.filter(f => !f.notControlMapped && f.assessed > 0);
-            if (!rows.length) return (
-              <div style={{color:C.textSec,fontSize:13,padding:"10px 0",textAlign:"center"}}>No data to report</div>
-            );
-            const worst = [...rows].sort((a,b)=>(a.readinessPct??101)-(b.readinessPct??101))[0];
-            const cur = worst.readinessPct ?? 0;
-            return (
-              <div>
-                <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{worst.short || worst.name}</div>
-                <div style={{fontSize:28,fontWeight:800,color:C.purpleText,marginBottom:8}}>{cur}%</div>
-                <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
-                  <div style={{width:`${cur}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
-                </div>
-                <div style={{fontSize:11,color:C.textMut,marginTop:6}}>
-                  {rows.length > 1 ? `Weakest of ${rows.length} tracked frameworks` : "readiness"}
-                </div>
-              </div>
-            );
-          })()}
+          ) : (
+            <ComplianceSlideshow frameworks={compliance.frameworks} onOpenFramework={onOpenFramework} />
+          )}
         </Card>
 
         <Card>
@@ -8449,6 +8503,12 @@ function PolicyLibrarySection({ assessment }) {
 // ─────────────────────────────────────────────────────────────
 function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, onExecReportRegenerated, onSectionsRegenerated }) {
   const [section, setSection] = useState("overview");
+  // Set by the Overview compliance slideshow's click-through, read by
+  // ComplianceWorkspace to jump straight to that framework. `seq` changes on
+  // every click (even re-clicking the same framework) so ComplianceWorkspace
+  // can tell "open this" apart from "nothing changed" — see its own
+  // openRequest handling for why this can't just be a bare id.
+  const [complianceOpenRequest, setComplianceOpenRequest] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { can, tier } = useCapabilities();
   // Free tier's `results` only ever has riskOverview (see generateFreePreview),
@@ -8578,7 +8638,8 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   };
 
   const sectionMap = {
-    overview:   <OverviewSection assessment={assessment} results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
+    overview:   <OverviewSection assessment={assessment} results={results} programId={programId} onRegenerated={onSectionsRegenerated}
+      onOpenFramework={(id) => { setComplianceOpenRequest({ id, seq: Date.now() }); setSection("compliance"); }}/>,
     // Not gated on buildPrograms: Free tier now gets a deterministic
     // equivalent (see generateFreePreview/riskEngine.js), so this renders
     // whenever the data exists, on any tier.
@@ -8593,6 +8654,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     // framework limit server-side — see complianceRoutes.js).
     compliance: !hasComplianceView ? lockedSections.compliance : <ComplianceWorkspace authFetch={authFetch} apiBase={API_BASE}
       readOnly={!hasCompliance}
+      openRequest={complianceOpenRequest}
       onUpgrade={() => showUpgradePrompt({ capability:"complianceAccess", currentTier:"free",
         requiresTier:"starter", requiresTierName:"Starter", requiresPrice:"$159/mo" })}/>,
     remediation: !hasTasks ? lockedSections.remediation : <RemediationSection/>,

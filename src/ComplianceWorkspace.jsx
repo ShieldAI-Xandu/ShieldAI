@@ -1589,9 +1589,25 @@ function CustomFrameworkDetail({ authFetch, apiBase, clientId, frameworkId, onBa
 }
 
 // ── The workspace ─────────────────────────────────────────────
-export default function ComplianceWorkspace({ authFetch, apiBase = "", clientId = null, readOnly = false, onUpgrade }) {
+export default function ComplianceWorkspace({ authFetch, apiBase = "", clientId = null, readOnly = false, onUpgrade, openRequest = null }) {
   const [view, setView] = useState(null);
   const [nonce, setNonce] = useState(0);
+
+  // The Overview compliance slideshow's click-through needs to open a
+  // framework here even when this component was already mounted from an
+  // earlier visit to this tab (a parent-owned sectionMap re-renders the same
+  // element instance rather than remounting it on every section switch), so
+  // a one-shot initial-state prop wouldn't work. `openRequest` is
+  // `{ id, seq }` — seq changes on every click (even re-clicking the same
+  // framework), so this "adjust state when a prop changes" comparison
+  // — done during render, per React's own guidance, not in a useEffect —
+  // reliably re-fires every time, without a parent-clearing callback.
+  const [lastOpenSeq, setLastOpenSeq] = useState(null);
+  if (openRequest && openRequest.seq !== lastOpenSeq) {
+    setLastOpenSeq(openRequest.seq);
+    setView(openRequest.id);
+  }
+
   return (
     <div>
       {readOnly && (
