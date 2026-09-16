@@ -191,9 +191,10 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
               <div style={{ color: C.textMut, fontSize: 11.5 }}>
                 No control-level walkthrough for this framework — we won't fake one.
               </div>
-            ) : f.pctSuppressedReason ? (
-              // A percentage was deliberately withheld. Say why — a bare dash
-              // looks like a loading state or a bug, and this is neither.
+            ) : f.pctSuppressedReason && f.readinessPct == null ? (
+              // A percentage was deliberately withheld with nothing to show in its
+              // place (e.g. State Privacy's "no consumer data"). Say why — a bare
+              // dash looks like a loading state or a bug, and this is neither.
               <div style={{ color: C.textSec, fontSize: 11.5, lineHeight: 1.6 }}>
                 {safeText(f.pctSuppressedReason)}
               </div>
@@ -212,6 +213,15 @@ export function ComplianceOverview({ authFetch, apiBase, clientId, onOpen }) {
                   {f.unknown > 0 && <span style={{ color: C.textMut }}>{f.unknown} not assessed</span>}
                   <span style={{ marginLeft: "auto" }}>Readiness {pct(f.readinessPct)}</span>
                 </div>
+                {/* readinessPct here is a reused number (e.g. NIST CSF's own
+                    posture score), not a separately computed one — the caption
+                    says so rather than letting it look identical to a normal
+                    per-framework readiness calculation. */}
+                {f.pctSuppressedReason && (
+                  <div style={{ color: C.textMut, fontSize: 10.5, lineHeight: 1.5, marginTop: 6 }}>
+                    {safeText(f.pctSuppressedReason)}
+                  </div>
+                )}
               </>
             )}
           </div>

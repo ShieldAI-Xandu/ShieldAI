@@ -424,14 +424,17 @@ export function evaluateRequirement(req, checklist = {}) {
 // the headline posture score), built through the same evaluateRequirement()
 // every other framework's controls go through — no new scoring logic.
 //
-// Deliberately NEVER computes compliancePct/readinessPct: an aggregate
-// percentage here would be a second, differently-computed number under
-// NIST's own function names — exactly what CLAUDE.md's "no assess() for
-// NIST CSF" rule exists to prevent. Individual control status/score is fine
-// (it's the same raw per-question score already feeding that weighted
-// formula, just displayed rather than re-aggregated) — pctSuppressedReason
-// is the same real, existing mechanism the state-privacy module uses to
-// decline a percentage for its own reasons.
+// readinessPct is a PASSTHROUGH of posture.postureScore, never a second
+// formula — it can't disagree with the headline number because it IS the
+// headline number, read from the same computePostureScore() call below.
+// compliancePct stays null: NIST CSF still never claims an independently
+// judged "X% compliant" status of its own, which is the specific thing
+// CLAUDE.md's "no assess() for NIST CSF" rule exists to prevent. Individual
+// control status/score is fine too (it's the same raw per-question score
+// already feeding that weighted formula, just displayed rather than
+// re-aggregated) — pctSuppressedReason is the same real, existing mechanism
+// the state-privacy module uses to decline a percentage, repurposed here as
+// a caption explaining what the number actually is.
 function evaluateNistCsfPresentational(checklist) {
   const def = getFrameworkDef("nist-csf");
   const posture = computePostureScore({ checklist });
@@ -458,8 +461,8 @@ function evaluateNistCsfPresentational(checklist) {
       unknown: counts[STATUS.UNKNOWN] || 0,
       assessed: total - (counts[STATUS.UNKNOWN] || 0),
       compliancePct: null,
-      readinessPct: null,
-      pctSuppressedReason: `NIST CSF doesn't compute a separate percentage here — these are the same answers behind your overall posture score (${posture.postureScore}/100, ${posture.postureLevel}), shown control by control.`,
+      readinessPct: posture.postureScore,
+      pctSuppressedReason: `This is your overall posture score, not a separately computed percentage — NIST CSF's five functions are the same labels that already produce it (${posture.postureLevel}).`,
     },
     sectionNames: Object.keys(sections),
     requirements,
