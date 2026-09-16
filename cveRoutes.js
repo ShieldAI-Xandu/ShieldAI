@@ -9,17 +9,14 @@ import {
   exposureForSoftware,
   clientSoftwareDescriptors,
   refreshClientExposure,
-  cveServiceStatus,
-  probeCve,
 } from "./cveService.js";
 import {
   clientDomain,
   clientExposure,
   refreshClientDarkweb,
   darkwebConfigured,
-  darkwebServiceStatus,
-  probeDarkweb,
 } from "./darkwebService.js";
+import { THREAT_INTEL_SOURCES } from "./threatIntelSources.js";
 
 export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate }) {
   // Real CVE/dark-web exposure viewing is the `threatIntel` capability
@@ -34,34 +31,29 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
   // a configured key is not the same as a working service, and for HIBP a key
   // alone still isn't enough (domains need manual enrollment).
   app.get("/api/admin/threat-intel/status", requireAdmin, (req, res) => {
-    const cve = cveServiceStatus();
-    const hibp = darkwebServiceStatus(db);
+    const services = THREAT_INTEL_SOURCES.map(s => s.statusFn(db));
+    const nvd = services.find(s => s.id === "nvd");
+    const hibp = services.find(s => s.id === "hibp");
     res.json({
-      services: [cve, hibp],
+      services,
       summary: {
-        // Only HIBP is required; NVD unkeyed is slow, not broken.
+        // Only HIBP is required; NVD unkeyed is slow, not broken. Unchanged
+        // rule from before this became a registry loop.
         operational: hibp.configured,
-        degraded: !cve.configured,
-        blockers: [
-          !hibp.configured && "HIBP_API_KEY is not set — breach monitoring is inactive for all clients.",
-          hibp.configured && hibp.domainsRegistered > 0 && hibp.domainsMonitored === 0 &&
-            "No client domains are fully enrolled yet — monitoring won't return data until they are.",
-        ].filter(Boolean),
-        advisories: [
-          !cve.configured &&
-            `NVD_API_KEY is not set — CVE refreshes take up to ~${cve.worstCaseRefreshSec}s instead of ~8s. Accuracy is unaffected.`,
-        ].filter(Boolean),
+        degraded: !nvd.configured,
+        blockers: services.map(s => s.blockerText).filter(Boolean),
+        advisories: services.map(s => s.advisoryText).filter(Boolean),
       },
       checkedAt: new Date().toISOString(),
     });
   });
 
-  // ── Admin: live probe of both services ──────────────────────
+  // ── Admin: live probe of every registered service ────────────
   // Actually calls each API. Slower than the status read, so it's a separate,
   // explicit action rather than something that runs on page load.
   app.post("/api/admin/threat-intel/probe", requireAdmin, async (req, res) => {
-    const [cve, hibp] = await Promise.all([probeCve(), probeDarkweb()]);
-    res.json({ probes: { nvd: cve, hibp }, checkedAt: new Date().toISOString() });
+    const entries = await Promise.all(THREAT_INTEL_SOURCES.map(async s => [s.id, await s.probeFn()]));
+    res.json({ probes: Object.fromEntries(entries), checkedAt: new Date().toISOString() });
   });
 
 

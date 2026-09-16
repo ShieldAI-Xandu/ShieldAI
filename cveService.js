@@ -18,6 +18,8 @@
 // Resilience: results are cached; NVD outages or rate-limits degrade
 // gracefully (we return cached/empty rather than throwing into the app).
 
+import { isKnownExploited } from "./kevService.js";
+
 const NVD_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0";
 
 // Optional free API key (https://nvd.nist.gov/developers/request-an-api-key).
@@ -94,6 +96,10 @@ export function cveServiceStatus() {
     degradesTo: "Without a key the service still works; it's only slower. It never returns fabricated CVEs.",
     cacheEntries: cache.size,
     cacheTtlHours: CACHE_TTL_MS / 3600000,
+    implemented: true,
+    blockerText: null, // NVD unkeyed is slow, never a hard blocker
+    advisoryText: NVD_API_KEY ? null
+      : `NVD_API_KEY is not set — CVE refreshes take up to ~${Math.round((MIN_INTERVAL_MS * 12) / 100) / 10}s instead of ~8s. Accuracy is unaffected.`,
   };
 }
 
@@ -223,11 +229,26 @@ export async function exposureForSoftware(softwareList, { perItem = 3 } = {}) {
     if (r.degraded) degraded = true;
     findings.push({ software: sw, cves: r.results, total: r.total ?? r.results.length });
   }
+
+  // Cross-reference against CISA's Known Exploited Vulnerabilities catalog —
+  // one lookup per UNIQUE CVE id (not per software match, since the same
+  // CVE can turn up under more than one software string), resolved once and
+  // reused everywhere that id appears. isKnownExploited() never throws (see
+  // kevService.js's own degradation contract), so a KEV outage just leaves
+  // `kev: null` on every record rather than breaking CVE matching.
+  const uniqueIds = [...new Set(findings.flatMap(f => f.cves.map(c => c.id)).filter(Boolean))];
+  const kevById = new Map();
+  for (const id of uniqueIds) kevById.set(id, await isKnownExploited(id));
+  for (const f of findings) {
+    f.cves = f.cves.map(c => ({ ...c, kev: kevById.get(c.id) || null }));
+  }
+
   // Flat, severity-sorted rollup for quick display
   const all = findings.flatMap(f => f.cves.map(c => ({ ...c, software: f.software })));
   all.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
   const counts = all.reduce((acc, c) => { const k = (c.severity || "UNKNOWN").toUpperCase(); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
-  return { bySoftware: findings, top: all.slice(0, 10), counts, degraded, queriedAt: new Date().toISOString() };
+  const kevCount = all.filter(c => c.kev).length;
+  return { bySoftware: findings, top: all.slice(0, 10), counts, kevCount, degraded, queriedAt: new Date().toISOString() };
 }
 
 // ── DB-backed exposure snapshot (so Mastermind reads cached, not live) ──
@@ -241,7 +262,7 @@ export async function refreshClientExposure(db, userId, { isDemo = false } = {})
   const software = clientSoftwareDescriptors(db, userId, { isDemo });
   db.data.cveExposure ||= {};
   if (software.length === 0) {
-    db.data.cveExposure[userId] = { software: [], counts: {}, top: [], degraded: false, refreshedAt: new Date().toISOString(), empty: true };
+    db.data.cveExposure[userId] = { software: [], counts: {}, top: [], kevCount: 0, degraded: false, refreshedAt: new Date().toISOString(), empty: true };
     await db.write();
     return db.data.cveExposure[userId];
   }
@@ -250,6 +271,7 @@ export async function refreshClientExposure(db, userId, { isDemo = false } = {})
     software,
     counts: exposure.counts,
     top: exposure.top,
+    kevCount: exposure.kevCount,
     degraded: exposure.degraded,
     refreshedAt: exposure.queriedAt,
     empty: false,

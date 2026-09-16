@@ -40,6 +40,7 @@ export function darkwebConfigured() { return !!HIBP_API_KEY; }
 // all, and we report "Not active" rather than inventing an all-clear.
 export function darkwebServiceStatus(db) {
   const domains = (db?.data?.clientDomains) || [];
+  const domainsMonitored = domains.filter(d => d.ownership === "verified" && d.hibpStatus === "verified").length;
   return {
     id: "hibp",
     name: "Have I Been Pwned",
@@ -59,7 +60,14 @@ export function darkwebServiceStatus(db) {
     cacheTtlHours: CACHE_TTL_MS / 3600000,
     // The manual half of the workflow, which a key alone doesn't solve.
     domainsRegistered: domains.length,
-    domainsMonitored: domains.filter(d => d.ownership === "verified" && d.hibpStatus === "verified").length,
+    domainsMonitored,
+    implemented: true,
+    blockerText: !HIBP_API_KEY
+      ? "HIBP_API_KEY is not set — breach monitoring is inactive for all clients."
+      : (domains.length > 0 && domainsMonitored === 0
+        ? "No client domains are fully enrolled yet — monitoring won't return data until they are."
+        : null),
+    advisoryText: null,
   };
 }
 

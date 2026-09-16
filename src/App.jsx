@@ -2280,7 +2280,7 @@ function CveExposureCard() {
     <Card style={{marginBottom:14}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
         <SectionLabel text="CVE Exposure"/>
-        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>LIVE · NVD/CVE</span>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>LIVE · NVD/CVE + CISA KEV</span>
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
           {exposure?.degraded && (
             <span style={{fontSize:11,color:C.amberText,fontWeight:600}}>⚠ partial results</span>
@@ -2325,6 +2325,13 @@ function CveExposureCard() {
                     No CVEs matched the current inventory.
                   </div>
                 )}
+                {exposure?.kevCount > 0 && (
+                  <div style={{display:"flex",alignItems:"center",gap:7,padding:"6px 12px",
+                    background:`${C.redText}12`,border:`1px solid ${C.redText}33`,borderRadius:8}}>
+                    <span style={{fontSize:16,fontWeight:800,color:C.redText}}>{exposure.kevCount}</span>
+                    <span style={{fontSize:11,fontWeight:600,color:C.redText,letterSpacing:0.4}}>ACTIVELY EXPLOITED</span>
+                  </div>
+                )}
               </div>
 
               {totalFindings > 0 && (
@@ -2359,6 +2366,7 @@ function CveExposureCard() {
                         <a href={c.url||`https://www.cve.org/CVERecord?id=${c.id}`} target="_blank" rel="noreferrer"
                           style={{color:C.accentText,fontSize:12.5,fontWeight:700,textDecoration:"none"}}>{c.id}</a>
                         <Badge label={String(c.severity||"UNKNOWN")} color={cveSevColor(c.severity)}/>
+                        {c.kev && <Badge label="ACTIVELY EXPLOITED" color={C.redText}/>}
                         {c.score != null && (
                           <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>CVSS {c.score}</span>
                         )}
@@ -2367,6 +2375,12 @@ function CveExposureCard() {
                         )}
                       </div>
                       <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{safeText(c.description)}</div>
+                      {c.kev?.dueDate && (
+                        <div style={{color:C.redText,fontSize:11,fontWeight:600,marginTop:5}}>
+                          Confirmed under active exploitation (CISA KEV) — federal remediation due {new Date(c.kev.dueDate).toLocaleDateString()}
+                          {c.kev.knownRansomwareCampaignUse ? " · known ransomware use" : ""}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </>
@@ -2374,7 +2388,7 @@ function CveExposureCard() {
 
               {exposure?.queriedAt && (
                 <div style={{marginTop:10,fontSize:11,color:C.textMut}}>
-                  Queried {new Date(exposure.queriedAt).toLocaleString()} · source: NVD
+                  Queried {new Date(exposure.queriedAt).toLocaleString()} · sources: NVD, CISA KEV
                 </div>
               )}
             </>
@@ -12191,25 +12205,30 @@ function AdminThreatIntelStatus() {
 
       {(data?.services || []).map(svc => {
         const p = probes?.[svc.id];
-        const tone = svc.configured ? (svc.required ? C.green : C.accent) : (svc.required ? C.red : C.amber);
+        // A source that's simply not built yet isn't "misconfigured" — it
+        // reads as neutral/planned (gray), not a red/amber problem to fix.
+        const planned = svc.implemented === false;
+        const tone = planned ? C.textMut : svc.configured ? (svc.required ? C.green : C.accent) : (svc.required ? C.red : C.amber);
         return (
           <Card key={svc.id} style={{marginBottom:12,borderColor:`${tone}33`}}>
             <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:12}}>
               <div style={{flex:"1 1 280px",minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:5,flexWrap:"wrap"}}>
                   <span style={{fontSize:14.5,fontWeight:700,color:C.text}}>{safeText(svc.name)}</span>
-                  <Badge label={svc.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
-                  <Badge label={svc.required ? "REQUIRED" : "OPTIONAL"}
-                    color={svc.required ? C.purple : C.textMut}/>
+                  <Badge label={planned ? "PLANNED" : svc.configured ? "CONFIGURED" : "NOT CONFIGURED"} color={tone}/>
+                  {!planned && (
+                    <Badge label={svc.required ? "REQUIRED" : "OPTIONAL"}
+                      color={svc.required ? C.purple : C.textMut}/>
+                  )}
                 </div>
                 <div style={{fontSize:12,color:C.textSec,lineHeight:1.55}}>{safeText(svc.purpose)}</div>
               </div>
-              {!svc.configured && (
+              {!svc.configured && svc.keyUrl && (
                 <a href={svc.keyUrl} target="_blank" rel="noopener noreferrer"
                   style={{padding:"7px 13px",background:`${tone}15`,border:`1px solid ${tone}44`,
                     borderRadius:6,color:tone,fontSize:11.5,fontWeight:700,textDecoration:"none",
                     whiteSpace:"nowrap"}}>
-                  Get a key ↗
+                  {planned ? "Docs ↗" : "Get a key ↗"}
                 </a>
               )}
             </div>
@@ -12220,19 +12239,29 @@ function AdminThreatIntelStatus() {
               <div style={{fontSize:11,color:C.textMut,lineHeight:1.5}}>{svc.degradesTo}</div>
             </div>
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
-              <IntelStat label="Env var" value={svc.envVar} mono/>
-              <IntelStat label="Rate limit" value={`${(svc.minIntervalMs/1000).toFixed(1)}s / request`}/>
-              <IntelStat label="Cached" value={`${svc.cacheEntries} (${svc.cacheTtlHours}h TTL)`}/>
-              {svc.id === "nvd" && (
-                <IntelStat label="Full refresh" value={`~${svc.worstCaseRefreshSec}s`}
-                  color={svc.configured ? C.green : C.amber}/>
-              )}
-              {svc.id === "hibp" && (
-                <IntelStat label="Domains live" value={`${svc.domainsMonitored} / ${svc.domainsRegistered}`}
-                  color={svc.domainsMonitored ? C.green : C.textMut}/>
-              )}
-            </div>
+            {!planned && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10}}>
+                {svc.envVar && <IntelStat label="Env var" value={svc.envVar} mono/>}
+                {svc.minIntervalMs != null && (
+                  <IntelStat label="Rate limit" value={`${(svc.minIntervalMs/1000).toFixed(1)}s / request`}/>
+                )}
+                {svc.cacheTtlHours != null && (
+                  <IntelStat label="Cached" value={`${svc.cacheEntries} (${svc.cacheTtlHours}h TTL)`}/>
+                )}
+                {svc.id === "nvd" && (
+                  <IntelStat label="Full refresh" value={`~${svc.worstCaseRefreshSec}s`}
+                    color={svc.configured ? C.green : C.amber}/>
+                )}
+                {svc.id === "hibp" && (
+                  <IntelStat label="Domains live" value={`${svc.domainsMonitored} / ${svc.domainsRegistered}`}
+                    color={svc.domainsMonitored ? C.green : C.textMut}/>
+                )}
+                {svc.id === "kev" && (
+                  <IntelStat label="Last fetched" value={svc.lastFetchedAt ? new Date(svc.lastFetchedAt).toLocaleString() : "Not yet loaded"}
+                    color={svc.lastError ? C.amber : C.green}/>
+                )}
+              </div>
+            )}
 
             {p && (
               <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
