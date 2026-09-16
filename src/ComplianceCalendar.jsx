@@ -594,8 +594,12 @@ export default function ComplianceCalendarSection({ authFetch, apiBase = "", onN
   // file) — `items` starting at null is what drives the loading spinner,
   // rather than a separate flag reset on every call.
   // Returns the fetch's promise so other handlers can `await load()` to
-  // know the refresh actually finished — the mount effect below just fires
-  // it and ignores the return value.
+  // know the refresh actually finished. The mount effect below wraps the
+  // call in a block body specifically so ITS OWN return value is
+  // undefined — passing `load` directly to useEffect would hand React the
+  // promise `load()` resolves to as if it were the effect's cleanup
+  // function, which throws ("x is not a function") the moment this
+  // component unmounts and React tries to call it.
   const load = useCallback(() => {
     return authFetch(`${apiBase}/api/client/calendar`)
       .then(async res => {
@@ -608,7 +612,7 @@ export default function ComplianceCalendarSection({ authFetch, apiBase = "", onN
       })
       .catch(e => setError(e.message));
   }, [authFetch, apiBase]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const byDay = useMemo(() => {
     const map = new Map();
