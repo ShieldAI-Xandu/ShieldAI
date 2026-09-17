@@ -320,10 +320,18 @@ export function clientSoftwareDescriptors(db, userId, { isDemo = false } = {}) {
     }
   }
 
-  // From the most recent assessment's techStack (if the client provided one)
+  // From the most recent assessment's techStack (if the client provided one).
+  // Assessment fields live under the record's `.data` (POST /api/assessments
+  // stores `data: req.body`, PATCH merges into it — see server.js) — reading
+  // `latest.techStack` directly instead of `latest.data.techStack` meant this
+  // branch silently never matched anything, no matter what an assessment
+  // contained. Note there is currently no intake question anywhere that
+  // actually writes techStack/technologies onto an assessment either — this
+  // fix makes the read correct for whenever that field does get populated,
+  // it doesn't by itself add a way to populate it.
   const assessments = (db.data.assessments || []).filter(a => a.userId === userId);
   const latest = assessments[assessments.length - 1];
-  const stack = latest?.techStack || latest?.technologies || [];
+  const stack = latest?.data?.techStack || latest?.data?.technologies || [];
   for (const s of (Array.isArray(stack) ? stack : [])) {
     if (typeof s === "string") out.add(s);
     else if (s && s.name) out.add(s.version ? `${s.name} ${s.version}` : s.name);
