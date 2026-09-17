@@ -14875,6 +14875,8 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [company, setCompany] = useState({ name: "", industry: "", employees: "" });
+  const [techStack, setTechStack] = useState([]);
+  const [techInput, setTechInput] = useState("");
   const [answers, setAnswers] = useState({});
   const [frameworks, setFrameworks] = useState(["nist-csf"]);
   const [cisIG, setCisIG] = useState("IG1");
@@ -14901,6 +14903,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
           industry: data.company?.industry || "",
           employees: data.company?.employees || "",
         });
+        setTechStack(Array.isArray(data.techStack) ? data.techStack : []);
         setAnswers(data.checklist || {});
         // Restore previously selected compliance frameworks (NIST CSF always on)
         const savedFw = Array.isArray(data.selectedFrameworks) ? data.selectedFrameworks : [];
@@ -14926,9 +14929,18 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
   const answered = Object.keys(answers).length;
   const allAnswered = answered === total;
 
+  function addTech() {
+    const v = techInput.trim();
+    if (!v) return;
+    if (!techStack.includes(v)) setTechStack([...techStack, v]);
+    setTechInput("");
+  }
+  function removeTech(v) { setTechStack(techStack.filter(s => s !== v)); }
+
   function buildUpdatedData() {
     return {
       company: { name: company.name, industry: company.industry, employees: company.employees },
+      techStack,
       checklist: answers,
       selectedFrameworks: frameworks.map(id => {
         const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id);
@@ -15030,6 +15042,46 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                     </div>
                   </div>
                 </div>
+              </Card>
+
+              {/* Technology stack — feeds live CVE/KEV matching in Threat
+                  Intelligence (see cveService.js's clientSoftwareDescriptors).
+                  A free-form tag list rather than a multiple-choice question:
+                  CVE matching needs the actual product name and version, which
+                  only the client knows, in whatever form they want to type it. */}
+              <SectionLabel text="Technology Stack"/>
+              <Card style={{marginBottom:24}}>
+                <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 12px"}}>
+                  Software and platforms your business runs — used to match against known
+                  vulnerabilities (CVEs) in Threat Intelligence. Add one at a time, with a
+                  version if you know it (e.g. "WordPress 6.4", "OpenSSL 3.0.1"). Optional,
+                  and separate from what a monitoring agent already reports automatically.
+                </p>
+                <div style={{display:"flex",gap:8,marginBottom:12}}>
+                  <input value={techInput} onChange={e=>setTechInput(e.target.value)}
+                    onKeyDown={e=>{ if (e.key==="Enter") { e.preventDefault(); addTech(); } }}
+                    placeholder="e.g. WordPress 6.4" style={{...inputStyle,flex:1}}/>
+                  <button onClick={addTech} disabled={!techInput.trim()}
+                    style={{padding:"0 16px",borderRadius:8,border:`1px solid ${C.accent}55`,
+                      background:`${C.accent}18`,color:C.accentText,fontSize:13,fontWeight:600,
+                      cursor:techInput.trim()?"pointer":"default",opacity:techInput.trim()?1:0.5}}>
+                    Add
+                  </button>
+                </div>
+                {techStack.length > 0 && (
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {techStack.map((sw,i) => (
+                      <span key={i} style={{display:"inline-flex",alignItems:"center",gap:6,
+                        padding:"4px 6px 4px 10px",borderRadius:6,background:C.surface,
+                        border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>
+                        {sw}
+                        <button onClick={()=>removeTech(sw)} aria-label={`Remove ${sw}`}
+                          style={{background:"none",border:"none",color:C.textMut,cursor:"pointer",
+                            fontSize:14,lineHeight:1,padding:"0 2px"}}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </Card>
 
               {/* Compliance frameworks */}
