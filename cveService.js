@@ -247,7 +247,9 @@ export async function exposureForSoftware(softwareList, { perItem = 3 } = {}) {
   const all = findings.flatMap(f => f.cves.map(c => ({ ...c, software: f.software })));
   all.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
   const counts = all.reduce((acc, c) => { const k = (c.severity || "UNKNOWN").toUpperCase(); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
-  const kevCount = all.filter(c => c.kev).length;
+  // Count by unique CVE id, not by (software, cve) pair — the same
+  // KEV-flagged CVE can appear under more than one matched software string.
+  const kevCount = uniqueIds.filter(id => kevById.get(id)).length;
   return { bySoftware: findings, top: all.slice(0, 10), counts, kevCount, degraded, queriedAt: new Date().toISOString() };
 }
 

@@ -2443,7 +2443,7 @@ registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
 registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
-registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
+registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, callAI, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
 registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate });

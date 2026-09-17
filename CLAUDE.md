@@ -15,7 +15,7 @@ businesses, sold direct — not through MSPs. Founder/CEO: Derrick Brooks, Xandu
 - Auth: JWT
 - AI providers (unified in `aiProviders.js`):
   - Anthropic Claude — primary reasoning/writing, and fallback
-  - Google Gemini (`gemini-2.5-flash`) — threat intel / search grounding
+  - Google Gemini (`gemini-3.6-flash`) — threat intel / search grounding
   - OpenAI GPT-4o — tool recommendations, training content, executive report generation
   - Provider choice per step follows the `STEP_PROVIDER` mapping. UI badges read from a
     `generatedBy` field recorded at generation time — never hardcode a badge value.

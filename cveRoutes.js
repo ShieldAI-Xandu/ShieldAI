@@ -41,8 +41,13 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
         // rule from before this became a registry loop.
         operational: hibp.configured,
         degraded: !nvd.configured,
-        blockers: services.map(s => s.blockerText).filter(Boolean),
-        advisories: services.map(s => s.advisoryText).filter(Boolean),
+        // Sources still marked `implemented: false` (EPSS/OSV/ATT&CK today)
+        // are permanently-planned, not degraded — their advisoryText would
+        // otherwise make the "all configured" all-clear unreachable forever,
+        // even when every real, built source is fully healthy. Each one's
+        // own status is still shown per-service further down the page.
+        blockers: services.filter(s => s.implemented !== false).map(s => s.blockerText).filter(Boolean),
+        advisories: services.filter(s => s.implemented !== false).map(s => s.advisoryText).filter(Boolean),
       },
       checkedAt: new Date().toISOString(),
     });

@@ -45,7 +45,12 @@ function foldLine(line) {
   let chunkBytes = 0;
   for (const ch of line) {
     const chByteLen = byteLength(ch);
-    if (chunkBytes + chByteLen > 75) {
+    // A continuation physical line is "CRLF + space + chunk" — the leading
+    // space counts toward its own 75-octet limit, so continuation chunks get
+    // a 74-byte budget. The very first chunk has no such prefix and keeps
+    // the full 75.
+    const limit = out ? 74 : 75;
+    if (chunkBytes + chByteLen > limit) {
       out += (out ? CRLF + " " : "") + chunk;
       chunk = ch;
       chunkBytes = chByteLen;

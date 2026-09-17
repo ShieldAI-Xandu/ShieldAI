@@ -12,7 +12,7 @@
 //
 // Mount from server.js:
 //   import { registerMastermindRoutes } from "./mastermindRoutes.js";
-//   registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, extractJson });
+//   registerMastermindRoutes(app, { db, requireAdmin, callClaudeText, callAI, extractJson });
 
 import { randomUUID } from "crypto";
 import { getTier, hasCapability, hasTrainingDelivery, featureAccess, DEFAULT_TIER, priceLabel } from "./tiers.js";
@@ -259,7 +259,37 @@ function portfolioSnapshot(db, depth = "summary") {
   };
 }
 
-export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, extractJson, analystOwnsClient, analystClientIds, aiLimiter }) {
+// Per-question routing for the two Mastermind surfaces that don't use Claude's
+// tool-use loop (client chat, analyze) — the only two callAI() can safely take
+// over, since Gemini/OpenAI can't invoke MASTERMIND_TOOLS themselves. Note
+// this does NOT mean they see less data than Claude: the same system prompt
+// (full client snapshot / host+inventory data, for isolation and tier-scoping)
+// still goes to whichever provider is picked — only tool access differs.
+// Mirrors server.js's STEP_PROVIDER rationale (Gemini for real-time/
+// current-threat topics via search grounding, OpenAI for tool/vendor-ecosystem
+// topics) but evaluated live per question instead of statically per pipeline
+// step. Conservative on purpose: only switches off Claude on a clear topical
+// match — everything else stays on Claude, the only provider these prompts'
+// isolation/tier-scoping instructions are proven against.
+//
+// Weak recency words (recent/latest/current/...) require a security-topic
+// noun elsewhere in the same text before they count — a bare word match would
+// otherwise fire on incidental text like the analyze prompt's own "Recent
+// client actions:" label, which isn't a topical signal at all.
+const GEMINI_STRONG_RE = /\b(zero[- ]day|active exploit|ongoing (attack|campaign)|ransomware (campaign|trend)|threat (landscape|trend)|industry (threat|trend)|in the news|this (week|month|year))\b/i;
+const GEMINI_WEAK_RE = /\b(recent|latest|newest|current|emerging|trending|breaking)\b/i;
+const GEMINI_TOPIC_NOUN_RE = /\b(threat|attack|ransomware|malware|phishing|breach|exploit|vulnerability|campaign|cve|incident|trend)\b/i;
+const OPENAI_TOPIC_RE = /\b(which (tool|vendor|edr|siem|software|product)|recommend (a|an|some) (tool|vendor|software|product)|tool (recommendation|comparison)|compare (tools|vendors|products)|password manager|backup solution|mfa app|training (program|module|curriculum)|awareness training|phishing simulation ideas)\b/i;
+
+export function classifyMastermindProvider(text) {
+  const t = String(text || "");
+  if (GEMINI_STRONG_RE.test(t)) return "gemini";
+  if (GEMINI_WEAK_RE.test(t) && GEMINI_TOPIC_NOUN_RE.test(t)) return "gemini";
+  if (OPENAI_TOPIC_RE.test(t)) return "openai";
+  return "claude";
+}
+
+export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, callAI, extractJson, analystOwnsClient, analystClientIds, aiLimiter }) {
   db.data.recommendations ||= [];
 
   function aiAvailable(res) {
@@ -1049,7 +1079,8 @@ Limit findings to 6 and recommendations to 5.`;
     const user = `Hosts (${hosts.length}):\n${JSON.stringify(hosts)}\n\nRecent client actions:\n${JSON.stringify(recentActions)}`;
 
     try {
-      const text = await callClaudeText({ system, messages: [{ role: "user", content: user }], max_tokens: 2000 });
+      const provider = classifyMastermindProvider(user);
+      const { text, provider: generatedBy } = await callAI({ provider, system, messages: [{ role: "user", content: user }], max_tokens: 2000 });
       const parsed = extractJson(text) || {};
       res.json({
         scope: agentId ? "endpoint" : "client",
@@ -1058,6 +1089,7 @@ Limit findings to 6 and recommendations to 5.`;
         summary: parsed.summary || "",
         findings: Array.isArray(parsed.findings) ? parsed.findings.slice(0, 6) : [],
         recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.slice(0, 5) : [],
+        generatedBy,
       });
     } catch (err) {
       console.error("Mastermind analyze error:", err.message);
@@ -1434,7 +1466,9 @@ This client's data and feature access (the only data you have):
 ${JSON.stringify(snap)}`;
 
     try {
-      const text = await callClaudeText({ system, messages: clean, max_tokens: 1200 });
+      const lastUserMsg = [...clean].reverse().find(m => m.role === "user")?.content || "";
+      const provider = classifyMastermindProvider(lastUserMsg);
+      const { text } = await callAI({ provider, system, messages: clean, max_tokens: 1200 });
       res.json({ reply: text });
     } catch (err) {
       console.error("Client Mastermind error:", err.message);

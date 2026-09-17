@@ -80,6 +80,10 @@ const MASTERMIND_ENGINES = {
               specialty: "Tool recommendations, training & reporting" },
 };
 
+// Which MASTERMIND_ENGINES role represents a given backend provider — lets a
+// staff-facing badge show which engine answered without naming the vendor.
+const ENGINE_FOR_PROVIDER = { claude: "analyst", gemini: "intel", openai: "advisory" };
+
 // Task → model routing rules. Mirrors server.js's STEP_PROVIDER — kept in sync
 // manually since this table and that one live in different processes. Only
 // "intake" is ever actually passed to the frontend's callAI() below (every
@@ -343,6 +347,16 @@ function safeText(value, fallback = "") {
     return fallback;
   }
   return String(value);
+}
+
+// Formats a date-ONLY string (e.g. CISA KEV's "2021-12-24") without going
+// through the browser's local timezone — `new Date("2021-12-24")` parses as
+// UTC midnight, so `.toLocaleDateString()` on it renders a day early in any
+// timezone west of UTC. Renders as UTC to match the literal calendar date.
+function formatIsoDateUTC(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso || "");
+  return d.toLocaleDateString(undefined, { timeZone: "UTC" });
 }
 
 function Badge({ label, color }) {
@@ -1596,6 +1610,14 @@ function ComplianceSlideshow({ frameworks, onOpenFramework }) {
             <div style={{height:7,background:C.surface,borderRadius:4,overflow:"hidden"}}>
               <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${C.purple},${C.accent})`}}/>
             </div>
+            {/* pct here can be a reused number (e.g. NIST CSF's own posture
+                score), not a separately computed one — the caption says so
+                rather than letting it look identical to an independent score. */}
+            {cur.pctSuppressedReason && (
+              <div style={{color:C.textMut,fontSize:10.5,lineHeight:1.5,marginTop:6}}>
+                {safeText(cur.pctSuppressedReason)}
+              </div>
+            )}
           </>
         )}
         <div style={{fontSize:11,color:C.textMut,marginTop:6}}>readiness</div>
@@ -2377,7 +2399,7 @@ function CveExposureCard() {
                       <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{safeText(c.description)}</div>
                       {c.kev?.dueDate && (
                         <div style={{color:C.redText,fontSize:11,fontWeight:600,marginTop:5}}>
-                          Confirmed under active exploitation (CISA KEV) — federal remediation due {new Date(c.kev.dueDate).toLocaleDateString()}
+                          Confirmed under active exploitation (CISA KEV) — federal remediation due {formatIsoDateUTC(c.kev.dueDate)}
                           {c.kev.knownRansomwareCampaignUse ? " · known ransomware use" : ""}
                         </div>
                       )}
@@ -21031,8 +21053,20 @@ function MastermindConsole({ onClose }) {
             {analysis && (
               <div>
                 <Card style={{marginBottom:16}}>
-                  <div style={{color:C.purpleText,fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>
-                    Summary · {analysis.client}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                    <div style={{color:C.purpleText,fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>
+                      Summary · {analysis.client}
+                    </div>
+                    {analysis.generatedBy && MASTERMIND_ENGINES[ENGINE_FOR_PROVIDER[analysis.generatedBy]] && (() => {
+                      const engine = MASTERMIND_ENGINES[ENGINE_FOR_PROVIDER[analysis.generatedBy]];
+                      return (
+                        <span title={engine.specialty} style={{display:"inline-flex",alignItems:"center",gap:5,
+                          padding:"3px 10px",borderRadius:20,background:`${engine.color}15`,
+                          border:`1px solid ${engine.color}33`,color:engine.color,fontSize:10,fontWeight:600}}>
+                          {engine.icon} {engine.label}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div style={{color:C.text,fontSize:13.5,lineHeight:1.6}}>{analysis.summary || "No summary."}</div>
                 </Card>
