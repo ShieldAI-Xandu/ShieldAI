@@ -31,15 +31,28 @@ import { pushNotification } from "./portfolioRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 
-export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate }) {
+export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate, callClaudeWithTools }) {
   // { id, clientUserId (nullable — null = internal/staff-only issue, not
   //   tied to a client), topic, status, createdAt, updatedAt,
   //   createdByUserId, createdByRole: "client"|"analyst"|"admin",
   //   escalated, escalatedAt, escalatedByUserId, escalatedNote,
-  //   messages:[{id,authorRole,authorId,authorLabel,body,at}] }
+  //   humanRequested, humanRequestedAt, humanRequestedBy: "client"|"mastermind"|"staff"|null,
+  //   claimedByUserId, claimedByRole: "admin"|"analyst"|null, claimedAt,
+  //   messages:[{id,authorRole: "client"|"staff"|"mastermind",authorId,authorLabel,body,at}] }
   // Missing createdByRole on an existing record implies "client"; missing
-  // escalated implies false — both are additive, pre-existing tickets are
-  // unaffected.
+  // escalated/humanRequested/claimedByUserId implies false/null — all
+  // additive, pre-existing tickets are unaffected.
+  //
+  // Unified support chat: while a ticket is unclaimed, a client message is
+  // answered by Mastermind automatically (maybeGenerateMastermindReply,
+  // below) — "Mastermind is always the first option." A client can ask for
+  // a person explicitly (request-human route) or Mastermind can flag it
+  // itself via the request_human_support tool; either way every admin and
+  // analyst is notified and the first to /claim becomes the sole active
+  // handler (single-claim — others can still view via canSee's existing
+  // cross-analyst visibility, but there's one clear owner). Any ticket a
+  // staff member creates or replies to is auto-claimed by them, so
+  // Mastermind never talks over a human who's already engaged.
   db.data.supportRequests ||= [];
 
   // The real enforcement point — UI hiding (the top-bar button/upgrade prompt)
@@ -131,6 +144,101 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
 
   const sortByUpdatedDesc = (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt);
 
+  // Flags a ticket for human pickup and notifies EVERY admin+analyst (not
+  // just assigned ones — matches the "all analysts and admins should be
+  // able to join" requirement). No-op if already flagged, so a chatty
+  // client re-asking "can I talk to a person" doesn't re-notify everyone.
+  function flagHumanRequested(ticket, { requestedBy, note }) {
+    if (ticket.humanRequested) return;
+    ticket.humanRequested = true;
+    ticket.humanRequestedAt = nowIso();
+    ticket.humanRequestedBy = requestedBy;
+    const staffIds = users().filter(u => u.isAdmin || u.isAnalyst).map(u => u.id);
+    for (const staffId of staffIds) {
+      pushNotification(db, {
+        userId: staffId,
+        type: "support_human_requested",
+        title: `${ticket.topic} — a client wants to talk to a person`,
+        body: note || "Open the Chats page to join this conversation.",
+        actorRole: requestedBy === "mastermind" ? "system" : "client_admin",
+      });
+    }
+  }
+
+  const SUPPORT_CHAT_TOOLS = [
+    {
+      name: "request_human_support",
+      description: "Flag this support conversation for a human admin/analyst to join, when the client explicitly asks for a person or you can't resolve their issue yourself.",
+      input_schema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
+    },
+    {
+      name: "check_my_support_status",
+      description: "Check whether a human has claimed this conversation yet, and who (if anyone) requested one.",
+      input_schema: { type: "object", properties: {} },
+    },
+  ];
+
+  // Mastermind-first behavior: while a ticket is unclaimed, run the
+  // client's latest message through Claude with a tiny, ticket-scoped tool
+  // pair (never the staff/platform-wide MASTERMIND_TOOLS — this must never
+  // be able to see or touch another client's data). Appends the reply as
+  // authorRole:"mastermind" and returns true on success; returns false
+  // (never throws) if Mastermind isn't configured or the call fails, so
+  // the caller can fall back to notifying staff directly rather than
+  // letting a client's message go unanswered AND unseen.
+  async function maybeGenerateMastermindReply(ticket) {
+    if (!callClaudeWithTools || ticket.claimedByUserId) return false;
+
+    const history = ticket.messages.slice(-10).map(m => ({
+      role: m.authorRole === "client" ? "user" : "assistant",
+      content: m.body,
+    }));
+    if (!history.length || history[0].role !== "user") return false;
+
+    const system = `You are Mastermind, ShieldAI's AI security advisor, answering inside a client's support chat.
+Be concise, direct, and helpful — you're the first line of support, not a human, and must never imply otherwise.
+If the client asks to speak with a person, or the issue is something you genuinely can't resolve (billing disputes, account changes, anything needing human judgment), call request_human_support with a short reason.
+You have no ability to change account settings, billing, or any client data from this chat — for anything beyond answering a question, request a human instead of guessing.`;
+
+    let replyText = null;
+    try {
+      replyText = await callClaudeWithTools({
+        system,
+        messages: history,
+        tools: SUPPORT_CHAT_TOOLS,
+        maxTurns: 3,
+        runTool: async (name, input) => {
+          if (name === "request_human_support") {
+            flagHumanRequested(ticket, { requestedBy: "mastermind", note: input?.reason });
+            return { ok: true, note: "A human has been notified and will join shortly." };
+          }
+          if (name === "check_my_support_status") {
+            const claimant = ticket.claimedByUserId ? findUser(ticket.claimedByUserId) : null;
+            return {
+              humanRequested: !!ticket.humanRequested,
+              claimed: !!ticket.claimedByUserId,
+              claimedByLabel: claimant ? (claimant.companyName || claimant.email) : null,
+            };
+          }
+          return { error: `Unknown tool "${name}".` };
+        },
+      });
+    } catch (err) {
+      console.warn("Mastermind support-chat reply failed:", err.message);
+      return false;
+    }
+
+    if (!replyText || !replyText.trim()) return false;
+    ticket.messages.push({
+      id: randomUUID(), authorRole: "mastermind", authorId: null,
+      authorLabel: "Mastermind (AI)",
+      body: replyText.trim().slice(0, 4000),
+      at: nowIso(),
+    });
+    ticket.updatedAt = nowIso();
+    return true;
+  }
+
   // ── Client side ──────────────────────────────────────────────
   app.get("/api/client/support-requests", requireAuth, supportCenterGate, (req, res) => {
     if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
@@ -156,6 +264,12 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
       status: "open",
       createdAt: at,
       updatedAt: at,
+      humanRequested: false,
+      humanRequestedAt: null,
+      humanRequestedBy: null,
+      claimedByUserId: null,
+      claimedByRole: null,
+      claimedAt: null,
       messages: [{
         id: randomUUID(), authorRole: "client", authorId: req.userId,
         authorLabel: me?.companyName || me?.email || "Client",
@@ -164,14 +278,20 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
     };
     db.data.supportRequests.push(ticket);
 
-    for (const staffId of staffContactsFor(req.userId)) {
-      pushNotification(db, {
-        userId: staffId,
-        type: "support_request",
-        title: `New support request from ${me?.companyName || me?.email || "a client"}`,
-        body: `${topic}: ${message.slice(0, 900)}`,
-        actorRole: "client_admin",
-      });
+    // Mastermind-first: try an AI reply before paging any human. Only fall
+    // back to notifying staff if Mastermind isn't configured or fails —
+    // a client's message must never go both unanswered and unseen.
+    const mastermindReplied = await maybeGenerateMastermindReply(ticket);
+    if (!mastermindReplied) {
+      for (const staffId of staffContactsFor(req.userId)) {
+        pushNotification(db, {
+          userId: staffId,
+          type: "support_request",
+          title: `New support request from ${me?.companyName || me?.email || "a client"}`,
+          body: `${topic}: ${message.slice(0, 900)}`,
+          actorRole: "client_admin",
+        });
+      }
     }
     logClientAction(db, {
       clientUserId: req.userId,
@@ -204,15 +324,46 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
     ticket.status = "open"; // a follow-up reopens a resolved ticket
     ticket.updatedAt = at;
 
-    for (const staffId of staffContactsFor(req.userId)) {
+    if (ticket.claimedByUserId) {
+      // A human already owns this conversation — notify them directly,
+      // Mastermind stays out of it.
       pushNotification(db, {
-        userId: staffId,
+        userId: ticket.claimedByUserId,
         type: "support_request",
         title: `${me?.companyName || me?.email || "A client"} replied to their support request`,
         body: message.slice(0, 900),
         actorRole: "client_admin",
       });
+    } else {
+      const mastermindReplied = await maybeGenerateMastermindReply(ticket);
+      if (!mastermindReplied) {
+        for (const staffId of staffContactsFor(req.userId)) {
+          pushNotification(db, {
+            userId: staffId,
+            type: "support_request",
+            title: `${me?.companyName || me?.email || "A client"} replied to their support request`,
+            body: message.slice(0, 900),
+            actorRole: "client_admin",
+          });
+        }
+      }
     }
+    await db.write();
+    res.json(ticket);
+  });
+
+  // Explicit "Talk to a person" button — the client-initiated counterpart
+  // to Mastermind's own request_human_support tool call. Both converge on
+  // the same flagHumanRequested() helper, so a pending-join banner and
+  // staff notification look identical regardless of which path triggered it.
+  app.post("/api/client/support-requests/:id/request-human", requireAuth, supportCenterGate, async (req, res) => {
+    if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
+    const ticket = findRequest(req.params.id);
+    if (!ticket || ticket.clientUserId !== req.userId) {
+      return res.status(404).json({ error: "Support request not found." });
+    }
+    flagHumanRequested(ticket, { requestedBy: "client" });
+    ticket.updatedAt = nowIso();
     await db.write();
     res.json(ticket);
   });
@@ -275,6 +426,15 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
       escalatedAt: null,
       escalatedByUserId: null,
       escalatedNote: null,
+      // A staff-authored ticket is inherently already staff-handled —
+      // auto-claimed by its creator so Mastermind never auto-replies to
+      // something a human just wrote themselves.
+      humanRequested: true,
+      humanRequestedAt: at,
+      humanRequestedBy: "staff",
+      claimedByUserId: req.userId,
+      claimedByRole: req.isAdmin ? "admin" : "analyst",
+      claimedAt: at,
       messages: [{
         id: randomUUID(), authorRole: "staff", authorId: req.userId,
         authorLabel: actor?.companyName || actor?.email || "ShieldAI staff",
@@ -352,6 +512,45 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
     res.json(ticket);
   });
 
+  // Join an open (or already-humanRequested) conversation. First to accept
+  // becomes the sole active handler — the actual enforcement of
+  // single-claim, since two staff clicking "Join" at once must not both
+  // succeed. Idempotent for the same person; 409 for anyone else once
+  // claimed, so the UI can show "already being handled by X."
+  app.post("/api/analyst/support-requests/:id/claim", requireAnalyst, async (req, res) => {
+    const ticket = findRequest(req.params.id);
+    if (!ticket || !canSeeTicket(req, ticket)) {
+      return res.status(404).json({ error: "Support request not found." });
+    }
+    if (ticket.claimedByUserId && ticket.claimedByUserId !== req.userId) {
+      return res.status(409).json({
+        error: "This conversation has already been claimed.",
+        claimedByUserId: ticket.claimedByUserId,
+      });
+    }
+    if (ticket.claimedByUserId === req.userId) return res.json(ticket); // already the claimant — no-op
+
+    const actor = findUser(req.userId);
+    const at = nowIso();
+    ticket.claimedByUserId = req.userId;
+    ticket.claimedByRole = req.isAdmin ? "admin" : "analyst";
+    ticket.claimedAt = at;
+    if (!ticket.humanRequested) {
+      ticket.humanRequested = true;
+      ticket.humanRequestedAt = at;
+      ticket.humanRequestedBy = "staff";
+    }
+    ticket.messages.push({
+      id: randomUUID(), authorRole: "staff", authorId: req.userId,
+      authorLabel: actor?.companyName || actor?.email || "ShieldAI support",
+      body: `${actor?.companyName || actor?.email || "A team member"} joined the conversation.`,
+      at,
+    });
+    ticket.updatedAt = at;
+    await db.write();
+    res.json(ticket);
+  });
+
   app.post("/api/analyst/support-requests/:id/reply", requireAnalyst, async (req, res) => {
     const ticket = findRequest(req.params.id);
     if (!ticket || !canSeeTicket(req, ticket)) {
@@ -369,6 +568,20 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
       body: message.slice(0, 2000), at,
     });
     ticket.updatedAt = at;
+
+    // Replying to a client-facing ticket implicitly claims it, if nobody
+    // has already — a human replying IS them joining; this stops Mastermind
+    // from stepping on a reply that was sent without an explicit /claim first.
+    if (ticket.clientUserId && !ticket.claimedByUserId) {
+      ticket.claimedByUserId = req.userId;
+      ticket.claimedByRole = req.isAdmin ? "admin" : "analyst";
+      ticket.claimedAt = at;
+      if (!ticket.humanRequested) {
+        ticket.humanRequested = true;
+        ticket.humanRequestedAt = at;
+        ticket.humanRequestedBy = "staff";
+      }
+    }
 
     pushNotification(db, {
       userId: ticket.clientUserId,

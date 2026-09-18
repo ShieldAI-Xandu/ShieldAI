@@ -65,6 +65,7 @@ import { registerTaskRoutes } from "./taskRoutes.js";
 import { registerEvidenceRoutes } from "./evidenceRoutes.js";
 import { registerPortfolioRoutes, recordPostureSnapshot } from "./portfolioRoutes.js";
 import { registerSupportRoutes } from "./supportRoutes.js";
+import { registerStaffChatRoutes } from "./staffChatRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
@@ -2452,7 +2453,8 @@ registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClie
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });
 registerEvidenceRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds });
 registerPortfolioRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
-registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
+registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate, callClaudeWithTools });
+registerStaffChatRoutes(app, { db, requireAuth });
 registerBrandingRoutes(app, { db, requireAuth, requireAdmin });
 registerComplianceTrackingRoutes(app, { db, requireAuth, callClaudeText, extractJson, analystOwnsClient, aiLimiter, gate });
 registerCustomFrameworkRoutes(app, { db, requireAuth, requireAdmin });

@@ -13483,6 +13483,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
             Exit Admin
           </button>
         )}
+        <NotificationBell onNavigate={()=>setListTab("chats")}/>
         {onSignOut && (
           <button onClick={onSignOut}
             style={{padding:"6px 14px",background:"none",border:`1px solid ${NAV.border}`,
@@ -13955,7 +13956,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
             { id:"training", label:"Training" },
             { id:"frameworks", label:"Frameworks" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
-            { id:"support", label:"Support" },
+            { id:"chats", label:"💬 Chats" },
             { id:"audit", label:"Audit Log" },
             { id:"health", label:"System Health" },
           ].map(t => {
@@ -14125,7 +14126,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
           />
         )}
 
-        {listTab === "support" && <SupportRequestConsole viewerIsAdmin/>}
+        {listTab === "chats" && <ChatsConsole viewerIsAdmin/>}
 
         {listTab === "audit" && (
           <div>
@@ -14629,10 +14630,21 @@ function SupportRequestConsole({ viewerIsAdmin }) {
     } finally { setBusy(null); }
   }
 
+  const [claimError, setClaimError] = useState(null);
+  async function claimTicket(id) {
+    setBusy(id); setClaimError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/support-requests/${id}/claim`, { method: "POST" });
+      if (res.ok) { setOpenId(id); load(); }
+      else if (res.status === 409) setClaimError("Someone else just claimed this conversation.");
+    } finally { setBusy(null); }
+  }
+
   if (tickets === null) return <Spinner/>;
 
   const counts = tickets.reduce((acc,t)=>{ acc[t.status]=(acc[t.status]||0)+1; return acc; }, {});
   const shown = filter === "all" ? tickets : tickets.filter(t => t.status === filter);
+  const pendingJoin = tickets.filter(t => t.humanRequested && !t.claimedByUserId);
 
   return (
     <div>
@@ -14684,6 +14696,31 @@ function SupportRequestConsole({ viewerIsAdmin }) {
         </div>
       )}
 
+      {pendingJoin.length > 0 && (
+        <Card style={{padding:"14px 18px",marginBottom:14,background:`${C.amber}14`,border:`1px solid ${C.amber}55`}}>
+          <div style={{fontWeight:700,fontSize:13.5,color:C.text,marginBottom:8}}>
+            🟡 {pendingJoin.length} conversation{pendingJoin.length===1?"":"s"} waiting for a human
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {pendingJoin.map(t => (
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <span style={{fontSize:13,color:C.text,fontWeight:600}}>{t.client?.name || "Internal"}</span>
+                <span style={{fontSize:12,color:C.textSec}}>{safeText(t.topic)}</span>
+                <button onClick={()=>claimTicket(t.id)} disabled={busy===t.id}
+                  style={{marginLeft:"auto",padding:"5px 14px",background:C.amber,color:"#1A1200",border:"none",
+                    borderRadius:6,fontSize:12,fontWeight:700,cursor:busy===t.id?"wait":"pointer"}}>
+                  {busy===t.id ? "…" : "Join"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+      {claimError && (
+        <div style={{marginBottom:14,padding:"8px 14px",background:`${C.red}14`,border:`1px solid ${C.red}55`,
+          borderRadius:8,color:C.red,fontSize:12.5}}>{claimError}</div>
+      )}
+
       {shown.length === 0 ? (
         <Card style={{textAlign:"center",padding:"40px 24px"}}>
           <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:6}}>
@@ -14709,6 +14746,13 @@ function SupportRequestConsole({ viewerIsAdmin }) {
                     <span style={{color:C.text,fontWeight:700,fontSize:15}}>{safeText(clientLabel)}</span>
                     <Badge label={sMeta.label} color={sMeta.color}/>
                     {t.escalated && <Badge label="Escalated" color={C.red}/>}
+                    {t.claimedByUserId ? (
+                      <Badge label={`Claimed`} color={C.green}/>
+                    ) : t.humanRequested ? (
+                      <Badge label="Waiting for human" color={C.amber}/>
+                    ) : t.clientUserId ? (
+                      <Badge label="Mastermind" color={C.purple}/>
+                    ) : null}
                     {!viewerIsAdmin && t.mine === false && (
                       <span style={{fontSize:10,color:C.textMut,border:`1px solid ${C.border}`,borderRadius:20,padding:"2px 8px"}}>
                         not your client
@@ -14732,16 +14776,23 @@ function SupportRequestConsole({ viewerIsAdmin }) {
                       {t.messages.map(m => (
                         <div key={m.id} style={{display:"flex",justifyContent:m.authorRole==="staff"?"flex-end":"flex-start"}}>
                           <div style={{maxWidth:"85%",padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
-                            background:m.authorRole==="staff"?`${C.green}1A`:C.surface,
-                            border:`1px solid ${m.authorRole==="staff"?C.green+"44":C.border}`,color:C.text}}>
+                            background:m.authorRole==="staff"?`${C.green}1A`:m.authorRole==="mastermind"?`${C.purple}14`:C.surface,
+                            border:`1px solid ${m.authorRole==="staff"?C.green+"44":m.authorRole==="mastermind"?C.purple+"44":C.border}`,color:C.text}}>
                             {safeText(m.body)}
-                            <div style={{color:C.textMut,fontSize:10,marginTop:3}}>
-                              {safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                            <div style={{color:m.authorRole==="mastermind"?C.purple:C.textMut,fontSize:10,marginTop:3,fontWeight:m.authorRole==="mastermind"?700:400}}>
+                              {m.authorRole==="mastermind" && "🧠 "}{safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
                             </div>
                           </div>
                         </div>
                       ))}
                     </div>
+                    {t.clientUserId && t.humanRequested && !t.claimedByUserId && (
+                      <button onClick={()=>claimTicket(t.id)} disabled={busy===t.id}
+                        style={{width:"100%",marginBottom:10,padding:"10px 16px",background:C.amber,color:"#1A1200",
+                          border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:busy===t.id?"wait":"pointer"}}>
+                        {busy===t.id ? "…" : "🙋 Join this conversation"}
+                      </button>
+                    )}
                     <div style={{display:"flex",gap:8,marginBottom:10}}>
                       <input value={reply} onChange={e=>setReply(e.target.value)}
                         onKeyDown={e=>{if(e.key==="Enter")sendReply(t.id);}}
@@ -14842,6 +14893,238 @@ function SupportRequestConsole({ viewerIsAdmin }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  INTERNAL STAFF CHAT — group "Team" channel + 1:1 DMs. Polling, same
+//  20s pattern as ClientNotePanel/ClientAnalystChat — this app has no
+//  WebSocket/SSE infrastructure anywhere.
+// ─────────────────────────────────────────────────────────────
+
+function StaffChatThread({ endpoint, placeholder, emptyText }) {
+  const [messages, setMessages] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef(null);
+
+  const load = useCallback(() => {
+    authFetch(`${API_BASE}${endpoint}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setMessages(Array.isArray(d) ? d : []))
+      .catch(() => setMessages([]));
+  }, [endpoint]);
+
+  useEffect(() => {
+    setMessages(null);
+    load();
+    const iv = setInterval(load, 20000);
+    return () => clearInterval(iv);
+  }, [load]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ block: "nearest" }); }, [messages]);
+
+  async function send() {
+    if (!draft.trim()) return;
+    setSending(true);
+    try {
+      const res = await authFetch(`${API_BASE}${endpoint}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: draft.trim() }),
+      });
+      if (res.ok) { setDraft(""); load(); }
+    } finally { setSending(false); }
+  }
+
+  if (messages === null) return <Spinner/>;
+
+  return (
+    <div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:420,overflowY:"auto",
+        marginBottom:12,padding:"4px"}}>
+        {messages.length === 0 ? (
+          <div style={{color:C.textSec,fontSize:13,textAlign:"center",padding:"24px 0"}}>{emptyText}</div>
+        ) : messages.map(m => (
+          <div key={m.id} style={{display:"flex",flexDirection:"column",gap:2,alignItems:"flex-start"}}>
+            <div style={{maxWidth:"82%",padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
+              background:C.surface,border:`1px solid ${C.border}`,color:C.text}}>
+              {safeText(m.body)}
+            </div>
+            <div style={{color:C.textMut,fontSize:10,marginLeft:4}}>
+              {safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <input value={draft} onChange={e=>setDraft(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")send();}}
+          placeholder={placeholder}
+          disabled={sending}
+          style={{flex:1,padding:"10px 12px",background:C.bg,border:`1px solid ${C.border}`,
+            borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
+        <button onClick={send} disabled={sending || !draft.trim()}
+          style={{padding:"10px 16px",background:draft.trim()?C.green:C.border,
+            color:draft.trim()?"#04121F":C.textMut,border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+            cursor:draft.trim()?"pointer":"default"}}>
+          {sending ? "…" : "Send"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TeamChat() {
+  return (
+    <div>
+      <SectionLabel text="Team"/>
+      <p style={{color:C.textSec,fontSize:13,margin:"0 0 14px"}}>
+        Visible to every admin and analyst — no setup needed.
+      </p>
+      <Card style={{padding:"16px 18px"}}>
+        <StaffChatThread endpoint="/api/staff/chat/team/messages"
+          placeholder="Message the team…" emptyText="No messages yet — say hello."/>
+      </Card>
+    </div>
+  );
+}
+
+function DirectMessages() {
+  const [data, setData] = useState(null);
+  const [activeId, setActiveId] = useState(null);
+
+  const loadThreads = useCallback(() => {
+    authFetch(`${API_BASE}/api/staff/chat/dm-threads`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setData(d); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadThreads(); const iv = setInterval(loadThreads, 20000); return () => clearInterval(iv); }, [loadThreads]);
+
+  if (data === null) return <Spinner/>;
+
+  const people = [...data.threads, ...data.roster.filter(r => !data.threads.some(t => t.userId === r.userId))];
+  const active = people.find(p => p.userId === activeId);
+
+  return (
+    <div>
+      <SectionLabel text="Direct Messages"/>
+      <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
+        <Card style={{padding:"10px",width:220,flexShrink:0}}>
+          {people.length === 0 ? (
+            <div style={{color:C.textSec,fontSize:12,padding:"10px"}}>No other staff yet.</div>
+          ) : people.map(p => (
+            <button key={p.userId} onClick={()=>setActiveId(p.userId)}
+              style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",borderRadius:8,
+                background: activeId===p.userId ? `${C.accent}22` : "transparent",
+                border:"none",color: activeId===p.userId ? C.accent : C.text,fontSize:13,fontWeight:600,
+                cursor:"pointer",marginBottom:2}}>
+              {safeText(p.name)}
+            </button>
+          ))}
+        </Card>
+        <div style={{flex:"1 1 320px",minWidth:280}}>
+          {active ? (
+            <Card style={{padding:"16px 18px"}} key={active.userId}>
+              <StaffChatThread endpoint={`/api/staff/chat/dm/${active.userId}/messages`}
+                placeholder={`Message ${active.name}…`} emptyText="No messages yet — say hello."/>
+            </Card>
+          ) : (
+            <Card style={{padding:"40px 24px",textAlign:"center"}}>
+              <div style={{color:C.textSec,fontSize:13}}>Pick someone to message.</div>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ChatsConsole — the shared hub, mounted identically in both AdminPanel and
+// AnalystConsole (same convention as SupportRequestConsole above). Folds
+// the former standalone "Support" tab in as its first sub-tab, plus the
+// analyst↔client thread, and the new internal Team/DM chat.
+function ChatsConsole({ viewerIsAdmin }) {
+  const [sub, setSub] = useState("support");
+  const [clientThreads, setClientThreads] = useState(null);
+  const [openClientId, setOpenClientId] = useState(null);
+
+  useEffect(() => {
+    if (sub !== "clients" || clientThreads !== null) return;
+    authFetch(`${API_BASE}/api/analyst/clients`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setClientThreads(Array.isArray(d) ? d : []))
+      .catch(() => setClientThreads([]));
+  }, [sub, clientThreads]);
+
+  const TABS = [
+    { id: "support", label: "🎫 Support" },
+    { id: "clients", label: "👥 Client Chats" },
+    { id: "team", label: "🧑‍🤝‍🧑 Team" },
+    { id: "dms", label: "💬 Direct Messages" },
+  ];
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
+        {TABS.map(t => {
+          const on = sub === t.id;
+          return (
+            <button key={t.id} onClick={()=>setSub(t.id)}
+              style={{padding:"7px 14px",borderRadius:20,cursor:"pointer",fontSize:12.5,fontWeight:600,
+                background: on ? `${C.accent}22` : "transparent",
+                border:`1px solid ${on ? C.accent : C.border}`,
+                color: on ? C.accent : C.textSec}}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {sub === "support" && <SupportRequestConsole viewerIsAdmin={viewerIsAdmin}/>}
+
+      {sub === "clients" && (
+        clientThreads === null ? <Spinner/> : (
+          <div>
+            <SectionLabel text="Client Chats"/>
+            <p style={{color:C.textSec,fontSize:13,margin:"0 0 14px"}}>
+              The ongoing 1:1 thread between a client and their analyst — {viewerIsAdmin ? "any client, admin visibility." : "your assigned clients."}
+            </p>
+            {clientThreads.length === 0 ? (
+              <Card style={{textAlign:"center",padding:"40px 24px"}}>
+                <div style={{color:C.textSec,fontSize:13}}>No clients to show yet.</div>
+              </Card>
+            ) : (
+              <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                <Card style={{padding:"10px",width:220,flexShrink:0}}>
+                  {clientThreads.map(c => (
+                    <button key={c.id} onClick={()=>setOpenClientId(c.id)}
+                      style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",borderRadius:8,
+                        background: openClientId===c.id ? `${C.accent}22` : "transparent",
+                        border:"none",color: openClientId===c.id ? C.accent : C.text,fontSize:13,fontWeight:600,
+                        cursor:"pointer",marginBottom:2}}>
+                      {safeText(c.name)}
+                    </button>
+                  ))}
+                </Card>
+                <div style={{flex:"1 1 320px",minWidth:280}}>
+                  {openClientId ? <ClientNotePanel clientId={openClientId} key={openClientId}/> : (
+                    <Card style={{padding:"40px 24px",textAlign:"center"}}>
+                      <div style={{color:C.textSec,fontSize:13}}>Pick a client to open their chat.</div>
+                    </Card>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      )}
+
+      {sub === "team" && <TeamChat/>}
+      {sub === "dms" && <DirectMessages/>}
     </div>
   );
 }
@@ -17497,12 +17780,13 @@ function AnalystConsole({ user, onExit, onImpersonate, onOpenAdmin }) {
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
           🎨 Branding
         </button>
-        <button onClick={()=>setView(view==="support"?"portfolio":"support")}
-          style={{padding:"6px 14px",background:view==="support"?SOC.cyan:`${SOC.cyan}18`,
-            color:view==="support"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
+        <button onClick={()=>setView(view==="chats"?"portfolio":"chats")}
+          style={{padding:"6px 14px",background:view==="chats"?SOC.cyan:`${SOC.cyan}18`,
+            color:view==="chats"?SOC.bg:SOC.cyan,border:`1px solid ${SOC.cyan}55`,borderRadius:6,
             fontSize:12,fontWeight:700,cursor:"pointer"}}>
-          🎫 Support
+          💬 Chats
         </button>
+        <NotificationBell onNavigate={()=>setView("chats")}/>
         <button onClick={()=>setMmOpen(o=>!o)}
           style={{padding:"6px 14px",background:mmOpen?SOC.purple:`${SOC.purple}22`,
             color:mmOpen?SOC.bg:SOC.purple,border:`1px solid ${SOC.purple}66`,borderRadius:6,
@@ -17639,14 +17923,14 @@ function AnalystConsole({ user, onExit, onImpersonate, onOpenAdmin }) {
     );
   }
 
-  if (view === "support") {
+  if (view === "chats") {
     return (
       <div style={{minHeight:"100vh",background:SOC.bg,fontFamily:"Inter,system-ui,sans-serif",color:SOC.text}}>
-        <Header title="Support Requests"/>
+        <Header title="Chats"/>
         <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
           mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
-          <SupportRequestConsole viewerIsAdmin={!!user.isAdmin}/>
+          <ChatsConsole viewerIsAdmin={!!user.isAdmin}/>
         </div>
       </div>
     );
@@ -22139,6 +22423,15 @@ function SupportCenter({ onClose, onOpenMastermind }) {
     } finally { setReplying(false); }
   }
 
+  const [requestingHuman, setRequestingHuman] = useState(null);
+  async function requestHuman(ticketId) {
+    setRequestingHuman(ticketId);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/support-requests/${ticketId}/request-human`, { method: "POST" });
+      if (res.ok) load();
+    } finally { setRequestingHuman(null); }
+  }
+
   const field = { width:"100%", padding:"11px 13px", background:C.bg, border:`1px solid ${C.border}`,
     borderRadius:9, color:C.text, fontSize:14, boxSizing:"border-box", marginBottom:11,
     fontFamily:"inherit" };
@@ -22186,7 +22479,7 @@ function SupportCenter({ onClose, onOpenMastermind }) {
               cursor:submitting?"wait":"pointer"}}>
             {submitting ? "Sending…" : "Submit request"}
           </button>
-          <div style={{color:C.textMut,fontSize:12,marginTop:9}}>We'll reply here, usually within one business day.</div>
+          <div style={{color:C.textMut,fontSize:12,marginTop:9}}>🧠 Mastermind answers instantly below — ask for a person any time.</div>
         </Card>
 
         <SectionLabel text="Your support requests"/>
@@ -22208,6 +22501,13 @@ function SupportCenter({ onClose, onOpenMastermind }) {
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                       <span style={{fontWeight:700,fontSize:14}}>{safeText(t.topic)}</span>
                       <Badge label={sMeta.label} color={sMeta.color}/>
+                      {t.claimedByUserId ? (
+                        <Badge label="A team member joined" color={C.green}/>
+                      ) : t.humanRequested ? (
+                        <Badge label="Waiting for a person" color={C.amber}/>
+                      ) : (
+                        <Badge label="Mastermind" color={C.purple}/>
+                      )}
                       <span style={{marginLeft:"auto",color:C.textMut,fontSize:11}}>
                         {new Date(t.updatedAt).toLocaleDateString()}
                       </span>
@@ -22224,17 +22524,17 @@ function SupportCenter({ onClose, onOpenMastermind }) {
                         {t.messages.map(m => (
                           <div key={m.id} style={{display:"flex",justifyContent:m.authorRole==="client"?"flex-end":"flex-start"}}>
                             <div style={{maxWidth:"85%",padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
-                              background:m.authorRole==="client"?`${C.accent}1F`:C.surface,
-                              border:`1px solid ${m.authorRole==="client"?C.accent+"44":C.border}`,color:C.text}}>
+                              background:m.authorRole==="client"?`${C.accent}1F`:m.authorRole==="mastermind"?`${C.purple}14`:C.surface,
+                              border:`1px solid ${m.authorRole==="client"?C.accent+"44":m.authorRole==="mastermind"?C.purple+"44":C.border}`,color:C.text}}>
                               {safeText(m.body)}
-                              <div style={{color:C.textMut,fontSize:10,marginTop:3}}>
-                                {m.authorRole==="client" ? "You" : safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
+                              <div style={{color:m.authorRole==="mastermind"?C.purple:C.textMut,fontSize:10,marginTop:3,fontWeight:m.authorRole==="mastermind"?700:400}}>
+                                {m.authorRole==="mastermind" ? "🧠 Mastermind (AI)" : m.authorRole==="client" ? "You" : safeText(m.authorLabel)} · {new Date(m.at).toLocaleString()}
                               </div>
                             </div>
                           </div>
                         ))}
                       </div>
-                      <div style={{display:"flex",gap:8}}>
+                      <div style={{display:"flex",gap:8,marginBottom:10}}>
                         <input value={reply} onChange={e=>setReply(e.target.value)}
                           onKeyDown={e=>{if(e.key==="Enter")sendReply(t.id);}}
                           placeholder={t.status==="resolved" ? "Reply to reopen this request…" : "Reply…"}
@@ -22248,6 +22548,14 @@ function SupportCenter({ onClose, onOpenMastermind }) {
                           {replying ? "…" : "Send"}
                         </button>
                       </div>
+                      {!t.humanRequested && (
+                        <button onClick={()=>requestHuman(t.id)} disabled={requestingHuman===t.id}
+                          style={{width:"100%",padding:"9px 14px",background:"transparent",
+                            border:`1px solid ${C.border}`,borderRadius:8,color:C.textSec,fontSize:12.5,fontWeight:600,
+                            cursor:requestingHuman===t.id?"wait":"pointer"}}>
+                          {requestingHuman===t.id ? "…" : "🙋 Talk to a person instead"}
+                        </button>
+                      )}
                     </div>
                   )}
                 </Card>

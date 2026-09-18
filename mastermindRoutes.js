@@ -18,6 +18,7 @@ import { randomUUID } from "crypto";
 import { getTier, hasCapability, hasTrainingDelivery, featureAccess, DEFAULT_TIER, priceLabel } from "./tiers.js";
 import { cachedExposure } from "./cveService.js";
 import { cachedDarkweb } from "./darkwebService.js";
+import { cachedAttackSurface } from "./attackSurfaceService.js";
 import { brandingSummary, resolveBrandingForUser } from "./brandingRoutes.js";
 import { taskSummary, simulateControlChange, currentPosture } from "./taskRoutes.js";
 import { evidenceSummary } from "./evidenceRoutes.js";
@@ -25,6 +26,7 @@ import { complianceSummary } from "./complianceRoutes.js";
 import { trainingSummary, clientTrainingSummary } from "./trainingProgramRoutes.js";
 import { vendorSummary, portfolioOverdueQueue, listVendors } from "./vendorRiskService.js";
 import { clientPhishingSummary, phishingSummary } from "./phishingRoutes.js";
+import { pushNotification } from "./portfolioRoutes.js";
 // The BRIDGE, not complianceFrameworks.js. Same function signatures, but the
 // assessments are now computed by the deep control-mapped modules — so
 // check_compliance answers about ISO 27001 from 93 real Annex A controls with
@@ -86,6 +88,90 @@ function reportsSummary(db, ownerUserId) {
     total: list.length, delivered, undelivered: list.length - delivered,
     lastGeneratedAt: list.length ? list.map(r => r.createdAt).sort().slice(-1)[0] : null,
   };
+}
+
+// Support-chat status — without this, Mastermind could describe the
+// support-chat feature from the manual but never say whether THIS client
+// currently has an open conversation, or whether a human has joined it.
+// Used by portfolioSnapshot() (per-client + platform rollup), clientSnapshot(),
+// and the list_open_support_chats tool below.
+function supportSummary(db, ownerUserId) {
+  const mine = (db.data.supportRequests || []).filter(r => r.clientUserId === ownerUserId);
+  const open = mine.filter(r => r.status === "open");
+  return {
+    open: open.length,
+    awaitingHuman: open.filter(r => r.humanRequested && !r.claimedByUserId).length,
+    claimed: open.filter(r => !!r.claimedByUserId).length,
+  };
+}
+
+// Client-scoped "talk to a person" for the general Ask-Mastermind widget
+// (not tied to an open ticket the way supportRoutes.js's own version is) —
+// mirrors supportRoutes.js's flagHumanRequested/request-human flow so
+// asking for a human works the same way regardless of which Mastermind
+// entry point a client uses. Reuses the client's existing open, unclaimed
+// ticket if they have one; otherwise opens a new one, so staff only ever
+// have one queue (the Chats page) to check, never two.
+//
+// Defense-in-depth: checks the supportCenter capability itself rather than
+// trusting the caller (requireClientMastermind) to have already enforced
+// an equivalent tier bar. Today mastermindChat and supportCenter happen to
+// share the same minTier for every plan in tiers.js, so this never fires
+// in practice — but nothing cross-validates those two independent flags,
+// so this is what keeps a future edit to either one from silently letting
+// this tool grant support-ticket creation to a tier that shouldn't have
+// it, the same way supportRoutes.js's own routes are explicitly gated by
+// supportCenterGate rather than relying on some other route's check.
+async function requestHumanForClient(db, clientUserId, reason) {
+  const client = (db.data.users || []).find(u => u.id === clientUserId);
+  const tier = client?.tier && getTier(client.tier).id === client.tier ? client.tier : DEFAULT_TIER;
+  if (!hasCapability(tier, "supportCenter")) {
+    return {
+      ok: false,
+      note: `Connecting with a person isn't included on the ${getTier(tier).name} plan yet — ` +
+        `the ${getTier("starter").name} plan (${priceLabel("starter")}) and above include it.`,
+    };
+  }
+
+  db.data.supportRequests ||= [];
+  const at = nowIso();
+  let ticket = db.data.supportRequests
+    .filter(r => r.clientUserId === clientUserId && r.status === "open" && !r.claimedByUserId)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
+
+  if (!ticket) {
+    ticket = {
+      id: randomUUID(), clientUserId, topic: "Escalated from Mastermind chat",
+      status: "open", createdAt: at, updatedAt: at,
+      humanRequested: false, humanRequestedAt: null, humanRequestedBy: null,
+      claimedByUserId: null, claimedByRole: null, claimedAt: null,
+      messages: [{
+        id: randomUUID(), authorRole: "client", authorId: clientUserId,
+        authorLabel: client?.companyName || client?.email || "Client",
+        body: reason || "I'd like to talk to a person.", at,
+      }],
+    };
+    db.data.supportRequests.push(ticket);
+  }
+
+  if (!ticket.humanRequested) {
+    ticket.humanRequested = true;
+    ticket.humanRequestedAt = at;
+    ticket.humanRequestedBy = "client";
+    const staffIds = (db.data.users || []).filter(u => u.isAdmin || u.isAnalyst).map(u => u.id);
+    for (const staffId of staffIds) {
+      pushNotification(db, {
+        userId: staffId,
+        type: "support_human_requested",
+        title: `${ticket.topic} — a client wants to talk to a person`,
+        body: reason || "Open the Chats page to join this conversation.",
+        actorRole: "client_admin",
+      });
+    }
+  }
+  ticket.updatedAt = at;
+  await db.write();
+  return { ok: true, ticket };
 }
 
 // Build a compact, read-only portfolio snapshot the AI can reason over without
@@ -218,6 +304,19 @@ function portfolioSnapshot(db, depth = "summary") {
         ...(dw.reason ? { reason: dw.reason } : {}),
         refreshedAt: dw.refreshedAt,
       } : { statusLevel: "Not checked", note: "No breach exposure computed yet." },
+      attackSurfaceExposure: (() => {
+        const surf = cachedAttackSurface(db, u.id);
+        if (!surf) return { monitored: false, note: "No attack-surface scan run yet." };
+        return {
+          monitored: !!surf.monitored, domain: surf.domain,
+          subdomainCount: (surf.subdomains || []).length,
+          liveHostCount: (surf.liveHosts || []).length,
+          ...(full ? { discoveredSoftware: surf.discoveredSoftware || [] } : {}),
+          ...(surf.reason ? { reason: surf.reason } : {}),
+          refreshedAt: surf.refreshedAt,
+        };
+      })(),
+      supportActivity: supportSummary(db, u.id),
       recommendations: {
         open: myRecs.filter(r => !["completed","declined"].includes(r.status)).length,
         byStatus: myRecs.reduce((m, r) => { m[r.status] = (m[r.status]||0)+1; return m; }, {}),
@@ -255,6 +354,10 @@ function portfolioSnapshot(db, depth = "summary") {
     training: trainingSummary(db, depth),
     vendorRisk: portfolioOverdueQueue(db),
     phishing: phishingSummary(db),
+    openSupportRequests: (() => {
+      const open = (db.data.supportRequests || []).filter(r => r.status === "open");
+      return { total: open.length, awaitingHuman: open.filter(r => r.humanRequested && !r.claimedByUserId).length };
+    })(),
     recentEvents: events.slice(-20).map(e => ({ client: nameOf(e.ownerUserId), severity: e.severity, type: e.type, message: e.message, at: e.ts || e.at })),
   };
 }
@@ -367,6 +470,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
       input_schema: { type: "object", properties: {
         clientIdOrEmail: { type: "string", description: "Optional client filter." },
         limit: { type: "number", description: "Max events (default 20, cap 50)." },
+      }, required: [] },
+    },
+    {
+      name: "list_open_support_chats",
+      description: "List open support-chat conversations — which are still with Mastermind, which are waiting for a human to join, and which are already claimed and by whom. Use this to answer 'any open support requests?' with real, current data.",
+      input_schema: { type: "object", properties: {
+        awaitingHumanOnly: { type: "boolean", description: "Optional: only conversations waiting for a human to join." },
       }, required: [] },
     },
     {
@@ -860,6 +970,24 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
         const dw = cachedDarkweb(db, u.id);
         return dw || { note: "No dark-web exposure computed yet for this client." };
       }
+      case "list_open_support_chats": {
+        // Deliberately ignores allowedClientIds — support-chat visibility is
+        // already broader than general analyst isolation on purpose (any
+        // analyst can join and help with any client's support conversation,
+        // see supportRoutes.js's canSee), so this tool mirrors that rather
+        // than under-reporting what an analyst could actually go join.
+        let list = (db.data.supportRequests || []).filter(r => r.status === "open" && r.clientUserId);
+        if (input.awaitingHumanOnly) list = list.filter(r => r.humanRequested && !r.claimedByUserId);
+        return { conversations: list.slice().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)).map(r => {
+          const claimant = r.claimedByUserId ? nameOf(r.claimedByUserId) : null;
+          return {
+            id: r.id, topic: r.topic, client: nameOf(r.clientUserId),
+            humanRequested: !!r.humanRequested,
+            status: r.claimedByUserId ? `claimed by ${claimant}` : (r.humanRequested ? "waiting for a human to join" : "Mastermind is handling it"),
+            updatedAt: r.updatedAt,
+          };
+        }) };
+      }
       case "recent_events": {
         let events = (db.data.agentEvents || []);
         if (input.clientIdOrEmail) {
@@ -898,11 +1026,13 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
     const snapshot = includeContext ? portfolioSnapshot(db, useDepth) : null;
     const system = `You are ShieldAI Mastermind, the central virtual-CISO intelligence for the entire ShieldAI platform, assisting a ShieldAI ADMIN.
 
-You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Each client also carries a cveExposure object — known CVE vulnerabilities (with CVSS severity and score) matched from the live NIST National Vulnerability Database against the software that client's agents and assessment report — and a darkWebExposure object — real breach/credential exposure for the client's domain from Have I Been Pwned (statusLevel, breached account count, and the named breaches). Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients. When relevant, reference specific CVE IDs and their severity, and named breaches. Remember CVE matches depend on reported software, and dark-web monitoring depends on a verified domain — a "Not monitored", "Not active", or "Not checked" status is a data/coverage gap, NOT a clean bill of health.
+You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Each client also carries a cveExposure object — known CVE vulnerabilities (with CVSS severity and score) matched from the live NIST National Vulnerability Database against the software that client's agents and assessment report — a darkWebExposure object — real breach/credential exposure for the client's domain from Have I Been Pwned (statusLevel, breached account count, and the named breaches) — an attackSurfaceExposure object — subdomains and live-host software discovered via certificate-transparency lookup and HTTP banner probing of a domain the client has verified ownership of, which also feeds cveExposure — and a supportActivity object (open support-chat count, how many are awaiting a human). Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients. When relevant, reference specific CVE IDs and their severity, and named breaches. Remember CVE matches depend on reported software, and dark-web/attack-surface monitoring depend on a verified domain — a "Not monitored", "Not active", or "Not checked" status is a data/coverage gap, NOT a clean bill of health.
+
+Support chat is unified: a client's message goes to you first, and you can flag a conversation for a human via request_human_support inside that chat — that's a separate, client-scoped tool only available in the client chat, not here. From here, use list_open_support_chats to tell an admin/analyst what's open, waiting for a human, or already claimed, and point them at the Chats page (in both the Admin and Analyst console) to actually join one. Staff also have their own internal Team channel and DMs there, unrelated to client support.
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. Frame every remediation as concrete steps a human takes — the client's admin acts on their own systems, or an assigned analyst acts with the client's permission. When you spot something actionable (e.g. an at-risk endpoint, an outdated agent, an overdue recommendation), say so clearly and explain what a human should do; the admin can then act through the platform's human-gated controls.
 
-Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand — list_clients, get_client_detail, list_recommendations, get_cve_exposure, get_darkweb_exposure, get_client_editable_records, and recent_events. Prefer starting from the attached summary snapshot, and call a tool when you need specifics you don't already have (e.g. one client's full endpoint list or CVE detail). These tools only READ data; they never change anything.
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand — list_clients, get_client_detail, list_recommendations, get_cve_exposure, get_darkweb_exposure, get_client_editable_records, list_open_support_chats, and recent_events. Prefer starting from the attached summary snapshot, and call a tool when you need specifics you don't already have (e.g. one client's full endpoint list or CVE detail). These tools only READ data; they never change anything.
 
 ${staffProposedEditInstructions("the admin")}
 
@@ -962,11 +1092,13 @@ ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.string
 
     const system = `You are ShieldAI Mastermind, assisting a ShieldAI ANALYST.
 
-You have read-only situational awareness of ONLY this analyst's assigned clients — not the whole platform. If asked about a client that isn't assigned to them, say so plainly rather than guessing; you genuinely cannot see that client's data, by design, the same way the analyst console itself can't. Each client carries a cveExposure object (real NVD-matched CVEs) and a darkWebExposure object (real HIBP breach data). A "Not monitored" or "Not checked" status is a coverage gap, not a clean bill of health.
+You have read-only situational awareness of ONLY this analyst's assigned clients — not the whole platform. If asked about a client that isn't assigned to them, say so plainly rather than guessing; you genuinely cannot see that client's data, by design, the same way the analyst console itself can't. Each client carries a cveExposure object (real NVD-matched CVEs), a darkWebExposure object (real HIBP breach data), an attackSurfaceExposure object (subdomains/live-host software discovered from a verified domain, which also feeds cveExposure), and a supportActivity object. A "Not monitored" or "Not checked" status is a coverage gap, not a clean bill of health.
+
+The one deliberate exception to client-scoping: list_open_support_chats shows support conversations across ALL clients, not just this analyst's own — support chat is intentionally open to any analyst covering for another (see the Chats page in the Analyst console), so tell them what's open/waiting/claimed and point them there to join. Support chat itself is unified: a client's message goes to Mastermind first in that same chat, with its own separate client-scoped escalation tool — not this one. Staff also have an internal Team channel and DMs on the same Chats page, unrelated to client support.
 
 You are ADVISORY ONLY. You never perform actions on any system or account, and never claim to have changed anything. The analyst acts with the client's permission through the platform's human-gated controls (recommendations, review decisions) — you help them decide what to do and in what order, you don't do it.
 
-Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand for any client assigned to this analyst — list_clients, get_client_detail, analyze_gaps, check_compliance, check_agent_evidence, get_client_editable_records, and more. These tools only READ data scoped to this analyst's own clients; they never change anything and cannot reach a client outside their assignments — get_client_editable_records will simply fail to find a client that isn't assigned to this analyst, the same as every other tool here.
+Be specific, accurate, and practical. You can call read-only tools to fetch precise detail on demand for any client assigned to this analyst — list_clients, get_client_detail, analyze_gaps, check_compliance, check_agent_evidence, get_client_editable_records, list_open_support_chats, and more. Every tool except list_open_support_chats only READs data scoped to this analyst's own clients; none of them change anything, and none but list_open_support_chats can reach a client outside their assignments — get_client_editable_records will simply fail to find a client that isn't assigned to this analyst, the same as every other client-scoped tool here.
 
 ${staffProposedEditInstructions("the analyst")}
 
@@ -1255,8 +1387,15 @@ Limit findings to 6 and recommendations to 5.`;
       if (Object.keys(byFramework).length) snap.complianceByFramework = byFramework;
     }
 
-    // ── Remediation tasks (any tier with a program) ─────────────
-    {
+    // ── Remediation tasks (Growth+ — remediationTasks) ───────────
+    // Gated like every other section here: staff routinely create tasks on
+    // a client's behalf regardless of that client's own tier (tierGate.js's
+    // capability() checks the ACTOR's role, not the target's tier), so rows
+    // can genuinely exist for a Starter client. Without this guard they'd
+    // leak Growth+-gated detail into a Starter client's chat, contradicting
+    // this prompt's own promise below that ungated features are never in
+    // context.
+    if (has("remediationTasks")) {
       const tasks = (db.data.tasks || []).filter(t => t.ownerUserId === userId);
       if (tasks.length) {
         const open = tasks.filter(t => !["done", "cancelled"].includes(t.status));
@@ -1273,11 +1412,14 @@ Limit findings to 6 and recommendations to 5.`;
       }
     }
 
-    // ── Evidence on file (any tier — not capability-gated) ───────
+    // ── Evidence on file (Growth+ — evidenceAccess) ──────────────
+    // Same reasoning as tasks above — evidenceRoutes.js itself has no tier
+    // gate (staff can upload for any client), so this must gate on read
+    // here or a Starter client's evidence list leaks Growth+-only detail.
     // Real ids so a "proposed_edit" block can reuse an existing piece of
     // evidence elsewhere (evidenceLink) instead of Mastermind suggesting the
     // client re-upload something that's already on file.
-    {
+    if (has("evidenceAccess")) {
       const items = (db.data.evidence || []).filter(e => e.ownerUserId === userId);
       if (items.length) {
         snap.evidence = {
@@ -1459,6 +1601,8 @@ Never fabricate an id for any of these — if the data below doesn't contain a r
 
 Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
 
+TALKING TO A PERSON: if the client explicitly asks for a human, or you can't resolve something yourself, call request_human_support with a short reason — this notifies ShieldAI staff and they'll join a conversation with you shortly. You have no other way to connect them to a person.
+
 HOW-TO KNOWLEDGE — the ShieldAI user manual. When a client asks how to use a feature ("how do I install the agent," "how do employees acknowledge a policy," "how do I run a phishing test"), answer from this manual rather than guessing at UI details. Don't invent steps, buttons, or menus that aren't described here.
 ${manualAsText()}${contextLine}
 
@@ -1468,7 +1612,28 @@ ${JSON.stringify(snap)}`;
     try {
       const lastUserMsg = [...clean].reverse().find(m => m.role === "user")?.content || "";
       const provider = classifyMastermindProvider(lastUserMsg);
-      const { text } = await callAI({ provider, system, messages: clean, max_tokens: 1200 });
+      let text;
+      // Tools only on the Claude branch, and only this tiny client-scoped
+      // pair — never MASTERMIND_TOOLS, which are staff/platform-wide and
+      // would break the isolation this endpoint otherwise strictly enforces.
+      if (provider === "claude" && callClaudeWithTools) {
+        text = await callClaudeWithTools({
+          system, messages: clean, max_tokens: 1200, maxTurns: 3,
+          tools: [{
+            name: "request_human_support",
+            description: "Connect this client with a human ShieldAI admin/analyst — call this when they ask for a person or you can't resolve their issue.",
+            input_schema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
+          }],
+          runTool: async (name, input) => {
+            if (name !== "request_human_support") return { error: `Unknown tool "${name}".` };
+            const result = await requestHumanForClient(db, req.userId, input?.reason);
+            if (!result.ok) return result;
+            return { ok: true, note: "A human has been notified and will join shortly." };
+          },
+        });
+      } else {
+        ({ text } = await callAI({ provider, system, messages: clean, max_tokens: 1200 }));
+      }
       res.json({ reply: text });
     } catch (err) {
       console.error("Client Mastermind error:", err.message);
