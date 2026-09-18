@@ -23,6 +23,7 @@
 // rate-limited, timed out, never throws into the request path.
 
 import { listClientDomains, OWNERSHIP } from "./domainService.js";
+import { safeFetch } from "./outboundUrlSafety.js";
 
 const CRTSH_BASE = "https://crt.sh/";
 // crt.sh is a free community service with no SLA and can be slow — a longer
@@ -79,8 +80,11 @@ export function attackSurfaceServiceStatus() {
 export async function probeAttackSurface() {
   const t0 = Date.now();
   try {
-    // A domain guaranteed to have CT log entries — proves crt.sh answers.
-    const json = await crtshFetch("example.com");
+    // Routed through scheduleCrtsh, same as every real scan — otherwise an
+    // admin-panel probe landing mid-scan could double up on crt.sh well
+    // under CRTSH_MIN_INTERVAL_MS, the exact "be polite" contract this
+    // module documents for every other call site.
+    const json = await scheduleCrtsh(() => crtshFetch("example.com"));
     const ok = Array.isArray(json) && json.length > 0;
     return { reachable: true, ok, latencyMs: Date.now() - t0,
       detail: ok ? "crt.sh responded with certificate records." : "crt.sh responded but returned no data.",
@@ -125,12 +129,23 @@ function extractSubdomains(records, domain) {
 // would trigger. Captures only what the server voluntarily announces in its
 // response headers; never attempts auth, never sends a body, never retries
 // aggressively.
+//
+// SSRF guard (safeFetch, not a bare fetch): the domain-ownership check
+// (DNS TXT record) that gates this whole feature proves the client
+// controls the domain's DNS — which is exactly the capability needed to
+// point that same domain's A record at 127.0.0.1, 169.254.169.254 (cloud
+// metadata), or an internal RFC1918 address. Ownership of the name proves
+// nothing about the safety of where it currently resolves, so every host
+// here — the apex domain and every crt.sh-discovered subdomain — is
+// resolved and IP-validated immediately before connecting, the same guard
+// directoryRoutes.js/productivityAdapters.js already use for the
+// equivalent "client names a host, server calls it" shape.
 async function probeHost(host) {
   for (const scheme of ["https", "http"]) {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), HTTP_PROBE_TIMEOUT_MS);
     try {
-      const res = await fetch(`${scheme}://${host}/`, { method: "HEAD", signal: ctrl.signal, redirect: "manual" });
+      const res = await safeFetch(`${scheme}://${host}/`, { method: "HEAD", signal: ctrl.signal });
       clearTimeout(timeout);
       return {
         host, scheme, live: true, statusCode: res.status,
@@ -139,7 +154,9 @@ async function probeHost(host) {
       };
     } catch {
       clearTimeout(timeout);
-      // try the next scheme
+      // try the next scheme — includes hosts that fail the private-IP
+      // guard, which is deliberately indistinguishable here from a plain
+      // connection failure (never reveal *why* a host didn't respond).
     }
   }
   return { host, scheme: null, live: false, statusCode: null, server: null, poweredBy: null };

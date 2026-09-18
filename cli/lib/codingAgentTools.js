@@ -139,7 +139,8 @@ export function createCanUseTool(cwd) {
         return {
           behavior: "deny",
           message:
-            "Git operations must use the git_status/git_diff/git_create_branch/git_add_commit/git_push tools, not Bash.",
+            "Git/GitHub operations and this CLI's own credential store are off-limits to Bash — use the " +
+            "git_status/git_diff/git_create_branch/git_add_commit/git_push/github_open_pr tools instead.",
         };
       }
       const ok = await confirm({ message: "Run this Bash command?", detail: input?.command });

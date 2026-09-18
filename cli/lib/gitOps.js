@@ -74,8 +74,29 @@ export async function pushCurrentBranch(cwd) {
   return branch;
 }
 
-// Used to hard-block git operations attempted through the generic Bash tool
-// — all git activity must go through the functions above instead.
+// Used to hard-block git/GitHub activity attempted through the generic Bash
+// tool — all of it must go through the git_*/github_* tools above instead,
+// which is where the actual branch-protection and no-merge-tool guarantees
+// live. Blocking only the literal word "git" is NOT enough: `curl -H
+// "Authorization: token $(cat ~/.shieldai-cli/github-token)"
+// https://api.github.com/repos/OWNER/REPO/contents/...` never contains
+// that word (note \bgit\b deliberately does NOT match "github" — there's
+// no word boundary between "git" and "hub" — so a naive "block the
+// substring git" rule would itself refuse this on false grounds), yet it
+// can write straight to main or drive a merge via the REST API using this
+// CLI's own stored PAT, fully bypassing git_push's branch check and the
+// fact that no github_merge_pr tool exists. Also blocks any reference to
+// this CLI's own credential directory, so Bash can't read the session
+// token or GitHub PAT into the model's context for use elsewhere (e.g.
+// embedded in a file a later Write/Edit call stages for commit).
+const BLOCKED_BASH_PATTERNS = [
+  /\bgit\b/i,
+  /\bgh\b/i,           // the standalone `gh` CLI — "gh pr merge" contains neither "git" nor "github"
+  /github/i,           // github.com, api.github.com, gists, Actions, etc.
+  /\.shieldai-cli\b/i, // this CLI's local session token / GitHub PAT storage
+];
+
 export function isGitCommand(bashCommand) {
-  return /\bgit\b/i.test(String(bashCommand || ""));
+  const cmd = String(bashCommand || "");
+  return BLOCKED_BASH_PATTERNS.some(re => re.test(cmd));
 }

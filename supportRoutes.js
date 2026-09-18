@@ -12,10 +12,18 @@
 //   import { registerSupportRoutes } from "./supportRoutes.js";
 //   registerSupportRoutes(app, { db, requireAuth, analystClientIds, analystOwnsClient, gate });
 //
-// Access model mirrors portfolioRoutes.js: admins see every non-staff
-// client's requests; analysts see only requests from clients assigned to
-// them (db.data.assignments, via analystOwnsClient/analystClientIds) — the
-// same isolation boundary enforced everywhere else in the analyst console.
+// Access model (updated — this used to match portfolioRoutes.js's strict
+// per-analyst isolation, it no longer does for viewing/replying/resolving):
+// admins see every non-staff client's requests, as before. Analysts can now
+// also view/reply-to/resolve ANY real client's ticket, not just their own
+// assigned clients — a deliberate, scoped exception (see canSee's own
+// comment below) so one analyst can cover another's queue; the "My
+// Clients / Other Clients / All" scope toggle controls what's shown by
+// default, not what's reachable. The one place isolation is still fully
+// enforced is opening a NEW ticket "on behalf of" a client — that stays
+// restricted to analystOwnsClient, unchanged (see the create route below).
+// Analysts can also open internal (non-client) tickets, visible only to
+// admins and the analyst who created them.
 
 import { randomUUID } from "crypto";
 import { logClientAction } from "./assignmentRoutes.js";

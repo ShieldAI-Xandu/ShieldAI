@@ -34,7 +34,19 @@ admin
 admin
   .command("accounts-role <id> <role> <value>")
   .description("Set role=admin|analyst|client and value=true|false on an account.")
-  .action((id, role, value) => runAccountsRole(id, role, value === "true"));
+  .action((id, role, value) => {
+    const normalized = value.trim().toLowerCase();
+    // Fail closed on anything ambiguous ("True", "1", "yes", a typo, ...)
+    // rather than silently treating it as false — this changes admin
+    // access, and the confirm prompt showing the wrong value is a weak
+    // safety net compared to just refusing to guess.
+    if (normalized !== "true" && normalized !== "false") {
+      console.error(`value must be exactly "true" or "false" (got "${value}").`);
+      process.exitCode = 1;
+      return;
+    }
+    runAccountsRole(id, role, normalized === "true");
+  });
 admin.command("audit").description("List recent admin audit log entries.").action(runAudit);
 admin.command("system-health").description("Show AI-provider/system health.").action(runSystemHealth);
 
