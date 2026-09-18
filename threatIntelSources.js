@@ -19,12 +19,14 @@ import { kevServiceStatus, probeKev } from "./kevService.js";
 import { epssServiceStatus, probeEpss } from "./epssService.js";
 import { osvServiceStatus, probeOsv } from "./osvService.js";
 import { attackServiceStatus, probeAttack } from "./attackService.js";
+import { attackSurfaceServiceStatus, probeAttackSurface } from "./attackSurfaceService.js";
 
 export const THREAT_INTEL_SOURCES = [
-  { id: "nvd",    statusFn: () => cveServiceStatus(),         probeFn: probeCve },
-  { id: "hibp",   statusFn: (db) => darkwebServiceStatus(db), probeFn: probeDarkweb },
-  { id: "kev",    statusFn: () => kevServiceStatus(),         probeFn: probeKev },
-  { id: "epss",   statusFn: () => epssServiceStatus(),        probeFn: probeEpss },
-  { id: "osv",    statusFn: () => osvServiceStatus(),         probeFn: probeOsv },
-  { id: "attack", statusFn: () => attackServiceStatus(),      probeFn: probeAttack },
+  { id: "nvd",           statusFn: () => cveServiceStatus(),           probeFn: probeCve },
+  { id: "hibp",          statusFn: (db) => darkwebServiceStatus(db),   probeFn: probeDarkweb },
+  { id: "kev",           statusFn: () => kevServiceStatus(),           probeFn: probeKev },
+  { id: "epss",          statusFn: () => epssServiceStatus(),          probeFn: probeEpss },
+  { id: "osv",           statusFn: () => osvServiceStatus(),           probeFn: probeOsv },
+  { id: "attack",        statusFn: () => attackServiceStatus(),        probeFn: probeAttack },
+  { id: "attackSurface", statusFn: () => attackSurfaceServiceStatus(), probeFn: probeAttackSurface },
 ];

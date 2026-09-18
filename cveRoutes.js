@@ -16,6 +16,10 @@ import {
   refreshClientDarkweb,
   darkwebConfigured,
 } from "./darkwebService.js";
+import {
+  clientAttackSurface,
+  refreshClientAttackSurface,
+} from "./attackSurfaceService.js";
 import { THREAT_INTEL_SOURCES } from "./threatIntelSources.js";
 
 export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate }) {
@@ -150,5 +154,39 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
     }
     const record = await refreshClientDarkweb(db, targetId, { isDemo: req.isDemo });
     res.json({ userId: targetId, exposure: record });
+  });
+
+  // ── Attack-surface discovery (crt.sh subdomains + HTTP banner probing) ──
+  // A client's own external attack surface. clientAttackSurface() enforces
+  // the domain-ownership-verification gate: it will not make any outbound
+  // connection to a domain the client hasn't registered and proved control
+  // of. Discovered software feeds cveService.clientSoftwareDescriptors(),
+  // so a subsequent /api/client/cve-exposure call picks it up automatically.
+  app.get("/api/client/attack-surface", requireAuth, threatIntelGate, async (req, res) => {
+    let targetId = req.userId;
+    const isStaff = req.isAdmin || req.isAnalyst;
+    if (req.query.userId && req.query.userId !== req.userId) {
+      if (!isStaff) return res.status(403).json({ error: "Not permitted." });
+      if (req.isAnalyst && analystOwnsClient && !analystOwnsClient(db, req.userId, req.query.userId)) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+      targetId = req.query.userId;
+    }
+    const surface = await clientAttackSurface(db, targetId, { isDemo: req.isDemo });
+    res.json({ userId: targetId, surface });
+  });
+
+  app.post("/api/client/attack-surface/refresh", requireAuth, threatIntelGate, async (req, res) => {
+    let targetId = req.userId;
+    const isStaff = req.isAdmin || req.isAnalyst;
+    if (req.body?.userId && req.body.userId !== req.userId) {
+      if (!isStaff) return res.status(403).json({ error: "Not permitted." });
+      if (req.isAnalyst && analystOwnsClient && !analystOwnsClient(db, req.userId, req.body.userId)) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+      targetId = req.body.userId;
+    }
+    const record = await refreshClientAttackSurface(db, targetId, { isDemo: req.isDemo });
+    res.json({ userId: targetId, surface: record });
   });
 }

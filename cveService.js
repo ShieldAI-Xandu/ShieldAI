@@ -339,5 +339,15 @@ export function clientSoftwareDescriptors(db, userId, { isDemo = false } = {}) {
     else if (s && s.name) out.add(s.version ? `${s.name} ${s.version}` : s.name);
   }
 
+  // Software discovered externally by attackSurfaceService (HTTP Server/
+  // X-Powered-By banners from a verified domain's live hosts) — this is
+  // what turns "we found a subdomain" into real, actionable data: whatever
+  // gets discovered here automatically flows into the same NVD CVE lookup
+  // every other software source above already uses, no separate matching
+  // code needed. Read directly off the cached snapshot (never a live scan
+  // from inside this function) since this can be called synchronously.
+  const surface = (db.data.attackSurfaceExposure || {})[userId];
+  for (const s of (surface?.discoveredSoftware || [])) out.add(s);
+
   return [...out];
 }

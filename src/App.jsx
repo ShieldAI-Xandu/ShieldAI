@@ -10625,6 +10625,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
   const [demoErr, setDemoErr] = useState(null);
   const [showCodeEntry, setShowCodeEntry] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const notOffered = useNotOffered();
 
   // Returning from the investor page's "I have a code" button opens the modal.
   useEffect(() => {
@@ -11047,6 +11048,18 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
                   and disagreements between your answers and your agents' telemetry flagged for you to
                   resolve, not buried.
                 </div>
+                {notOffered.length > 0 && (
+                  <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${line}`}}>
+                    <div style={{fontSize:11,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",
+                      color:C.textMut,marginBottom:6}}>What we don't offer, and why</div>
+                    {notOffered.map(f => (
+                      <div key={f.id} style={{fontSize:12.5,color:dim,lineHeight:1.6,marginBottom:6}}>
+                        <span style={{fontWeight:700,color:ink}}>{f.name}:</span> {f.detail}
+                        {f.alternative && <> <span style={{color:C.textMut}}>{f.alternative}</span></>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{flex:"1 1 320px",minWidth:280,maxWidth:420}}>
                 <ComplianceSnapshotPreview/>
@@ -11218,6 +11231,46 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
               ))}
             </div>
           </div>
+        </Section>
+      </div>
+
+      {/* VS. ONELEET */}
+      <div style={{borderTop:`1px solid ${line}`,borderBottom:`1px solid ${line}`,padding:"64px 0"}}>
+        <Section>
+          <Eyebrow>How we compare</Eyebrow>
+          <h2 style={{fontSize:34,fontWeight:800,letterSpacing:-0.8,margin:"0 0 12px",maxWidth:680}}>
+            ShieldAI vs. Oneleet
+          </h2>
+          <p style={{fontSize:15,color:dim,margin:"0 0 30px",maxWidth:640,lineHeight:1.6}}>
+            Facts pulled straight from oneleet.com — not our characterization of a
+            competitor we haven't used.
+          </p>
+          <div style={{background:darkCard,border:`1px solid ${darkBorder}`,borderRadius:14,
+            overflow:"hidden",maxWidth:760}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"12px 20px",
+              background:darkSurface,borderBottom:`1px solid ${darkBorder}`,
+              fontSize:11,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:darkTextSec}}>
+              <div/><div>Oneleet</div><div>ShieldAI</div>
+            </div>
+            {[
+              { l:"Pricing", them:"Custom quote only — book a demo to see a price", us:"Published in full, $159–$1,950/mo" },
+              { l:"Core product", them:"Compliance platform; vCISO is a separate add-on", us:"vCISO-native from day one — assess, score, remediate, manage" },
+              { l:"Frameworks", them:"13 listed publicly", us:"12, control-mapped — and we publish what we don't do, and why" },
+              { l:"Threat intelligence", them:"Not a listed product module", us:"Live NVD CVE + HIBP breach monitoring, sourced" },
+              { l:"Built for", them:"Startups through 6,000+-employee enterprises", us:"Purpose-built for small & mid-sized businesses" },
+            ].map((r,i,arr)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"14px 20px",
+                borderBottom:i<arr.length-1?`1px solid ${darkBorder}`:"none",fontSize:13.5,alignItems:"center",gap:12}}>
+                <div style={{fontWeight:700,color:darkText}}>{r.l}</div>
+                <div style={{color:darkTextSec}}>{r.them}</div>
+                <div style={{color:C.green,fontWeight:600}}>{r.us}</div>
+              </div>
+            ))}
+          </div>
+          <p style={{fontSize:11.5,color:C.textMut,marginTop:12,maxWidth:640}}>
+            Sourced from oneleet.com's homepage, pricing, and products pages. ShieldAI has
+            no affiliation with Oneleet.
+          </p>
         </Section>
       </div>
 
@@ -11559,6 +11612,34 @@ function useFrameworkCatalog() {
     return () => { live = false; };
   }, []);
   return list || COMPLIANCE_FRAMEWORKS_FALLBACK;
+}
+
+// Public — GET /api/compliance/not-offered needs no auth, so this also
+// works on the pre-login marketing page. Fallback mirrors the current
+// NOT_OFFERED content in frameworks.js; if that ever changes, the live
+// fetch is still the source of truth — this is just so the section never
+// renders empty.
+const NOT_OFFERED_FALLBACK = [
+  { id:"hitrust", name:"HITRUST CSF",
+    detail:"HITRUST's CSF licence prohibits commercial use and derivative works by security service providers, consultants, and vendors — which describes ShieldAI.",
+    alternative:"For healthcare clients, our control-mapped HIPAA Security Rule assessment covers the underlying regulatory obligation." },
+  { id:"soc1", name:"SOC 1",
+    detail:"SOC 1 has no predefined control catalog — each organization defines its own control objectives with its auditor. There's nothing to map to in advance.",
+    alternative:"Most customers asking for \"a SOC report\" actually want SOC 2 (security), which we do offer." },
+];
+let _notOfferedCache = null;
+function useNotOffered() {
+  const [list, setList] = useState(_notOfferedCache);
+  useEffect(() => {
+    if (_notOfferedCache) return;
+    let live = true;
+    fetch(`${API_BASE}/api/compliance/not-offered`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => { if (live && Array.isArray(d) && d.length) { _notOfferedCache = d; setList(d); } })
+      .catch(() => { /* fall back to the static list */ });
+    return () => { live = false; };
+  }, []);
+  return list || NOT_OFFERED_FALLBACK;
 }
 
 // ── Framework foundation: NIST, CIS, or both ──────────────────
@@ -18979,6 +19060,7 @@ const INTEGRATION_PROVIDER_OPTIONS = [
   { id: "crowdstrike", label: "CrowdStrike" },
   { id: "wazuh", label: "Wazuh" },
   { id: "splunk", label: "Splunk" },
+  { id: "sarif", label: "Code scanning (SARIF)" },
   { id: "custom", label: "Generic / Custom" },
 ];
 
@@ -18996,6 +19078,7 @@ const VENDOR_SETUP_NOTES = {
   crowdstrike: "CrowdStrike Falcon Fusion SOAR can POST here directly: create a workflow triggered on \"Detection,\" add a \"Call webhook\" action, and point it at this URL — no script needed. Falcon Spotlight vulnerability data (CVE-based) is pull-only and needs a script like the others.",
   wazuh: "Wazuh's Integrator module (or a custom active-response script) can POST alerts here directly — no forwarding script needed, just point it at this URL. Both vulnerability-detector alerts and generic rule-based alerts are recognized natively.",
   splunk: "Create a Webhook alert action pointed at this URL (Settings → Alert actions, no add-on required). Splunk sends the triggering search result's own fields, so if you're not using Enterprise Security's notable-event fields (urgency, dest, cve_id, ...), alias your SPL output to those names — e.g. `| eval urgency=\"high\"` — so severity/host/CVE map correctly.",
+  sarif: "Any scanner that can output SARIF 2.1.0 works here — GitHub code scanning, Semgrep, Snyk Code, Trivy, CodeQL, ESLint (--format sarif), Bandit, and most others. Add a step to your CI pipeline that POSTs the resulting .sarif.json file as the request body to this URL after each scan.",
 };
 
 // ─────────────────────────────────────────────────────────────

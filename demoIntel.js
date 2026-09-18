@@ -126,6 +126,57 @@ export function demoDarkwebExposure(companyName) {
   };
 }
 
+// ── Attack-surface discovery ────────────────────────────────────
+// Same rule as breach data above: crt.sh can only answer for domains that
+// actually have certificate-transparency log entries, and the demo
+// companies' .example domains never will (by construction — .example is
+// reserved and never issued real certificates). A live query is impossible,
+// so this is a fixed, plausible fixture, clearly flagged simulated: true.
+// Reuses each company's real DEMO_STACKS entry as the "discovered" software
+// banner, so the CVEs an investor sees on the attack-surface card are the
+// exact same real, live-NVD-queried CVEs already shown on the CVE Exposure
+// card — one consistent story, not two disconnected fixtures.
+const DEMO_SURFACES = {
+  "Meridian Dental Group": {
+    domain: "meridiandental.example",
+    subdomains: ["www.meridiandental.example", "portal.meridiandental.example", "mail.meridiandental.example"],
+    liveHost: "www.meridiandental.example",
+  },
+  "Lakeside Financial Advisors": {
+    domain: "lakesidefinancial.example",
+    subdomains: ["www.lakesidefinancial.example", "vpn.lakesidefinancial.example", "portal.lakesidefinancial.example"],
+    liveHost: "vpn.lakesidefinancial.example",
+  },
+  "Apex Manufacturing": {
+    domain: "apexmfg.example",
+    subdomains: ["www.apexmfg.example", "erp.apexmfg.example", "ftp.apexmfg.example"],
+    liveHost: "erp.apexmfg.example",
+  },
+};
+
+export function demoAttackSurface(companyName, domainOverride) {
+  const fixture = DEMO_SURFACES[companyName] || {
+    domain: domainOverride || "example.example",
+    subdomains: [`www.${domainOverride || "example.example"}`],
+    liveHost: domainOverride || "example.example",
+  };
+  const banner = demoStackFor(companyName)[0] || null;
+  return {
+    domain: fixture.domain,
+    subdomains: fixture.subdomains,
+    liveHosts: [{ host: fixture.liveHost, scheme: "https", live: true, statusCode: 200, server: banner, poweredBy: null }],
+    discoveredSoftware: banner ? [banner] : [],
+    degraded: false,
+    checkedAt: new Date().toISOString(),
+    // Load-bearing, same as demoDarkwebExposure — never strip these so a
+    // simulated result can't be mistaken for a live crt.sh/HTTP probe.
+    demo: true,
+    simulated: true,
+    dataSource: "demo-fixture",
+    note: "Simulated external recon for a fictional company. Real attack-surface discovery requires a verified domain.",
+  };
+}
+
 // ── Domain records for demo companies ─────────────────────────
 // The demo shows the domain workflow in its FINISHED state — verified and
 // monitored — because that's what a prospect wants to see. The workflow itself

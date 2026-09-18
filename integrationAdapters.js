@@ -384,6 +384,60 @@ function adaptSplunk(body) {
   }];
 }
 
+// ── SARIF (Static Analysis Results Interchange Format) ────────────
+// SARIF 2.1.0 (OASIS standard) is the one format GitHub code scanning,
+// Semgrep, Snyk Code, Trivy, CodeQL, ESLint (--format sarif), Bandit, and
+// most other SAST/dependency scanners can all emit natively — one adapter
+// here covers the whole "code security scanning" category instead of a
+// bespoke adapter per tool, the same reasoning as Wazuh's genuine native
+// push path above, just for source-code findings instead of host findings.
+//
+// Source: SARIF 2.1.0 spec §3.27.10 (result.level) and §3.49.8
+// (rule.defaultConfiguration.level). Per spec, an omitted result.level
+// falls back to the rule's own defaultConfiguration.level, which itself
+// defaults to "warning" if neither is set — followed exactly here, not
+// guessed. SARIF has no dedicated CVE field, so `cve` is left null rather
+// than trying to regex one out of a rule id/message and risking a wrong
+// match.
+const SARIF_LEVEL_SEVERITY = { error: "high", warning: "medium", note: "low", none: "info" };
+
+function sarifLevelToSeverity(result, rule) {
+  const level = result.level || rule?.defaultConfiguration?.level || "warning";
+  return SARIF_LEVEL_SEVERITY[level] || "medium";
+}
+
+function adaptSarif(body) {
+  const runs = Array.isArray(body?.runs) ? body.runs : null;
+  if (!runs) return null;
+  // Only claim this shape if it actually looks like SARIF — otherwise a
+  // generic { findings: [...] } payload that happens to also have a "runs"
+  // field would false-positive here.
+  if (!runs.some(r => r && r.tool && Array.isArray(r.results))) return null;
+
+  const out = [];
+  for (const run of runs) {
+    const toolName = run.tool?.driver?.name || "code scan";
+    const rulesById = Object.fromEntries((run.tool?.driver?.rules || []).map(r => [r.id, r]));
+    for (const result of run.results || []) {
+      const rule = rulesById[result.ruleId] || {};
+      const loc = result.locations?.[0]?.physicalLocation;
+      const uri = loc?.artifactLocation?.uri || null;
+      const line = loc?.region?.startLine || null;
+      out.push({
+        externalId: `${result.ruleId || "rule"}::${uri || ""}::${line ?? ""}`,
+        title: rule.shortDescription?.text || result.ruleId || `${toolName} finding`,
+        severity: sarifLevelToSeverity(result, rule),
+        category: "code",
+        host: uri ? (line ? `${uri}:${line}` : uri) : null,
+        cve: null,
+        message: result.message?.text || null,
+        raw: { tool: toolName, ruleId: result.ruleId, result },
+      });
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
 // ── dispatch ─────────────────────────────────────────────────────
 const VENDOR_ADAPTERS = {
   nessus: adaptTenable,
@@ -393,6 +447,7 @@ const VENDOR_ADAPTERS = {
   crowdstrike: adaptCrowdstrike,
   wazuh: adaptWazuh,
   splunk: adaptSplunk,
+  sarif: adaptSarif,
 };
 
 // Normalize an incoming webhook body for the given integration's provider.

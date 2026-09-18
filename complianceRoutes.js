@@ -30,6 +30,7 @@ import {
   evaluateWithAgent,
 } from "./complianceBridge.js";
 import { toAssessOpts, intakeFor, visibleQuestions, intakeStatus } from "./frameworkIntake.js";
+import { NOT_OFFERED } from "./frameworks.js";
 import { corroborate, RESOLUTION_OPTIONS } from "./agentEvidence.js";
 import { toEvidence, SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
@@ -211,6 +212,23 @@ export function registerComplianceRoutes(app, {
         requirementCount: report && !report.notControlMapped ? report.summary.total : null,
       };
     }));
+  });
+
+  // Public (no auth) — same class of information as the published pricing
+  // table. Lets the marketing site state plainly which frameworks we don't
+  // offer and why, instead of a prospect finding the gap out for themselves.
+  // NOT_OFFERED entries don't share one schema (HITRUST has detail/
+  // alternative; the SOC 1 entry from soc2.js has whyNotOffered/ifAsked
+  // instead) — normalize both into one public shape here rather than
+  // changing the source data.
+  app.get("/api/compliance/not-offered", (req, res) => {
+    res.json(NOT_OFFERED.map(f => ({
+      id: f.id,
+      name: f.name,
+      detail: f.detail || f.whyNotOffered || null,
+      alternative: f.alternative || f.ifAsked || null,
+      reviewedOn: f.reviewedOn || null,
+    })));
   });
 
   // ── Multi-framework overview for one client ──
