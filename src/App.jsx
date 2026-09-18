@@ -14044,7 +14044,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
           />
         )}
 
-        {listTab === "support" && <SupportRequestConsole/>}
+        {listTab === "support" && <SupportRequestConsole viewerIsAdmin/>}
 
         {listTab === "audit" && (
           <div>
@@ -14460,21 +14460,59 @@ const SUPPORT_STATUSES = [
   { id:"resolved", label:"Resolved", color:C.textMut },
 ];
 
-function SupportRequestConsole() {
+function SupportRequestConsole({ viewerIsAdmin }) {
   const [tickets, setTickets] = useState(null);
   const [filter, setFilter] = useState("open");
+  const [scope, setScope] = useState("mine"); // "mine" | "others" | "all" — analyst-only toggle
   const [openId, setOpenId] = useState(null);
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(null);
+  const [escalatingId, setEscalatingId] = useState(null);
+  const [escalateNote, setEscalateNote] = useState("");
+  const [showNewModal, setShowNewModal] = useState(false);
+  const [newClients, setNewClients] = useState(null);
+  const [newForm, setNewForm] = useState({ clientUserId: "", topic: "", message: "" });
+  const [newSaving, setNewSaving] = useState(false);
 
   const load = useCallback(() => {
-    authFetch(`${API_BASE}/api/analyst/support-requests`)
+    const qs = !viewerIsAdmin && scope !== "mine" ? `?scope=${scope}` : "";
+    authFetch(`${API_BASE}/api/analyst/support-requests${qs}`)
       .then(r => r.ok ? r.json() : [])
       .then(d => setTickets(Array.isArray(d) ? d : []))
       .catch(() => setTickets([]));
-  }, []);
+  }, [viewerIsAdmin, scope]);
 
   useEffect(() => { load(); }, [load]);
+
+  function openNewModal() {
+    setShowNewModal(true);
+    if (newClients === null) {
+      authFetch(`${API_BASE}/api/analyst/clients`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setNewClients(Array.isArray(d) ? d : []))
+        .catch(() => setNewClients([]));
+    }
+  }
+
+  async function submitNewRequest() {
+    if (!newForm.message.trim()) return;
+    setNewSaving(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/support-requests`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientUserId: newForm.clientUserId || undefined,
+          topic: newForm.topic.trim() || undefined,
+          message: newForm.message.trim(),
+        }),
+      });
+      if (res.ok) {
+        setShowNewModal(false);
+        setNewForm({ clientUserId: "", topic: "", message: "" });
+        load();
+      }
+    } finally { setNewSaving(false); }
+  }
 
   async function sendReply(id) {
     if (!reply.trim()) return;
@@ -14499,6 +14537,17 @@ function SupportRequestConsole() {
     } finally { setBusy(null); }
   }
 
+  async function submitEscalate(id) {
+    setBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/analyst/support-requests/${id}/escalate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: escalateNote.trim() }),
+      });
+      if (res.ok) { setEscalatingId(null); setEscalateNote(""); load(); }
+    } finally { setBusy(null); }
+  }
+
   if (tickets === null) return <Spinner/>;
 
   const counts = tickets.reduce((acc,t)=>{ acc[t.status]=(acc[t.status]||0)+1; return acc; }, {});
@@ -14512,6 +14561,11 @@ function SupportRequestConsole() {
           style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
           ↻ Refresh
+        </button>
+        <button onClick={openNewModal}
+          style={{padding:"5px 12px",background:`${C.accent}22`,border:`1px solid ${C.accent}55`,
+            borderRadius:6,color:C.accent,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          + New Request
         </button>
         <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
           {[{id:"all",label:`All (${tickets.length})`}, ...SUPPORT_STATUSES.map(s=>({
@@ -14531,6 +14585,24 @@ function SupportRequestConsole() {
         </div>
       </div>
 
+      {!viewerIsAdmin && (
+        <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+          {[{id:"mine",label:"My Clients"},{id:"others",label:"Other Clients"},{id:"all",label:"All"}].map(s=>{
+            const on = scope === s.id;
+            return (
+              <button key={s.id} onClick={()=>setScope(s.id)}
+                style={{padding:"5px 12px",borderRadius:20,cursor:"pointer",fontSize:12,fontWeight:600,
+                  background: on ? `${C.purple}22` : "transparent",
+                  border:`1px solid ${on ? C.purple : C.border}`,
+                  color: on ? C.purple : C.textSec,
+                  fontFamily:"Inter,system-ui,sans-serif"}}>
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {shown.length === 0 ? (
         <Card style={{textAlign:"center",padding:"40px 24px"}}>
           <div style={{color:C.text,fontWeight:600,fontSize:15,marginBottom:6}}>
@@ -14548,12 +14620,19 @@ function SupportRequestConsole() {
             const sMeta = SUPPORT_STATUSES.find(s=>s.id===t.status) || SUPPORT_STATUSES[0];
             const last = t.messages[t.messages.length-1];
             const isOpen = openId === t.id;
+            const clientLabel = t.client?.name || (t.clientUserId ? "(unknown client)" : "Internal / escalation");
             return (
               <Card key={t.id} style={{padding:"16px 18px"}}>
                 <div onClick={()=>setOpenId(isOpen ? null : t.id)} style={{cursor:"pointer"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-                    <span style={{color:C.text,fontWeight:700,fontSize:15}}>{safeText(t.client?.name) || "(unknown client)"}</span>
+                    <span style={{color:C.text,fontWeight:700,fontSize:15}}>{safeText(clientLabel)}</span>
                     <Badge label={sMeta.label} color={sMeta.color}/>
+                    {t.escalated && <Badge label="Escalated" color={C.red}/>}
+                    {!viewerIsAdmin && t.mine === false && (
+                      <span style={{fontSize:10,color:C.textMut,border:`1px solid ${C.border}`,borderRadius:20,padding:"2px 8px"}}>
+                        not your client
+                      </span>
+                    )}
                     <span style={{color:C.textSec,fontSize:13}}>· {safeText(t.topic)}</span>
                     <span style={{marginLeft:"auto",color:C.textMut,fontSize:11}}>
                       {new Date(t.updatedAt).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
@@ -14585,7 +14664,7 @@ function SupportRequestConsole() {
                     <div style={{display:"flex",gap:8,marginBottom:10}}>
                       <input value={reply} onChange={e=>setReply(e.target.value)}
                         onKeyDown={e=>{if(e.key==="Enter")sendReply(t.id);}}
-                        placeholder="Reply to this client…"
+                        placeholder="Reply…"
                         disabled={busy===t.id}
                         style={{flex:1,padding:"10px 12px",background:C.bg,border:`1px solid ${C.border}`,
                           borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
@@ -14596,16 +14675,90 @@ function SupportRequestConsole() {
                         {busy===t.id ? "…" : "Reply"}
                       </button>
                     </div>
-                    <button onClick={()=>setStatus(t.id, t.status==="open" ? "resolved" : "open")} disabled={busy===t.id}
-                      style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,
-                        borderRadius:6,color:C.textSec,fontSize:12,fontWeight:600,cursor:busy===t.id?"wait":"pointer"}}>
-                      {t.status === "open" ? "Mark resolved" : "Reopen"}
-                    </button>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      <button onClick={()=>setStatus(t.id, t.status==="open" ? "resolved" : "open")} disabled={busy===t.id}
+                        style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,
+                          borderRadius:6,color:C.textSec,fontSize:12,fontWeight:600,cursor:busy===t.id?"wait":"pointer"}}>
+                        {t.status === "open" ? "Mark resolved" : "Reopen"}
+                      </button>
+                      {!t.escalated && (
+                        <button onClick={()=>setEscalatingId(escalatingId===t.id?null:t.id)} disabled={busy===t.id}
+                          style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,
+                            borderRadius:6,color:C.textSec,fontSize:12,fontWeight:600,cursor:busy===t.id?"wait":"pointer"}}>
+                          ⬆ Escalate
+                        </button>
+                      )}
+                    </div>
+                    {escalatingId === t.id && (
+                      <div style={{display:"flex",gap:8,marginTop:10}}>
+                        <input value={escalateNote} onChange={e=>setEscalateNote(e.target.value)}
+                          placeholder="Note for admin (optional)…"
+                          disabled={busy===t.id}
+                          style={{flex:1,padding:"10px 12px",background:C.bg,border:`1px solid ${C.border}`,
+                            borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
+                        <button onClick={()=>submitEscalate(t.id)} disabled={busy===t.id}
+                          style={{padding:"10px 16px",background:C.accent,color:"#04121F",border:"none",
+                            borderRadius:8,fontSize:13,fontWeight:700,cursor:busy===t.id?"wait":"pointer"}}>
+                          {busy===t.id ? "…" : "Escalate to admin"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {showNewModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",
+          alignItems:"center",justifyContent:"center",zIndex:60,padding:20}}
+          onClick={()=>setShowNewModal(false)}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:24,
+              width:"100%",maxWidth:480,display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontWeight:700,fontSize:16,color:C.text}}>New support request</div>
+            <label style={{fontSize:12,color:C.textSec,fontWeight:600}}>
+              Client
+              <select value={newForm.clientUserId}
+                onChange={e=>setNewForm(f=>({...f, clientUserId: e.target.value}))}
+                style={{display:"block",width:"100%",marginTop:4,padding:"9px 12px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13}}>
+                <option value="">Internal / no client</option>
+                {(newClients || []).map(c => (
+                  <option key={c.id} value={c.id}>{c.companyName || c.name || c.email}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{fontSize:12,color:C.textSec,fontWeight:600}}>
+              Topic
+              <input value={newForm.topic} onChange={e=>setNewForm(f=>({...f, topic: e.target.value}))}
+                placeholder="Short topic"
+                style={{display:"block",width:"100%",marginTop:4,padding:"9px 12px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit"}}/>
+            </label>
+            <label style={{fontSize:12,color:C.textSec,fontWeight:600}}>
+              Message
+              <textarea value={newForm.message} onChange={e=>setNewForm(f=>({...f, message: e.target.value}))}
+                placeholder="Describe the issue…" rows={4}
+                style={{display:"block",width:"100%",marginTop:4,padding:"9px 12px",background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit",resize:"vertical"}}/>
+            </label>
+            <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>
+              <button onClick={()=>setShowNewModal(false)}
+                style={{padding:"8px 16px",background:"transparent",border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.textSec,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                Cancel
+              </button>
+              <button onClick={submitNewRequest} disabled={newSaving || !newForm.message.trim()}
+                style={{padding:"8px 16px",background:newForm.message.trim()?C.accent:C.border,
+                  color:newForm.message.trim()?"#04121F":C.textMut,border:"none",borderRadius:8,
+                  fontSize:13,fontWeight:700,cursor:newForm.message.trim()?"pointer":"default"}}>
+                {newSaving ? "…" : "Submit"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -17412,7 +17565,7 @@ function AnalystConsole({ user, onExit, onImpersonate, onOpenAdmin }) {
         <AnalystMastermindPanel mmOpen={mmOpen} setMmOpen={setMmOpen} active={active}
           mmThread={mmThread} mmThinking={mmThinking} mmDraft={mmDraft} setMmDraft={setMmDraft} mmSend={mmSend}/>
         <div style={{maxWidth:960,margin:"0 auto",padding:"20px"}}>
-          <SupportRequestConsole/>
+          <SupportRequestConsole viewerIsAdmin={!!user.isAdmin}/>
         </div>
       </div>
     );

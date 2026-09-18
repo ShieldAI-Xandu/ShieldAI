@@ -56,3 +56,8 @@ test-gemini.json
 test.gemini.json
 test-assessment.json
 gen-request.json
+
+# Defensive only — the admin CLI's session token and GitHub PAT actually
+# live in ~/.shieldai-cli/ on each admin's own machine, outside this repo
+# entirely. This entry just guards against a future mistake, not a real path.
+.shieldai-cli/

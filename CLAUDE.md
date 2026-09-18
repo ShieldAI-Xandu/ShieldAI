@@ -79,6 +79,11 @@ while fixing something else:
 - `src/App.jsx` — large single-file frontend
 - `seedDemo.js` — three demo companies: Meridian Dental Group (Healthcare/HIPAA),
   Lakeside Financial (Finance/SEC+SOC2), Apex Manufacturing (Manufacturing/CMMC)
+- `cli/` — local admin CLI (admin/super-admin staff only): a Claude coding
+  agent scoped to this repo plus a read/guarded-write assistant over live
+  admin data. Can never push to main or merge a PR — see `cli/README.md`.
+- `supportRoutes.js` — client support tickets, plus analyst-submitted
+  on-behalf-of-client and escalation requests (the CLI's `requests` queue)
 
 ## Environment variables
 Set in Railway's Variables tab, not `.env` (which is gitignored):

@@ -51,6 +51,32 @@ prefix the scanner recognizes. A leaked `MS_GRAPH_CLIENT_SECRET` or
 Not fixed as part of adding these variables — flagging it here so it doesn't
 get lost.
 
+### A new kind of secret: per-admin, not per-deployment
+
+The admin CLI (`cli/`, see `cli/README.md`) introduces two credentials that
+don't fit the "Secrets live in Railway Variables" rule below at all, and
+that's intentional rather than an oversight:
+
+- **The CLI's session token** — an ordinary login-issued JWT, same as a
+  browser session, stored at `~/.shieldai-cli/session.json` on the admin's
+  own machine. Rotation is just running `shieldai login` again; there's
+  nothing to do server-side.
+- **Each admin's own GitHub PAT** — stored at `~/.shieldai-cli/github-token`,
+  never centrally, never committed, never one shared org-wide value. Every
+  admin who uses the CLI mints their own fine-grained PAT scoped to just the
+  ShieldAI repo (Contents/Pull requests/Issues: read+write, Metadata: read —
+  deliberately no `packages` scope, see `cli/README.md`). This is a
+  conscious departure from a shared secret: the CLI runs on laptops, not
+  Railway, so "one secret in Railway Variables" doesn't apply, and a
+  per-admin PAT keeps GitHub's own commit/PR authorship pointing at the real
+  person instead of a shared bot identity. To rotate: revoke the PAT on
+  GitHub, then run `shieldai github login` again with a new one.
+
+`scanSecrets.js` already has a GitHub-token detector
+(`/\bgh[pousr]_[A-Za-z0-9]{36,}/g`, critical severity) — if a real PAT value
+ever ends up inside the repo tree by mistake, it will still be caught the
+same as any other secret.
+
 ## When to rotate
 
 Rotate immediately if a key has ever been:
