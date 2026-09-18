@@ -12936,7 +12936,7 @@ function AdminCustomFrameworksPanel() {
   );
 }
 
-function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind }) {
+function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind, onSignOut }) {
   const [view, setView] = useState("list");   // list | user | program
   const [listTab, setListTab] = useState("accounts"); // accounts | leads
   const [users, setUsers] = useState([]);
@@ -13400,6 +13400,13 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind 
             style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
               color:"#04121F",border:"none",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
             Exit Admin
+          </button>
+        )}
+        {onSignOut && (
+          <button onClick={onSignOut}
+            style={{padding:"6px 14px",background:"none",border:`1px solid ${NAV.border}`,
+              borderRadius:6,color:NAV.textDim,fontSize:12,cursor:"pointer"}}>
+            Sign Out
           </button>
         )}
       </div>
@@ -22841,7 +22848,8 @@ export default function ShieldAI() {
         onClose={() => {}}
         onOpenAnalyst={() => setShowAnalyst(true)}
         onOpenMastermind={() => setShowMastermind(true)}
-        onViewClientApp={() => setStaffViewClient(true)}/>;
+        onViewClientApp={() => setStaffViewClient(true)}
+        onSignOut={signOut}/>;
     }
     // else: an independent staff overlay is open — fall through to its block
     // (Mastermind / Endpoints / Threat Intel / Integrations / Help each render
