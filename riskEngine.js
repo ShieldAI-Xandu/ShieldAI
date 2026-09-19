@@ -21,8 +21,19 @@
 // score of every client on record, silently, with no change in their actual
 // security. Import the filtered list.
 import { SCORING_CHECKLIST } from "./securityChecklist.js";
+// Paid-tier "Extended Assessment" questions (tiers.js's `extendedAssessment`
+// capability, Growth+). A SEPARATE array from SCORING_CHECKLIST for the exact
+// same reason that file's header warns about: importing these into
+// scoreFromChecklist() would retroactively re-weight every existing client's
+// score. Instead they're scored independently by scoreFromExtendedChecklist()
+// below and blended into only the NIST functions they touch, and only for an
+// assessment that actually has extendedChecklist answers. See
+// computeNistPosture()'s blend step.
+import { EXTENDED_SCORING_CHECKLIST } from "./extendedChecklist.js";
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
+const levelFor = (score) =>
+  score >= 80 ? "Strong" : score >= 60 ? "Moderate" : score >= 40 ? "Developing" : "At Risk";
 
 // NIST function weights for the overall score
 const FUNCTION_WEIGHTS = {
@@ -101,6 +112,9 @@ function findingFor(factorId, score, label) {
     responseSupport: strong ? "Clear incident response support available." : weak ? "No clear responder for a breach." : "Limited response support.",
     backups: strong ? "Robust, automated backups in place." : weak ? "No reliable data backups — major risk." : "Backups exist but need improvement/testing.",
     disasterRecovery: strong ? "Disaster recovery planning in place." : weak ? "No disaster recovery plan." : "Basic continuity planning only.",
+    // Extended (paid-tier) factors — see extendedChecklist.js.
+    mfaDepth: strong ? "MFA enforcement uses real risk signals (device trust, location)." : weak ? "MFA enforcement has no risk-based depth." : "MFA is enforced but not risk-adaptive.",
+    cloudPosture: strong ? "Cloud configuration is actively monitored." : weak ? "No visibility into cloud security configuration." : "Some manual cloud configuration review.",
   };
   return map[factorId] || `${label}: ${score}/100`;
 }
@@ -143,6 +157,52 @@ function scoreFromChecklist(answers) {
   });
 
   return functions;
+}
+
+// ──────────────────────────────────────────────────────────────
+//  EXTENDED (paid-tier): score from Extended Assessment answers
+//  Independent of scoreFromChecklist() above — never imported into the same
+//  weighted set. Only questions the client actually answered are scored (no
+//  "unanswered = 40" default like the base checklist, since these are
+//  optional and a client who hasn't reached this section yet shouldn't be
+//  penalized for it). Returns a map keyed by NIST function name, so
+//  computeNistPosture() can blend each into only the base functions the
+//  extended questions actually touch.
+// ──────────────────────────────────────────────────────────────
+// Fixed weight extended answers carry once blended into a NIST function's
+// real (13-question) score. Small on purpose: refines a function already
+// built from real signals, never dominates or replaces it.
+const EXTENDED_BLEND_WEIGHT = 0.3;
+
+function scoreFromExtendedChecklist(extendedAnswers) {
+  const byFunction = {};
+  for (const q of EXTENDED_SCORING_CHECKLIST) {
+    const selectedLabel = extendedAnswers[q.id];
+    if (!selectedLabel) continue; // not yet answered — excluded, not defaulted
+    const option = q.options.find(o => o.label === selectedLabel);
+    if (!option) continue;
+    byFunction[q.nistFunction] = byFunction[q.nistFunction] || [];
+    byFunction[q.nistFunction].push({
+      label: q.question,
+      factorId: q.factor,
+      score: option.score,
+      weight: 1 / EXTENDED_SCORING_CHECKLIST.filter(x => x.nistFunction === q.nistFunction).length,
+      finding: findingFor(q.factor, option.score, q.question),
+    });
+  }
+
+  const out = {};
+  for (const [name, factors] of Object.entries(byFunction)) {
+    const totalWeight = factors.reduce((s, f) => s + f.weight, 0) || 1;
+    const weighted = factors.reduce((s, f) => s + f.score * f.weight, 0) / totalWeight;
+    out[name] = {
+      score: clamp(weighted),
+      factors: factors.map(f => ({
+        label: f.label, factorId: f.factorId, score: clamp(f.score), weight: f.weight, finding: f.finding, extended: true,
+      })),
+    };
+  }
+  return out;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -236,28 +296,53 @@ function computeNistPosture(assessment) {
     ? scoreFromChecklist(checklist)
     : scoreFromKeywords(assessment);
 
-  let overall = functions.reduce(
+  const compAdj = complianceAdjustment(assessment);
+
+  // The score exactly as computed before Extended Assessment existed — kept
+  // alongside the (possibly blended) headline number so any caller can show
+  // both without recomputing, and so a client who never touched the extended
+  // section sees byte-identical baseOnly/postureScore values.
+  const baseOnlyOverall = clamp(
+    functions.reduce((sum, fn) => sum + fn.score * (FUNCTION_WEIGHTS[fn.name] || 0), 0) + compAdj.adjustment
+  );
+  const baseOnlyLevel = levelFor(baseOnlyOverall);
+
+  // Extended (paid-tier) answers refine only the NIST functions they touch —
+  // never a bigger array, never a default for a question left unanswered.
+  // No extendedChecklist data → blendedFunctions === functions, identical
+  // object references, so an assessment that's never touched this feature
+  // takes the exact code path it took before this feature existed.
+  let blendedFunctions = functions;
+  const extendedAnswers = assessment?.extendedChecklist || null;
+  if (extendedAnswers && Object.keys(extendedAnswers).length > 0) {
+    const extended = scoreFromExtendedChecklist(extendedAnswers);
+    if (Object.keys(extended).length > 0) {
+      blendedFunctions = functions.map(fn => {
+        const ext = extended[fn.name];
+        if (!ext) return fn;
+        const blended = (fn.score * 1 + ext.score * EXTENDED_BLEND_WEIGHT) / (1 + EXTENDED_BLEND_WEIGHT);
+        return { ...fn, score: clamp(blended), factors: [...fn.factors, ...ext.factors] };
+      });
+    }
+  }
+
+  let overall = blendedFunctions.reduce(
     (sum, fn) => sum + fn.score * (FUNCTION_WEIGHTS[fn.name] || 0), 0
   );
-
-  const compAdj = complianceAdjustment(assessment);
   overall = clamp(overall + compAdj.adjustment);
+  const level = levelFor(overall);
 
-  let level;
-  if (overall >= 80) level = "Strong";
-  else if (overall >= 60) level = "Moderate";
-  else if (overall >= 40) level = "Developing";
-  else level = "At Risk";
-
-  const sorted = [...functions].sort((x, y) => x.score - y.score);
+  const sorted = [...blendedFunctions].sort((x, y) => x.score - y.score);
   const weakestAreas = sorted.slice(0, 2).map(f => f.name);
 
   return {
     postureScore: overall,
     postureLevel: level,
+    baseOnlyPostureScore: baseOnlyOverall,
+    baseOnlyPostureLevel: baseOnlyLevel,
     methodology: usingChecklist ? "NIST CSF (structured checklist)" : "NIST CSF (inferred from intake)",
     scoringMode: usingChecklist ? "structured" : "inferred",
-    functions,
+    functions: blendedFunctions,
     weakestAreas,
     complianceNote: compAdj.finding,
   };
@@ -327,7 +412,7 @@ export function computePostureForLens(assessment, lens = "nist") {
     cisFunctions.reduce((s, fn) => s + fn.score * (CIS_GROUPS[fn.name]?.weight || 0), 0)
     + complianceAdjustment(assessment).adjustment
   );
-  const cisLevel = cisOverall >= 80 ? "Strong" : cisOverall >= 60 ? "Moderate" : cisOverall >= 40 ? "Developing" : "At Risk";
+  const cisLevel = levelFor(cisOverall);
   const cisWeakest = [...cisFunctions].sort((a, b) => a.score - b.score).slice(0, 2).map(f => f.name);
 
   const cisView = {

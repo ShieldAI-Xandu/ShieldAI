@@ -41,6 +41,7 @@ import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerDirectoryRoutes } from "./directoryRoutes.js";
 import { registerCloudRoutes } from "./cloudRoutes.js";
 import { registerTrustRoutes } from "./trustRoutes.js";
+import { registerExtendedAssessmentRoutes } from "./extendedAssessmentRoutes.js";
 import { registerProductivityRoutes } from "./productivityRoutes.js";
 import { registerTaskTrackerRoutes } from "./taskTrackerRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
@@ -854,6 +855,26 @@ app.get("/api/ai/providers", requireAuth, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  ASSESSMENTS (protected, user-scoped)
 // ─────────────────────────────────────────────────────────────
+// CIS Implementation Group wiring fix: the client's real IG choice is
+// captured in the UI and persisted at data.selectedFrameworks[cis].
+// implementationGroup, but every framework's opts (complianceRoutes.js,
+// trustRoutes.js, mastermindRoutes.js, remediationPlan.js,
+// submissionPacket.js, reportRoutes.js) derive exclusively from
+// data.frameworkIntake — so without this sync, assessCis() silently
+// defaulted to IG1 regardless of what the client actually picked. Mirroring
+// it here, at both save paths, means every consumer of frameworkIntake
+// picks up the real value "for free" through their existing
+// toAssessOpts("cis", ...) call, with no change needed at any of those 6
+// call sites. See frameworkIntake.js's new `cis` entry.
+function syncCisImplementationGroup(data) {
+  if (!data || !Array.isArray(data.selectedFrameworks)) return data;
+  const cisEntry = data.selectedFrameworks.find(f => f?.id === "cis");
+  if (!cisEntry?.implementationGroup) return data;
+  data.frameworkIntake = data.frameworkIntake || {};
+  data.frameworkIntake.cis = { ...(data.frameworkIntake.cis || {}), implementationGroup: cisEntry.implementationGroup };
+  return data;
+}
+
 app.post("/api/assessments", requireAuth, async (req, res) => {
   try {
     const id = randomUUID();
@@ -861,7 +882,7 @@ app.post("/api/assessments", requireAuth, async (req, res) => {
       id,
       userId: req.userId,
       createdAt: new Date().toISOString(),
-      data: req.body,
+      data: syncCisImplementationGroup(req.body),
     };
     db.data.assessments.push(record);
     await db.write();
@@ -929,7 +950,7 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   // Merge incoming data into the stored assessment data.
   // Frontend sends the full updated `data` object.
   if (req.body.data && typeof req.body.data === "object") {
-    record.data = { ...record.data, ...req.body.data };
+    record.data = syncCisImplementationGroup({ ...record.data, ...req.body.data });
   }
   record.updatedAt = new Date().toISOString();
   await db.write();
@@ -2465,6 +2486,7 @@ registerPhishingRoutes(app, { db, requireAuth, gate, analystOwnsClient, emailSen
 registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClient, analystClientIds, callClaudeText, extractJson, aiLimiter });
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate, callClaudeText, aiLimiter });
 registerTrustRoutes(app, { db, requireAuth, gate });
+registerExtendedAssessmentRoutes(app, { db, requireAuth, gate });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND

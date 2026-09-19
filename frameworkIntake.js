@@ -39,8 +39,33 @@
 
 import { ISO27001_ANNEX_A } from "./iso27001.js";
 import { SELECTABLE_STATES } from "./statePrivacyByState.js";
+import { CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 
 export const FRAMEWORK_INTAKE = {
+  "cis": {
+    frameworkId: "cis",
+    title: "CIS Implementation Group",
+    why: "CIS Controls are prioritized into three cumulative Implementation Groups. Which one applies decides whether you're assessed against the 56-safeguard baseline or the full 153.",
+    questions: [
+      {
+        id: "implementationGroup",
+        question: "Which Implementation Group best fits your organization?",
+        options: Object.values(CIS_IMPLEMENTATION_GROUPS).map(g => ({
+          label: `${g.id} — ${g.tagline} (${g.safeguards} safeguards)`,
+          value: g.id,
+        })),
+      },
+    ],
+    // The onboarding/Edit Assessment CIS picker (src/App.jsx's CIS_IG_OPTIONS)
+    // already collects this choice directly onto
+    // data.selectedFrameworks[cis].implementationGroup; server.js's
+    // syncCisImplementationGroup() mirrors it in here on every assessment
+    // save, so this intake and that picker never disagree.
+    toOpts(answers = {}) {
+      return { ig: answers.implementationGroup || "IG1" };
+    },
+  },
+
   "pci-dss": {
     frameworkId: "pci-dss",
     title: "PCI DSS scoping",
@@ -360,6 +385,7 @@ export function toAssessOpts(frameworkId, answers = {}) {
  */
 export function defaultsFor(frameworkId) {
   const defaults = {
+    "cis": "IG1 (essential cyber hygiene, 56 safeguards) — the conservative default when no Implementation Group is chosen.",
     "pci-dss": "Unscoped — all 12 requirements assessed as if you store card data. This is the worst case and probably not you.",
     "soc2": "Security category only, Type II. The most common shape.",
     "iso27001": "All 93 Annex A controls in scope, no exclusions. A real SoA will exclude some.",

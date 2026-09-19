@@ -65,6 +65,7 @@ export const TIERS = {
       complianceCalendar: false,          // unified view of everything coming due — Starter+
       remediationTasks: false,           // prioritized gaps + remediation task tracking — Growth+
       supportCenter: false,              // in-app Support Center (ticketed requests + Mastermind chat) — Starter+
+      extendedAssessment: false,         // additional cloud/tooling/MFA-depth questions — Growth+
     },
     features: ["Security assessment & posture score only", "Upgrade to unlock programs, policies & monitoring"],
   },
@@ -130,6 +131,7 @@ export const TIERS = {
       // Starter up like the roster and vendor registry.
       complianceCalendar: true,             // capped at limits.calendarEntries (20) for custom entries
       supportCenter: true,                  // in-app Support Center (ticketed requests + Mastermind chat) — Starter+
+      extendedAssessment: false,            // Growth+ — nothing at Starter yet consumes this data
     },
     // Add-ons this tier can purchase on top of the base subscription.
     addons: ["training_delivery"],
@@ -181,8 +183,13 @@ export const TIERS = {
       complianceCalendar: true,             // uncapped from Growth up
       remediationTasks: true,               // Prioritized Gaps / Tasks tab — Growth+
       supportCenter: true,
+      // BUNDLED from Growth up — matches the floor for threatIntel/integrations/
+      // trustPage, since those are the actual consumers of this data (cloud
+      // provider connections, CVE/software matching). Selling it below Growth
+      // would collect answers a Starter client has nothing to use them with.
+      extendedAssessment: true,
     },
-    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence, remediation tasks & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints"],
+    features: ["Everything in Starter", "Real threat intel (CVE/breach)", "Employee training delivery (bundled)", "5 compliance frameworks", "Evidence, remediation tasks & workflows", "Vendor risk management (uncapped registry + AI questionnaire assistant)", "Up to 10 policies", "Downloads & exports", "Up to 25 endpoints", "Extended security assessment (cloud, tooling & MFA depth)"],
   },
 
   guided: {
@@ -230,6 +237,7 @@ export const TIERS = {
       complianceCalendar: true,
       remediationTasks: true,
       supportCenter: true,
+      extendedAssessment: true,
     },
     features: ["Everything in Growth", "Periodic engineer review", "Analyst review of flagged questionnaire answers", "10 compliance frameworks", "Scheduled check-ins", "Up to 100 endpoints"],
   },
@@ -279,6 +287,7 @@ export const TIERS = {
       complianceCalendar: true,
       remediationTasks: true,
       supportCenter: true,
+      extendedAssessment: true,
     },
     features: ["Everything in Guided", "Engineer runs your program end-to-end", "Unlimited endpoints", "All compliance frameworks", "Engineer-managed vendor registry & questionnaire responses", "Full agent access", "Mastermind Q&A", "Full engineer support"],
   },
@@ -330,6 +339,7 @@ export const FEATURE_CATALOG = [
   { key: "employeeRoster", capability: "employeeRoster", name: "Employee roster & policy acknowledgment tracking", minTier: "starter" },
   { key: "complianceCalendar", capability: "complianceCalendar", name: "Compliance calendar (everything coming due, in one place)", minTier: "starter" },
   { key: "supportCenter",    capability: "supportCenter",    name: "In-app Support Center (ticketed requests + Mastermind chat)", minTier: "starter" },
+  { key: "extendedAssessment", capability: "extendedAssessment", name: "Extended security assessment (cloud, tooling & MFA depth)", minTier: "growth" },
   { key: "analystSupport",   capability: "analystSupport",   name: "Engineer review & analyst support", minTier: "guided" },
   { key: "mastermind",       capability: "mastermind",       name: "Full Mastermind advisory (Managed vCISO)", minTier: "managed" },
 ];

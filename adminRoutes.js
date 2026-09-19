@@ -16,12 +16,13 @@
 // here is an administrative override.
 
 import { randomUUID } from "crypto";
-import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier } from "./tiers.js";
+import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier, hasCapability } from "./tiers.js";
 import { isSuperAdminEmail, accountCategory } from "./auth.js";
 import { getProviderHealth } from "./aiProviders.js";
 import { getEmailHealth } from "./emailService.js";
 import { serverErrorSummary } from "./healthMonitor.js";
 import { sandboxStats } from "./db.js";
+import { pushNotification } from "./portfolioRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -213,6 +214,25 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     const direction = getTier(tier).rank > getTier(from).rank ? "upgrade"
                     : getTier(tier).rank < getTier(from).rank ? "downgrade" : "no-change";
     await audit(req, "tier_change", u.id, `${from} → ${tier} (${direction})${note ? " · " + note : ""}`);
+
+    // Upgrade-triggered "extended assessment unlocked" nudge — only fires
+    // when the new tier actually gained the capability (not e.g. a lateral
+    // no-op re-save), and only if there's an assessment to extend at all.
+    if (direction === "upgrade" && !hasCapability(from, "extendedAssessment") && hasCapability(tier, "extendedAssessment")) {
+      const hasAssessment = (db.data.assessments || []).some(a => a.userId === u.id);
+      if (hasAssessment) {
+        pushNotification(db, {
+          userId: u.id,
+          type: "extended_assessment_unlocked",
+          title: "Extended Assessment unlocked",
+          body: "Your plan now includes additional cloud, tooling, and MFA-depth questions that can sharpen your posture score.",
+          link: "/assessment/edit",
+          actorRole: "system",
+        });
+        await db.write();
+      }
+    }
+
     res.json(adminUserView(db, u));
   });
 

@@ -118,7 +118,7 @@ ok(Object.keys(toEvidence({})).length === 0, "empty answers -> empty evidence");
 
 console.log("\nEvidence sections (intake UI grouping):");
 const secs = evidenceSections();
-ok(secs.length === 5, `5 evidence sections (got ${secs.length})`);
+ok(secs.length === 6, `6 evidence sections (got ${secs.length})`);
 ok(secs.every(s => s.section && s.questions.length > 0), "every section is named and non-empty");
 ok(secs.some(s => s.section === "Privacy"), "Privacy section exists — it unblocks the state privacy framework");
 ok(secs.reduce((a, s) => a + s.questions.length, 0) === EVIDENCE_CHECKLIST.length,

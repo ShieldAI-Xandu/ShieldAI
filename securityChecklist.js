@@ -491,6 +491,52 @@ export const SECURITY_CHECKLIST = [
       { label: "We've never received one", score: 30 },
     ],
   },
+
+  // ── SOC 2 Type II operating effectiveness ────────────────────
+  // Type I asks "is this designed correctly, right now" — the questions
+  // above already answer that. Type II asks "did this operate consistently
+  // over an observation period" (typically 6-12 months), which is a
+  // genuinely different question the design-only answers above can't
+  // honestly answer on their own. soc2.js's assessCriterion() only consults
+  // these for the specific criteria it declares `operatingEvidence` for
+  // (access control, monitoring, and recovery testing) — everything else is
+  // unaffected by report type either way.
+  {
+    id: "sustainedAccessOperatingEvidence",
+    scoring: false,
+    section: "SOC 2 Operating Effectiveness",
+    appliesTo: ["soc2"],
+    question: "For access reviews and account provisioning/deprovisioning, do you have records showing this operated consistently over the last 6-12 months (not just as configured today)?",
+    options: [
+      { label: "Yes — dated review records/tickets covering at least 6 months", score: 100 },
+      { label: "Some records, but gaps or inconsistent", score: 50 },
+      { label: "No — we could only show today's configuration", score: 15 },
+    ],
+  },
+  {
+    id: "sustainedMonitoringOperatingEvidence",
+    scoring: false,
+    section: "SOC 2 Operating Effectiveness",
+    appliesTo: ["soc2"],
+    question: "For security monitoring/logging, do you have records showing it ran continuously over the last 6-12 months (alerts reviewed, gaps investigated)?",
+    options: [
+      { label: "Yes — logs/alert-review records covering at least 6 months", score: 100 },
+      { label: "Some records, but gaps or inconsistent", score: 50 },
+      { label: "No — we could only show today's configuration", score: 15 },
+    ],
+  },
+  {
+    id: "sustainedRecoveryOperatingEvidence",
+    scoring: false,
+    section: "SOC 2 Operating Effectiveness",
+    appliesTo: ["soc2"],
+    question: "For backups and recovery, do you have records of actual tested restores over the last 6-12 months (not just that backups run)?",
+    options: [
+      { label: "Yes — dated test-restore records covering at least 6 months", score: 100 },
+      { label: "One test, or informal/undocumented tests", score: 50 },
+      { label: "No — backups run, but restores have never been tested", score: 15 },
+    ],
+  },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────

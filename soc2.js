@@ -143,7 +143,7 @@ export const SOC2_SECURITY = [
     criteria: [
       { id: "CC4.1", name: "Ongoing and separate evaluations",
         covers: "Evaluations are performed to determine whether the components of internal control are present and functioning — continuously, periodically, or both.",
-        evidence: ["monitoring", "priorAudit"] },
+        evidence: ["monitoring", "priorAudit"], operatingEvidence: ["sustainedMonitoringOperatingEvidence"] },
       { id: "CC4.2", name: "Communication of deficiencies",
         covers: "Control deficiencies are evaluated and communicated to those responsible for corrective action, including senior management where warranted.",
         evidence: ["monitoring", "documentedPolicies"] },
@@ -173,13 +173,13 @@ export const SOC2_SECURITY = [
     criteria: [
       { id: "CC6.1", name: "Logical access security software and infrastructure",
         covers: "Logical access security measures protect information assets from unauthorized access — the identity and access management foundation.",
-        evidence: ["mfa", "privilegedAccess", "accessReviews"] },
+        evidence: ["mfa", "privilegedAccess", "accessReviews"], operatingEvidence: ["sustainedAccessOperatingEvidence"] },
       { id: "CC6.2", name: "User registration and authorization",
         covers: "New internal and external users are registered and authorized before being issued credentials, and credentials are removed when access is no longer needed.",
-        evidence: ["offboarding", "accessReviews"] },
+        evidence: ["offboarding", "accessReviews"], operatingEvidence: ["sustainedAccessOperatingEvidence"] },
       { id: "CC6.3", name: "Access modification and removal",
         covers: "Access to data and systems is added, modified, and removed based on roles and least privilege — including timely revocation at termination.",
-        evidence: ["accessReviews", "privilegedAccess"] },
+        evidence: ["accessReviews", "privilegedAccess"], operatingEvidence: ["sustainedAccessOperatingEvidence"] },
       { id: "CC6.4", name: "Physical access restriction",
         covers: "Physical access to facilities and hardware holding information assets is restricted to authorized people.",
         evidence: ["physicalSecurity"] },
@@ -204,10 +204,10 @@ export const SOC2_SECURITY = [
     criteria: [
       { id: "CC7.1", name: "Detection of configuration changes and vulnerabilities",
         covers: "Detection and monitoring procedures identify configuration changes and new vulnerabilities — this is where continuous vulnerability management lives.",
-        evidence: ["vulnManagement", "changeManagement"] },
+        evidence: ["vulnManagement", "changeManagement"], operatingEvidence: ["sustainedMonitoringOperatingEvidence"] },
       { id: "CC7.2", name: "Monitoring for anomalies",
         covers: "System components are monitored for anomalies indicative of malicious acts, natural disasters, and errors, and those anomalies are evaluated.",
-        evidence: ["monitoring", "endpoint"] },
+        evidence: ["monitoring", "endpoint"], operatingEvidence: ["sustainedMonitoringOperatingEvidence"] },
       { id: "CC7.3", name: "Evaluation of security events",
         covers: "Security events are evaluated to determine whether they amount to a failure to meet objectives — an incident — and acted on accordingly.",
         evidence: ["incidentResponse", "monitoring"] },
@@ -257,10 +257,10 @@ export const SOC2_AVAILABILITY = [
         evidence: ["monitoring"] },
       { id: "A1.2", name: "Environmental protections, backup, and recovery infrastructure",
         covers: "Environmental protections, software, data backup processes, and recovery infrastructure are authorized, designed, developed, implemented, operated, approved, maintained, and monitored.",
-        evidence: ["backups", "disasterRecovery"] },
+        evidence: ["backups", "disasterRecovery"], operatingEvidence: ["sustainedRecoveryOperatingEvidence"] },
       { id: "A1.3", name: "Recovery plan testing",
         covers: "Recovery plan procedures supporting system recovery are tested — an untested backup is a hope, not a control.",
-        evidence: ["disasterRecovery"] },
+        evidence: ["disasterRecovery"], operatingEvidence: ["sustainedRecoveryOperatingEvidence"] },
     ],
   },
 ];
@@ -279,13 +279,39 @@ export const SOC2_CATEGORIES = {
 // ── Deterministic readiness assessment ────────────────────────
 const STATUS = { MET: "met", PARTIAL: "partial", GAP: "gap", UNKNOWN: "unknown" };
 
-function assessCriterion(c, answers) {
+// Type I asks whether a control is designed correctly right now; Type II
+// asks whether it operated effectively over an observation period. Only
+// criteria that declare `operatingEvidence` get a real Type II distinction —
+// everything else is scored identically under either report type, because
+// claiming a distinction we haven't built real evidence for would be exactly
+// the kind of fabricated precision this codebase's frameworks avoid.
+function assessCriterion(c, answers, { reportType = "type2" } = {}) {
   const scores = (c.evidence || [])
     .map(id => answers[id]?.score)
     .filter(s => typeof s === "number");
   if (scores.length === 0) return { ...c, status: STATUS.UNKNOWN, score: null };
-  const score = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-  return { ...c, score, status: score >= 80 ? STATUS.MET : score >= 45 ? STATUS.PARTIAL : STATUS.GAP };
+  const designScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+
+  if (reportType !== "type2" || !c.operatingEvidence?.length) {
+    return { ...c, score: designScore, status: designScore >= 80 ? STATUS.MET : designScore >= 45 ? STATUS.PARTIAL : STATUS.GAP };
+  }
+
+  // Type II, and this criterion has real operating-effectiveness evidence
+  // authored for it: design alone can no longer reach MET.
+  const opScores = c.operatingEvidence
+    .map(id => answers[id]?.score)
+    .filter(s => typeof s === "number");
+  if (opScores.length === 0) {
+    // No operating-effectiveness answer collected — cap at PARTIAL rather
+    // than assume it either operated correctly or didn't; we simply don't
+    // know, and it's a Type II report so design alone isn't enough to say MET.
+    const status = designScore >= 45 ? STATUS.PARTIAL : STATUS.GAP;
+    return { ...c, score: designScore, status, note: "Design evidence only — no operating-effectiveness answer collected for a Type II report." };
+  }
+  const opScore = Math.round(opScores.reduce((a, b) => a + b, 0) / opScores.length);
+  const blended = Math.round((designScore + opScore) / 2);
+  const status = (designScore >= 80 && opScore >= 80) ? STATUS.MET : blended >= 45 ? STATUS.PARTIAL : STATUS.GAP;
+  return { ...c, score: blended, designScore, operatingScore: opScore, status };
 }
 
 /**
@@ -301,7 +327,7 @@ export function assessSoc2(checklistAnswers = {}, { categories = ["security"], r
   const assessed = inScope.map(catId => {
     const cat = SOC2_CATEGORIES[catId];
     const series = cat.series.map(s => {
-      const criteria = s.criteria.map(c => assessCriterion(c, checklistAnswers));
+      const criteria = s.criteria.map(c => assessCriterion(c, checklistAnswers, { reportType }));
       const scored = criteria.filter(c => c.status !== STATUS.UNKNOWN);
       const avg = scored.length ? Math.round(scored.reduce((a, c) => a + c.score, 0) / scored.length) : null;
       return {

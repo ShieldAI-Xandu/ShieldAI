@@ -46,5 +46,20 @@ ok(/not an attestation/i.test(r.disclaimer), "disclaimer: readiness, not attesta
 ok(/not by an AI/i.test(r.methodology), "methodology: computed, not AI-interpreted");
 const empty = assessSoc2({});
 ok(empty.summary.readinessPct===null, "empty assessment -> null readiness, NOT 100%");
+
+console.log("\nReport type — Type II demands real operating-effectiveness evidence:");
+const findCrit = (result, id) => result.categories.flatMap(c=>c.series).flatMap(s=>s.criteria).find(c=>c.id===id);
+const designOnly = { mfa:{score:100}, privilegedAccess:{score:100}, accessReviews:{score:100} };
+const t1 = assessSoc2(designOnly, { categories:["security"], reportType:"type1" });
+const t2NoOp = assessSoc2(designOnly, { categories:["security"], reportType:"type2" });
+const withOp = { ...designOnly, sustainedAccessOperatingEvidence:{score:100} };
+const t2WithOp = assessSoc2(withOp, { categories:["security"], reportType:"type2" });
+ok(findCrit(t1,"CC6.1").status === "met", "Type I: strong design alone reaches MET");
+ok(findCrit(t2NoOp,"CC6.1").status === "partial", "Type II with no operating evidence caps at PARTIAL, never MET on design alone");
+ok(findCrit(t2WithOp,"CC6.1").status === "met", "Type II with strong design AND operating evidence reaches MET");
+const cc11_t1 = findCrit(t1, "CC1.1"), cc11_t2 = findCrit(t2NoOp, "CC1.1");
+ok(cc11_t1.status === cc11_t2.status, "a criterion with no operatingEvidence authored is unaffected by report type");
+ok(t1.summary.criteria === t2NoOp.summary.criteria && t1.summary.criteria === 33, "report type changes scoring behavior only, never the control count (33)");
+
 console.log(fail?`\n${fail} FAILED`:"\nSOC 2 verified");
 process.exit(fail?1:0);

@@ -71,7 +71,7 @@ export function pushNotification(db, { userId, type, title, body, link, actorRol
 // A snapshot is a single { userId, score, level, at } point. We keep the
 // history bounded per user and only add a point when the score meaningfully
 // changes or a month has passed, so the trend stays readable.
-export function recordPostureSnapshot(db, userId, score, level) {
+export function recordPostureSnapshot(db, userId, score, level, reason) {
   if (!userId || typeof score !== "number") return;
   db.data.postureSnapshots ||= [];
   const mine = db.data.postureSnapshots.filter(s => s.userId === userId);
@@ -85,6 +85,7 @@ export function recordPostureSnapshot(db, userId, score, level) {
     userId,
     score: Math.round(score),
     level: level || null,
+    reason: reason || null,
     at: nowIso(),
   });
   // Bounded growth, matching the clientActions pattern elsewhere.
@@ -522,7 +523,7 @@ export function registerPortfolioRoutes(
     // From snapshots.
     for (const s of db.data.postureSnapshots || []) {
       if (s.userId !== clientId) continue;
-      points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot" });
+      points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot", reason: s.reason || null });
     }
 
     points.sort((a, b) => new Date(a.at) - new Date(b.at));
@@ -566,7 +567,7 @@ export function registerPortfolioRoutes(
     }
     for (const s of db.data.postureSnapshots || []) {
       if (s.userId !== clientId) continue;
-      points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot" });
+      points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot", reason: s.reason || null });
     }
     points.sort((a, b) => new Date(a.at) - new Date(b.at));
     const byDay = new Map();

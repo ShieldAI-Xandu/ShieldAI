@@ -15582,6 +15582,13 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
   const [cisIG, setCisIG] = useState("IG1");
   const [hasProgram, setHasProgram] = useState(false);
   const [showRegenChoice, setShowRegenChoice] = useState(false);
+  const canExtended = can("extendedAssessment");
+  const [extQuestions, setExtQuestions] = useState([]);
+  const [extAnswers, setExtAnswers] = useState({});
+  const [extLoading, setExtLoading] = useState(false);
+  const [extSaving, setExtSaving] = useState(false);
+  const [extError, setExtError] = useState(null);
+  const [extResult, setExtResult] = useState(null);
 
   function toggleFrameworkEdit(id) {
     const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id);
@@ -15624,6 +15631,52 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
       }
     })();
   }, [assessmentId]);
+
+  // Extended Assessment (Growth+): separate fetch since its question set and
+  // saved answers live under their own gated endpoint, not the base record.
+  useEffect(() => {
+    if (!canExtended) return;
+    let live = true;
+    (async () => {
+      setExtLoading(true);
+      try {
+        const res = await authFetch(`${API_BASE}/api/assessments/${assessmentId}/extended`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!live) return;
+        setExtQuestions(Array.isArray(d.questions) ? d.questions : []);
+        // Answers come back as { label, score } / { value } / { label, value } —
+        // the form only needs the raw selected label/value per question id.
+        const flat = {};
+        for (const [id, a] of Object.entries(d.answers || {})) {
+          flat[id] = a?.label ?? a?.value ?? "";
+        }
+        setExtAnswers(flat);
+      } finally {
+        if (live) setExtLoading(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [assessmentId, canExtended]);
+
+  async function saveExtended() {
+    setExtSaving(true);
+    setExtError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/assessments/${assessmentId}/extended`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: extAnswers }),
+      });
+      if (!res.ok) throw new Error("Failed to save the extended assessment");
+      const d = await res.json();
+      setExtResult(d);
+    } catch (err) {
+      setExtError(err.message);
+    } finally {
+      setExtSaving(false);
+    }
+  }
 
   const total = SECURITY_CHECKLIST.length;
   const answered = Object.keys(answers).length;
@@ -15898,6 +15951,83 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                   ))}
                 </div>
                 ); })}
+
+              {/* Extended Assessment — Growth+ (tiers.js's extendedAssessment
+                  capability). Separate section, separate save action, and a
+                  separate storage bucket (data.extendedChecklist) from the
+                  base 35 above — see extendedAssessmentRoutes.js. */}
+              <SectionLabel text="Extended Assessment"/>
+              {!canExtended ? (
+                <Card style={{marginBottom:24}}>
+                  <LockedFeature icon="🧩" title="Extended Assessment"
+                    blurb="Additional cloud, tooling, and MFA-depth questions that can sharpen your posture score and give Threat Intelligence and Cloud features real signal to work with — included from Growth up."
+                    points={["Which cloud provider(s) you run on", "Specific EDR/backup/email-security/WAF products", "How deep MFA enforcement actually goes"]}
+                    capability="extendedAssessment"/>
+                </Card>
+              ) : extLoading ? (
+                <Card style={{marginBottom:24}}><Spinner/></Card>
+              ) : (
+                <Card style={{padding:"16px 18px",marginBottom:24}}>
+                  <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 14px"}}>
+                    Included on your plan — these can refine your posture score and give newer
+                    features (Threat Intelligence, Cloud) real signal to work with. Optional.
+                  </p>
+                  {extError && (
+                    <div style={{marginBottom:12,padding:"10px 14px",background:`${C.red}15`,
+                      border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>{extError}</div>
+                  )}
+                  {extResult && (
+                    <div style={{marginBottom:14,padding:"12px 14px",background:`${C.accent}12`,
+                      border:`1px solid ${C.accent}44`,borderRadius:8,color:C.text,fontSize:13,lineHeight:1.5}}>
+                      {extResult.delta === 0 ? (
+                        "Saved — no change to your posture score from this."
+                      ) : (
+                        <>Your posture score updated: <strong>{extResult.before.postureScore} → {extResult.after.postureScore}</strong>{" "}
+                        ({extResult.delta > 0 ? "+" : ""}{extResult.delta}), because you completed the Extended Assessment.</>
+                      )}
+                    </div>
+                  )}
+                  {extQuestions.length === 0 ? (
+                    <p style={{color:C.textMut,fontSize:13}}>No additional questions apply yet.</p>
+                  ) : extQuestions.map(q => (
+                    <div key={q.id} style={{marginBottom:16}}>
+                      <div style={{color:C.text,fontSize:13.5,fontWeight:600,marginBottom:6}}>{safeText(q.question)}</div>
+                      {q.help && <div style={{color:C.textMut,fontSize:11.5,marginBottom:8}}>{safeText(q.help)}</div>}
+                      {q.freeText ? (
+                        <input value={extAnswers[q.id] || ""} onChange={e=>setExtAnswers({...extAnswers,[q.id]:e.target.value})}
+                          placeholder={q.suggestions?.length ? `e.g. ${q.suggestions[0]}` : ""} style={inputStyle}/>
+                      ) : (
+                        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                          {q.options.map(opt => {
+                            const label = optionLabel(opt);
+                            const selected = extAnswers[q.id] === label;
+                            return (
+                              <button key={label} onClick={()=>setExtAnswers({...extAnswers,[q.id]:label})}
+                                style={{textAlign:"left",padding:"9px 12px",borderRadius:8,cursor:"pointer",
+                                  background: selected ? `${C.accent}18` : C.surface,
+                                  border:`1px solid ${selected ? C.accent : C.border}`,
+                                  color: selected ? C.text : C.textSec,
+                                  fontSize:13,fontWeight: selected ? 600 : 400,
+                                  fontFamily:"Inter,system-ui,sans-serif"}}>
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {extQuestions.length > 0 && (
+                    <button onClick={saveExtended} disabled={extSaving}
+                      style={{marginTop:4,padding:"11px 20px",borderRadius:9,border:"none",
+                        cursor:extSaving?"default":"pointer",
+                        background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                        color:"#04121F",fontSize:13,fontWeight:700,opacity:extSaving?0.6:1}}>
+                      {extSaving ? "Saving…" : "Save Extended Assessment"}
+                    </button>
+                  )}
+                </Card>
+              )}
 
               {/* Actions */}
               {!showRegenChoice ? (

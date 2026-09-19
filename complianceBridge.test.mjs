@@ -75,7 +75,7 @@ const ecomQs = visibleQuestions("pci-dss", { channel: "ecommerce" }).map(q => q.
 const cardQs = visibleQuestions("pci-dss", { channel: "card-present" }).map(q => q.id);
 ok(ecomQs.includes("ecommerceIntegration") && !ecomQs.includes("terminalType"), "e-commerce path skips terminal questions");
 ok(cardQs.includes("terminalType") && !cardQs.includes("ecommerceIntegration"), "card-present path skips iframe questions");
-ok(frameworksWithIntake().length === 7, `7 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
+ok(frameworksWithIntake().length === 8, `8 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
 const st = intakeStatus("pci-dss", { isServiceProvider: false });
 ok(st.complete === false && st.missing.length > 0, "incomplete intake reports what's missing");
 ok(/worst case/.test(st.defaultIfSkipped), "states what an unscoped assessment assumed");
