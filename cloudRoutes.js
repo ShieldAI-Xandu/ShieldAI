@@ -36,10 +36,6 @@ const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
 const PROVIDER_LABELS = { aws: "AWS", azure: "Azure" };
 
-function ensureCollections(db) {
-  db.data.cloudConnections ||= [];
-}
-
 // Public view of a connection — never leaks the encrypted secret.
 function publicConnection(c) {
   return {
@@ -151,19 +147,23 @@ function accountLabelFor(provider, cred) {
 }
 
 export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson }) {
-  ensureCollections(db);
+  // connections() (not a bare db.data.cloudConnections reference) self-heals
+  // per store on first access — see supportRoutes.js's requests() accessor
+  // for the fuller explanation of why a one-time registration-time bootstrap
+  // never reaches demo-db.json's template or a per-visitor demo sandbox.
+  const connections = () => (db.data.cloudConnections ||= []);
 
   // ════════════════════════════════════════════════════════════
   //  CLIENT ROUTES (their own connections only)
   // ════════════════════════════════════════════════════════════
 
   app.get("/api/cloud", requireAuth, (req, res) => {
-    const mine = (db.data.cloudConnections || []).filter(c => c.ownerUserId === req.userId);
+    const mine = connections().filter(c => c.ownerUserId === req.userId);
     res.json(mine.map(publicConnection));
   });
 
   app.get("/api/cloud/:id", requireAuth, (req, res) => {
-    const c = (db.data.cloudConnections || []).find(x => x.id === req.params.id && x.ownerUserId === req.userId);
+    const c = connections().find(x => x.id === req.params.id && x.ownerUserId === req.userId);
     if (!c) return res.status(404).json({ error: "Cloud connection not found." });
     res.json(publicConnection(c));
   });
@@ -207,7 +207,7 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
           lastSyncSummary: null,
           revokedAt: null,
         };
-        db.data.cloudConnections.push(connection);
+        connections().push(connection);
         await db.write();
         res.json({ ok: true, id: connection.id, provider: connection.provider });
       } catch (err) {
@@ -222,7 +222,7 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
 
   // ── Sync: pull posture facts on demand, draft recommendations ──
   app.post("/api/cloud/:id/sync", requireAuth, async (req, res) => {
-    const connection = (db.data.cloudConnections || []).find(c => c.id === req.params.id && c.ownerUserId === req.userId);
+    const connection = connections().find(c => c.id === req.params.id && c.ownerUserId === req.userId);
     if (!connection) return res.status(404).json({ error: "Cloud connection not found." });
     if (connection.status === "revoked") return res.status(403).json({ error: "This connection has been revoked." });
 
@@ -283,7 +283,7 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
   });
 
   app.post("/api/cloud/:id/revoke", requireAuth, async (req, res) => {
-    const connection = (db.data.cloudConnections || []).find(c => c.id === req.params.id && c.ownerUserId === req.userId);
+    const connection = connections().find(c => c.id === req.params.id && c.ownerUserId === req.userId);
     if (!connection) return res.status(404).json({ error: "Cloud connection not found." });
     // Neither provider offers a client-callable revoke for a bare
     // access-key/service-principal credential — the org admin rotates or
@@ -296,9 +296,9 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
   });
 
   app.delete("/api/cloud/:id", requireAuth, async (req, res) => {
-    const connection = (db.data.cloudConnections || []).find(c => c.id === req.params.id && c.ownerUserId === req.userId);
+    const connection = connections().find(c => c.id === req.params.id && c.ownerUserId === req.userId);
     if (!connection) return res.status(404).json({ error: "Cloud connection not found." });
-    db.data.cloudConnections = (db.data.cloudConnections || []).filter(c => c.id !== connection.id);
+    db.data.cloudConnections = connections().filter(c => c.id !== connection.id);
     await db.write();
     res.json({ ok: true, id: connection.id });
   });

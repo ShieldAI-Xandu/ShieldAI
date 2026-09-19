@@ -53,7 +53,20 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
   // cross-analyst visibility, but there's one clear owner). Any ticket a
   // staff member creates or replies to is auto-claimed by them, so
   // Mastermind never talks over a human who's already engaged.
-  db.data.supportRequests ||= [];
+  //
+  // requests() below (not a bare db.data.supportRequests reference) is the
+  // real fix for a bug this surfaced: bootstrapping the array ONCE here, at
+  // registration time, only ever touches whatever store is ambient at
+  // server boot (production) — it never runs against demo-db.json's
+  // template or a per-visitor demo sandbox cloned from it, so any of those
+  // would 500 on first access if the key was never independently created
+  // (confirmed: demo-db.json has no supportRequests key, since seedDemo.js
+  // never creates a demo ticket). Every read/write below goes through this
+  // accessor instead, so it self-heals in whichever store it's actually
+  // called against — the same defensive-at-point-of-use pattern
+  // cveService.js/darkwebService.js/attackSurfaceService.js already use
+  // for their own per-store exposure maps.
+  const requests = () => (db.data.supportRequests ||= []);
 
   // The real enforcement point — UI hiding (the top-bar button/upgrade prompt)
   // is cosmetic. Gates the whole Support Center, not just the Mastermind
@@ -121,7 +134,7 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
   // for client tickets only, per the design above) — always admin-sees-all
   // or creator-sees-own, regardless of the scope toggle.
   function visibleInternalTickets(req) {
-    const internal = db.data.supportRequests.filter(r => !r.clientUserId);
+    const internal = requests().filter(r => !r.clientUserId);
     if (isAdminReq(req)) return internal;
     return internal.filter(r => r.createdByUserId === req.userId);
   }
@@ -139,7 +152,7 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
   }
 
   function findRequest(id) {
-    return db.data.supportRequests.find(r => r.id === id) || null;
+    return requests().find(r => r.id === id) || null;
   }
 
   const sortByUpdatedDesc = (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt);
@@ -242,7 +255,7 @@ You have no ability to change account settings, billing, or any client data from
   // ── Client side ──────────────────────────────────────────────
   app.get("/api/client/support-requests", requireAuth, supportCenterGate, (req, res) => {
     if (req.isAdmin || req.isAnalyst) return res.status(403).json({ error: "Client access only." });
-    const mine = db.data.supportRequests
+    const mine = requests()
       .filter(r => r.clientUserId === req.userId)
       .sort(sortByUpdatedDesc);
     res.json(mine);
@@ -276,7 +289,7 @@ You have no ability to change account settings, billing, or any client data from
         body: message.slice(0, 2000), at,
       }],
     };
-    db.data.supportRequests.push(ticket);
+    requests().push(ticket);
 
     // Mastermind-first: try an AI reply before paging any human. Only fall
     // back to notifying staff if Mastermind isn't configured or fails —
@@ -374,7 +387,7 @@ You have no ability to change account settings, billing, or any client data from
     const admin = isAdminReq(req);
     const myClientIds = new Set(analystClientIds(db, req.userId));
     const allowedClientIds = new Set(visibleClientIds(req, scope));
-    const clientTickets = db.data.supportRequests.filter(r => r.clientUserId && allowedClientIds.has(r.clientUserId));
+    const clientTickets = requests().filter(r => r.clientUserId && allowedClientIds.has(r.clientUserId));
     const internalTickets = visibleInternalTickets(req);
     let list = [...clientTickets, ...internalTickets];
     const status = req.query.status;
@@ -441,7 +454,7 @@ You have no ability to change account settings, billing, or any client data from
         body: message.slice(0, 2000), at,
       }],
     };
-    db.data.supportRequests.push(ticket);
+    requests().push(ticket);
 
     if (clientUserId) {
       for (const staffId of staffContactsFor(clientUserId)) {

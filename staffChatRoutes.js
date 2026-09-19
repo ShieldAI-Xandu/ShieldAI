@@ -28,7 +28,15 @@ function dmChannelId(idA, idB) {
 
 export function registerStaffChatRoutes(app, { db, requireAuth }) {
   // { id, channelId, authorId, authorLabel, authorRole: "admin"|"analyst", body, at }
-  db.data.staffChatMessages ||= [];
+  //
+  // messages() (not a bare db.data.staffChatMessages reference) self-heals
+  // per store on first access — bootstrapping the array once here, at
+  // registration time, only ever touches whatever store is ambient at
+  // server boot (production), never demo-db.json's template or a
+  // per-visitor demo sandbox cloned from it. See the identical fix + longer
+  // explanation in supportRoutes.js's requests() accessor, which this
+  // mirrors.
+  const messages = () => (db.data.staffChatMessages ||= []);
 
   const users = () => db.data.users || [];
   const findUser = id => users().find(u => u.id === id) || null;
@@ -51,7 +59,7 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
 
   // ── Team (group) channel — everyone on staff, no membership to manage ──
   app.get("/api/staff/chat/team/messages", requireStaff, (req, res) => {
-    const list = db.data.staffChatMessages
+    const list = messages()
       .filter(m => m.channelId === TEAM_CHANNEL)
       .sort(sortByAtAsc)
       .slice(-200);
@@ -73,7 +81,7 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
       body,
       at: nowIso(),
     };
-    db.data.staffChatMessages.push(message);
+    messages().push(message);
     // Deliberately no per-message notification here — pinging every
     // admin/analyst on every group-channel message would be noisy; the
     // Chats page's own poll surfaces new messages while it's open, same as
@@ -87,7 +95,7 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
     const other = findUser(req.params.userId);
     if (!isStaff(other)) return res.status(404).json({ error: "Staff member not found." });
     const channelId = dmChannelId(req.userId, other.id);
-    const list = db.data.staffChatMessages
+    const list = messages()
       .filter(m => m.channelId === channelId)
       .sort(sortByAtAsc)
       .slice(-200);
@@ -112,7 +120,7 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
       body,
       at: nowIso(),
     };
-    db.data.staffChatMessages.push(message);
+    messages().push(message);
     pushNotification(db, {
       userId: other.id,
       type: "staff_dm",
@@ -133,7 +141,7 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
     // re-filtering the whole message history once per thread found.
     const mine = new Set();
     const lastAtByChannel = new Map();
-    for (const m of db.data.staffChatMessages) {
+    for (const m of messages()) {
       if (!m.channelId.startsWith("dm:")) continue;
       lastAtByChannel.set(m.channelId, m.at);
       const [, a, b] = m.channelId.split(":");

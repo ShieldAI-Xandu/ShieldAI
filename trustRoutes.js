@@ -42,10 +42,6 @@ import { hasCapability } from "./tiers.js";
 
 const nowIso = () => new Date().toISOString();
 
-function ensureCollections(db) {
-  db.data.trustPages ||= [];
-}
-
 // Own copy of "find a client's latest assessment" / checklist / framework
 // intake opts — same three tiny helpers submissionPacket.js,
 // complianceRoutes.js, and reportRoutes.js each keep their own copy of,
@@ -141,10 +137,14 @@ function buildPublicTrustPayload(db, gate, trustPage) {
 }
 
 export function registerTrustRoutes(app, { db, requireAuth, gate }) {
-  ensureCollections(db);
+  // trustPages() (not a bare db.data.trustPages reference) self-heals per
+  // store on first access — see supportRoutes.js's requests() accessor for
+  // the fuller explanation of why a one-time registration-time bootstrap
+  // never reaches demo-db.json's template or a per-visitor demo sandbox.
+  const trustPages = () => (db.data.trustPages ||= []);
 
   function myTrustPage(userId) {
-    return (db.data.trustPages || []).find(x => x.ownerUserId === userId);
+    return trustPages().find(x => x.ownerUserId === userId);
   }
 
   // Frameworks the client has actually selected and is entitled to show —
@@ -188,7 +188,7 @@ export function registerTrustRoutes(app, { db, requireAuth, gate }) {
         enabled, frameworksShown,
         createdAt: nowIso(), updatedAt: nowIso(), lastViewedAt: null, viewCount: 0,
       };
-      db.data.trustPages.push(t);
+      trustPages().push(t);
     } else {
       t.enabled = enabled;
       t.frameworksShown = frameworksShown;
@@ -214,7 +214,7 @@ export function registerTrustRoutes(app, { db, requireAuth, gate }) {
   //  PUBLIC ROUTE — no requireAuth, matching /api/phish/:token exactly.
   // ════════════════════════════════════════════════════════════
   app.get("/api/trust/:token", async (req, res) => {
-    const t = (db.data.trustPages || []).find(x => x.token === req.params.token);
+    const t = trustPages().find(x => x.token === req.params.token);
     if (!t || !t.enabled) return res.status(404).json({ error: "This page isn't available." });
 
     // If the owner's plan no longer includes the trust page (e.g. they

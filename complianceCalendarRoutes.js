@@ -56,14 +56,6 @@ function parseCompositeId(raw) {
 
 export const CALENDAR_CATEGORIES = ["insurance", "license", "audit", "contract", "regulatory", "other"];
 
-function ensureCollections(db) {
-  db.data.complianceCalendarEntries ||= [];
-  // { id, userId, title, category, dueDate, recurrenceMonths, notes,
-  //   completedAt, createdAt, updatedAt, createdByStaff }
-  db.data.calendarFeeds ||= [];
-  // { id, ownerUserId, token, enabled, createdAt, updatedAt, lastFetchedAt, fetchCount }
-}
-
 // The 5-source merge behind the unified calendar view, pulled out so the
 // public .ics feed route (below) can build the exact same item set the
 // authenticated list view uses, without a second copy of this logic drifting
@@ -177,7 +169,13 @@ function countActiveCustomEntries(db, userId) {
 }
 
 export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, analystOwnsClient, logClientAction }) {
-  ensureCollections(db);
+  // calendarEntries()/calendarFeeds() (not bare db.data.X references)
+  // self-heal per store on first access — see supportRoutes.js's requests()
+  // accessor for the fuller explanation of why a one-time registration-time
+  // bootstrap never reaches demo-db.json's template or a per-visitor demo
+  // sandbox.
+  const calendarEntries = () => (db.data.complianceCalendarEntries ||= []);
+  const calendarFeeds = () => (db.data.calendarFeeds ||= []);
 
   const gateCalendar = (gate && gate.capability) ? gate.capability("complianceCalendar") : (req, res, next) => next();
   const gateCalendarLimit = (gate && gate.limit) ? gate.limit("calendarEntries", countActiveCustomEntries) : (req, res, next) => next();
@@ -235,7 +233,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
       createdAt: nowIso(), updatedAt: nowIso(),
       createdByStaff: targetId !== req.userId ? req.userId : null,
     };
-    db.data.complianceCalendarEntries.push(entry);
+    calendarEntries().push(entry);
     await db.write();
     res.json({ ...entry, id: `custom:${entry.id}` });
   });
@@ -322,7 +320,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     }
 
     // Custom entries — the original behavior, every field editable.
-    const entry = (db.data.complianceCalendarEntries || []).find(e => e.id === rawId && e.userId === targetId);
+    const entry = calendarEntries().find(e => e.id === rawId && e.userId === targetId);
     if (!entry) return res.status(404).json({ error: "Not found." });
 
     if (req.body?.title !== undefined) {
@@ -353,7 +351,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     if (sourceType !== "custom") {
       return res.status(400).json({ error: "Only custom reminders can be marked done from the calendar." });
     }
-    const entry = (db.data.complianceCalendarEntries || []).find(e => e.id === rawId && e.userId === targetId);
+    const entry = calendarEntries().find(e => e.id === rawId && e.userId === targetId);
     if (!entry) return res.status(404).json({ error: "Not found." });
 
     entry.completedAt = nowIso();
@@ -410,10 +408,10 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
       });
     }
 
-    const before = (db.data.complianceCalendarEntries || []).length;
-    db.data.complianceCalendarEntries = (db.data.complianceCalendarEntries || [])
+    const before = calendarEntries().length;
+    db.data.complianceCalendarEntries = calendarEntries()
       .filter(e => !(e.id === rawId && e.userId === targetId));
-    if ((db.data.complianceCalendarEntries || []).length === before) return res.status(404).json({ error: "Not found." });
+    if (calendarEntries().length === before) return res.status(404).json({ error: "Not found." });
     await db.write();
     res.json({ ok: true, deleted: req.params.id });
   });
@@ -430,7 +428,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
   // ════════════════════════════════════════════════════════════
 
   function myCalendarFeed(userId) {
-    return (db.data.calendarFeeds || []).find(f => f.ownerUserId === userId);
+    return calendarFeeds().find(f => f.ownerUserId === userId);
   }
   function feedView(f) {
     return {
@@ -452,7 +450,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
         id: randomUUID(), ownerUserId: req.userId, token: randomUUID(), enabled,
         createdAt: nowIso(), updatedAt: nowIso(), lastFetchedAt: null, fetchCount: 0,
       };
-      db.data.calendarFeeds.push(f);
+      calendarFeeds().push(f);
     } else {
       f.enabled = enabled;
       f.updatedAt = nowIso();
@@ -483,7 +481,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     const token = req.params.tokenParam.endsWith(".ics")
       ? req.params.tokenParam.slice(0, -4)
       : req.params.tokenParam;
-    const f = (db.data.calendarFeeds || []).find(x => x.token === token);
+    const f = calendarFeeds().find(x => x.token === token);
     if (!f || !f.enabled) return res.status(404).type("text/plain").send("Not found.");
 
     // If the owner's plan no longer includes the calendar, or no longer
