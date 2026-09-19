@@ -583,20 +583,26 @@ You have no ability to change account settings, billing, or any client data from
       }
     }
 
-    pushNotification(db, {
-      userId: ticket.clientUserId,
-      type: "support_reply",
-      title: "New reply to your support request",
-      body: message.slice(0, 1000),
-      actorRole: req.isAdmin ? "admin" : "analyst",
-    });
-    logClientAction(db, {
-      clientUserId: ticket.clientUserId,
-      actorUserId: req.userId,
-      actorRole: req.isAdmin ? "admin" : "analyst",
-      action: "support_reply_sent",
-      detail: message.length > 200 ? `${message.slice(0, 200)}…` : message,
-    });
+    // pushNotification no-ops safely on a null userId (internal tickets),
+    // but logClientAction has no such guard — db.data.clientActions is
+    // keyed entirely by clientUserId, so only log it when there's a real
+    // client, matching the create route's same clientUserId-gated pattern.
+    if (ticket.clientUserId) {
+      pushNotification(db, {
+        userId: ticket.clientUserId,
+        type: "support_reply",
+        title: "New reply to your support request",
+        body: message.slice(0, 1000),
+        actorRole: req.isAdmin ? "admin" : "analyst",
+      });
+      logClientAction(db, {
+        clientUserId: ticket.clientUserId,
+        actorUserId: req.userId,
+        actorRole: req.isAdmin ? "admin" : "analyst",
+        action: "support_reply_sent",
+        detail: message.length > 200 ? `${message.slice(0, 200)}…` : message,
+      });
+    }
     await db.write();
     res.json(ticket);
   });

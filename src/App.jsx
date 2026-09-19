@@ -2584,6 +2584,158 @@ function DarkWebExposureCard({ clientId } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  ATTACK SURFACE — crt.sh subdomain discovery + HTTP banner probing of a
+//  verified domain (attackSurfaceService.js). Existed fully working on the
+//  backend, wired into Mastermind's context, but had NO frontend component
+//  at all — there was no way for a client (or staff viewing on their
+//  behalf) to ever trigger a scan or see a result. This is that missing
+//  piece, same shape as DarkWebExposureCard above (same verified-domain
+//  gate, same honest "not monitored yet" empty state).
+// ─────────────────────────────────────────────────────────────
+function AttackSurfaceCard({ clientId } = {}) {
+  const { can } = useCapabilities();
+  const hasAccess = can("threatIntel");
+  const [data, setData] = useState(null);   // { userId, surface }
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const qs = clientId ? `?userId=${encodeURIComponent(clientId)}` : "";
+      const res = await authFetch(`${API_BASE}/api/client/attack-surface${qs}`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load attack-surface data.");
+      setData(d);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { if (hasAccess) load(); }, [clientId, hasAccess]);
+
+  if (!hasAccess) {
+    return <ThreatIntelLockedCard title="Attack Surface"
+      blurb="Subdomain discovery and live-host software banners for your verified company domain — feeds straight into CVE matching. This is a Growth-plan feature."/>;
+  }
+
+  async function refresh() {
+    setRefreshing(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/attack-surface/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clientId ? { userId: clientId } : {}),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Refresh failed.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setRefreshing(false); }
+  }
+
+  const surf = data?.surface;
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Attack Surface"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>crt.sh + live host probing</span>
+        <div style={{marginLeft:"auto"}}>
+          {surf?.monitored && (
+            <button onClick={refresh} disabled={refreshing||loading}
+              style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.border}`,
+                background:C.surface,color:C.accentText,fontSize:12,fontWeight:600,
+                cursor:(refreshing||loading)?"default":"pointer",opacity:(refreshing||loading)?0.6:1}}>
+              {refreshing ? "Scanning…" : "Scan now"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.redText,fontSize:12.5}}>{error}</div>
+      )}
+
+      {loading ? <Spinner/> : !surf ? (
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+          No data to report.
+        </div>
+      ) : !surf.monitored ? (
+        // Same honest-empty-state convention as DarkWebExposureCard: a clear
+        // reason, never a fabricated "all clear."
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+          <div style={{color:C.text,fontWeight:600,marginBottom:4}}>Not monitored yet</div>
+          {surf.reason || "Attack-surface discovery requires a verified company domain. Add and verify your domain above to enable it."}
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+              <span style={{fontSize:16,fontWeight:800,color:C.text}}>{(surf.subdomains||[]).length}</span>
+              <span style={{fontSize:11,color:C.textSec}}>subdomain{(surf.subdomains||[]).length===1?"":"s"} found</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+              <span style={{fontSize:16,fontWeight:800,color:C.text}}>{(surf.liveHosts||[]).length}</span>
+              <span style={{fontSize:11,color:C.textSec}}>live host{(surf.liveHosts||[]).length===1?"":"s"}</span>
+            </div>
+          </div>
+
+          {(surf.discoveredSoftware || []).length > 0 && (
+            <>
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                SOFTWARE DETECTED ON LIVE HOSTS
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                {surf.discoveredSoftware.map((sw,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                    border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>{safeText(sw)}</span>
+                ))}
+              </div>
+              <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 14px"}}>
+                Software detected here is automatically matched against the live NVD CVE database —
+                check the CVE Exposure card above for any resulting findings.
+              </p>
+            </>
+          )}
+
+          {(surf.liveHosts || []).length > 0 && (
+            <>
+              <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
+                LIVE HOSTS
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                {surf.liveHosts.map((h,i) => (
+                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                    border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5,fontFamily:"monospace"}}>
+                    {safeText(h.host)}{h.statusCode ? ` (${h.statusCode})` : ""}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+
+          {surf.domain && (
+            <div style={{fontSize:11,color:C.textMut,marginBottom:4}}>Domain: <span style={{fontFamily:"monospace"}}>{surf.domain}</span></div>
+          )}
+          {(surf.checkedAt || surf.refreshedAt) && (
+            <div style={{fontSize:11,color:C.textMut}}>
+              Checked {new Date(surf.checkedAt || surf.refreshedAt).toLocaleString()} · source: crt.sh (certificate transparency) + live HTTP probing
+            </div>
+          )}
+          {surf.note && (
+            <div style={{marginTop:8,fontSize:11.5,color:C.textSec,lineHeight:1.5,fontStyle:"italic"}}>{safeText(surf.note)}</div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  REMEDIATION — the closed loop.
 //  Gaps ranked by projected posture gain → create task → work it →
 //  complete it → the deterministic engine re-scores and the trend moves.
@@ -5461,6 +5613,7 @@ function ThreatIntelSection({ results, programId, onRegenerated }) {
         <DomainMonitoringCard onChange={onDomainsChanged}/>
         <EmailSecurityCard key={domainVersion}/>
         <DarkWebExposureCard key={domainVersion}/>
+        <AttackSurfaceCard key={domainVersion}/>
         <div style={{color:C.textSec,padding:"16px 4px",fontSize:13}}>
           The AI threat-landscape briefing appears once your security program has been generated. CVE exposure and breach monitoring above are live and don't require it.
         </div>
@@ -5484,6 +5637,7 @@ function ThreatIntelSection({ results, programId, onRegenerated }) {
       <DomainMonitoringCard onChange={onDomainsChanged}/>
       <EmailSecurityCard key={domainVersion}/>
       <DarkWebExposureCard key={domainVersion}/>
+      <AttackSurfaceCard key={domainVersion}/>
       <div style={{marginBottom:14}}>
         <Card>
           <div style={{display:"flex",alignItems:"center",gap:10}}>

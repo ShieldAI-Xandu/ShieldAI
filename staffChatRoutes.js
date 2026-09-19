@@ -128,21 +128,22 @@ export function registerStaffChatRoutes(app, { db, requireAuth }) {
   // no separate index needed at this scale) plus the full staff roster so
   // the UI can offer "start a new DM" with someone you haven't messaged yet.
   app.get("/api/staff/chat/dm-threads", requireStaff, (req, res) => {
+    // Single pass building channelId -> latest `at` (messages are appended
+    // in order, so the last one seen per channel is the latest) instead of
+    // re-filtering the whole message history once per thread found.
     const mine = new Set();
+    const lastAtByChannel = new Map();
     for (const m of db.data.staffChatMessages) {
       if (!m.channelId.startsWith("dm:")) continue;
+      lastAtByChannel.set(m.channelId, m.at);
       const [, a, b] = m.channelId.split(":");
       if (a === req.userId) mine.add(b);
       else if (b === req.userId) mine.add(a);
     }
-    const lastMessageAt = otherId => {
-      const channelId = dmChannelId(req.userId, otherId);
-      const msgs = db.data.staffChatMessages.filter(m => m.channelId === channelId);
-      return msgs.length ? msgs.map(m => m.at).sort().slice(-1)[0] : null;
-    };
     const threads = [...mine].map(id => {
       const u = findUser(id);
-      return u ? { userId: u.id, name: label(u), lastMessageAt: lastMessageAt(id) } : null;
+      if (!u) return null;
+      return { userId: u.id, name: label(u), lastMessageAt: lastAtByChannel.get(dmChannelId(req.userId, id)) || null };
     }).filter(Boolean).sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
 
     const roster = users()
