@@ -2499,7 +2499,7 @@ await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, callAI, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });
 registerStaffRoutes(app, { db, requireAuth, logClientAction, analystOwnsClient });
-registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate });
+registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate, callClaudeText, aiLimiter });
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 registerComplianceRoutes(app, { db, requireAuth, callClaudeText, analystOwnsClient, analystClientIds, gate, aiLimiter, logClientAction });
 registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate });

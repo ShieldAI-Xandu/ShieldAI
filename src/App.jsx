@@ -860,6 +860,15 @@ function setUpgradeHandler(fn) { _onUpgradeRequired = fn; }
 // no) rather than discovered via a failed API call.
 function showUpgradePrompt(info) { if (_onUpgradeRequired) _onUpgradeRequired(info); }
 
+// Same pattern, for opening Mastermind from anywhere — the root component's
+// real `openMastermind` (a useCallback closing over setMastermindContext/
+// setShowClientMastermind) can't be reached directly from a leaf component
+// like FindingDetailModal, so it registers itself here the same way the
+// upgrade-prompt handler does.
+let _onOpenMastermind = null;
+function setMastermindOpenHandler(fn) { _onOpenMastermind = fn; }
+function openMastermind(ctx) { if (_onOpenMastermind) _onOpenMastermind(ctx); }
+
 // Same pattern for an expired/invalid session (HTTP 401). Without this, a
 // token that dies mid-session (expiry, server restart with a new secret,
 // admin-forced logout) surfaces as whatever each individual screen does with
@@ -2253,6 +2262,177 @@ function ThreatIntelLockedCard({ title, blurb }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+//  FINDING DETAIL — shared across Threats (CVE/attack surface/dark web/
+//  email security), Vendor Risk, and Evidence.
+//
+//  Every surface normalizes whatever it already has into this one shape
+//  before handing it to <FindingDetailModal/>. This is a convention, not a
+//  new backend model — each card already computes something like this
+//  internally; the change is exposing it once instead of inlining separate
+//  detail JSX per card.
+//
+//  finding = {
+//    id,                 stable id, e.g. "cve:CVE-2024-1234"
+//    sourceType,         "cve"|"attack-surface"|"darkweb"|"email-security"|"vendor-review"
+//    title, severity,    "critical"|"high"|"medium"|"low"|"info"|null
+//    detailText,         the real description/explanation shown in the body
+//    items,              optional string[] — full list for count-type findings
+//                         (subdomains, live hosts, breach names)
+//    impactFetcher,      optional () => Promise<{impact, source}> — lazy AI
+//                         narrative, CVE only; the modal shows a loading
+//                         state and never blocks on it to render the rest
+//    canRemediate,       default true; false for Evidence gaps (see below)
+//    taskTitle, taskDetail, taskPriority, findingRef,  what Add to Remediation
+//                         sends to POST /api/tasks when canRemediate
+//    existingTaskId,     if already remediated/tracked — swaps the button
+//                         for a "already tracked" state instead of offering
+//                         to create a duplicate
+//    mastermindQuestion, the natural-language question seeded into Ask
+//                         Mastermind, carrying the real facts inline
+//  }
+// ─────────────────────────────────────────────────────────────
+const FINDING_SEV_TONE = { CRITICAL: C.redText, HIGH: C.redText, MEDIUM: C.amberText, LOW: C.greenText, INFO: C.textSec };
+function findingSevColor(s) { return FINDING_SEV_TONE[String(s || "INFO").toUpperCase()] || C.textSec; }
+
+function FindingDetailModal({ finding, onClose, onTaskCreated }) {
+  const [impact, setImpact] = useState(null);   // { impact, source } | null
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskError, setTaskError] = useState(null);
+  const [taskId, setTaskId] = useState(finding?.existingTaskId || null);
+
+  useEffect(() => {
+    setImpact(null); setTaskError(null); setTaskId(finding?.existingTaskId || null);
+    if (finding?.impactFetcher) {
+      setImpactLoading(true);
+      finding.impactFetcher()
+        .then(r => setImpact(r))
+        .catch(() => setImpact(null))
+        .finally(() => setImpactLoading(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finding?.id]);
+
+  if (!finding) return null;
+
+  async function addToRemediation() {
+    setTaskBusy(true); setTaskError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: finding.taskTitle || finding.title,
+          detail: finding.taskDetail || finding.recommendation || "",
+          priority: finding.taskPriority || "medium",
+          findingRef: finding.findingRef,
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not create a remediation task.");
+      setTaskId(data.id);
+      onTaskCreated?.(data);
+    } catch (e) { setTaskError(e.message); }
+    finally { setTaskBusy(false); }
+  }
+
+  function askMastermind() {
+    onClose();
+    openMastermind({
+      phase: "threats", section: finding.sourceType, entityType: finding.sourceType, entityId: finding.id,
+      seedMessage: finding.mastermindQuestion,
+    });
+  }
+
+  return (
+    <Modal open={!!finding} onClose={onClose} title={finding.title} wide>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14}}>
+        {finding.severity && <Badge label={String(finding.severity).toUpperCase()} color={findingSevColor(finding.severity)}/>}
+        {finding.badges}
+      </div>
+
+      {finding.detailText && (
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 16px",whiteSpace:"pre-wrap"}}>
+          {safeText(finding.detailText)}
+        </p>
+      )}
+
+      {finding.impactFetcher && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:16}}>
+          <div style={{fontSize:10,color:C.textMut,letterSpacing:1.2,fontWeight:700,marginBottom:6}}>
+            WHAT THIS COULD MEAN FOR YOUR BUSINESS
+          </div>
+          {impactLoading ? (
+            <div style={{color:C.textMut,fontSize:12.5}}>Generating…</div>
+          ) : impact ? (
+            <>
+              <p style={{color:C.text,fontSize:13,lineHeight:1.6,margin:0,whiteSpace:"pre-wrap"}}>{safeText(impact.impact)}</p>
+              {impact.source === "deterministic" && (
+                <div style={{fontSize:10.5,color:C.textMut,marginTop:8}}>Based on the CVSS/KEV facts above (AI narration unavailable).</div>
+              )}
+            </>
+          ) : (
+            <div style={{color:C.textMut,fontSize:12.5}}>Impact narrative unavailable.</div>
+          )}
+        </div>
+      )}
+
+      {finding.items && finding.items.length > 0 && (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:C.textMut,letterSpacing:1.2,fontWeight:700,marginBottom:8}}>
+            {finding.items.length} FOUND
+          </div>
+          <div style={{maxHeight:280,overflowY:"auto",display:"flex",flexDirection:"column",gap:5}}>
+            {finding.items.map((it, i) => (
+              <div key={i} style={{padding:"7px 11px",borderRadius:7,background:C.surface,
+                border:`1px solid ${C.border}`,color:C.textSec,fontSize:12.5,fontFamily:"monospace"}}>
+                {safeText(typeof it === "string" ? it : it.label)}
+                {typeof it === "object" && it.meta && <span style={{color:C.textMut,marginLeft:8,fontFamily:"inherit"}}>{safeText(it.meta)}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {finding.recommendation && (
+        <div style={{background:`${C.accent}0d`,border:`1px solid ${C.accent}33`,borderRadius:9,padding:"12px 14px",marginBottom:16}}>
+          <div style={{fontSize:10,color:C.accentText,letterSpacing:1.2,fontWeight:700,marginBottom:6}}>RECOMMENDATION</div>
+          <p style={{color:C.text,fontSize:13,lineHeight:1.6,margin:0,whiteSpace:"pre-wrap"}}>{safeText(finding.recommendation)}</p>
+        </div>
+      )}
+
+      {taskError && <div style={{color:C.redText,fontSize:12,marginBottom:12}}>{taskError}</div>}
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",marginTop:8}}>
+        {finding.canRemediate !== false ? (
+          taskId ? (
+            <span style={{padding:"9px 16px",fontSize:12.5,color:C.greenText,fontWeight:600}}>✓ Added to Remediation</span>
+          ) : (
+            <button onClick={addToRemediation} disabled={taskBusy}
+              style={{padding:"9px 18px",borderRadius:8,border:"none",cursor:taskBusy?"default":"pointer",
+                background:C.accent,color:"#04121F",fontSize:13,fontWeight:700,opacity:taskBusy?0.6:1}}>
+              {taskBusy ? "Adding…" : "Add to Remediation"}
+            </button>
+          )
+        ) : (
+          finding.canRemediateNote && (
+            <span style={{fontSize:11.5,color:C.textMut,alignSelf:"center",marginRight:"auto"}}>{finding.canRemediateNote}</span>
+          )
+        )}
+        {finding.mastermindQuestion && (
+          <button onClick={askMastermind}
+            style={{padding:"9px 18px",borderRadius:8,border:`1px solid ${C.purple}55`,cursor:"pointer",
+              background:`${C.purple}18`,color:C.purpleText,fontSize:13,fontWeight:700}}>
+            🧠 Ask Mastermind
+          </button>
+        )}
+        <Button variant="ghost" onClick={onClose}>Close</Button>
+      </div>
+    </Modal>
+  );
+}
+
 function CveExposureCard() {
   const { can } = useCapabilities();
   const hasAccess = can("threatIntel");
@@ -2260,6 +2440,36 @@ function CveExposureCard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null); // the CVE clicked for detail, or null
+
+  function openCveDetail(c) {
+    const kevLine = c.kev
+      ? ` It is on CISA's Known Exploited Vulnerabilities list${c.kev.knownRansomwareCampaignUse ? " and has known ransomware use" : ""}${c.kev.dueDate ? `, federal remediation due ${formatIsoDateUTC(c.kev.dueDate)}` : ""}.`
+      : "";
+    setDetail({
+      id: `cve:${c.id}`,
+      sourceType: "cve",
+      title: c.id,
+      severity: c.severity,
+      badges: <>
+        {c.kev && <Badge label="ACTIVELY EXPLOITED" color={C.redText}/>}
+        {c.score != null && <span style={{fontSize:11,color:C.textMut,fontWeight:600}}>CVSS {c.score}</span>}
+        {c.software && <span style={{fontSize:11,color:C.textSec}}>affects {safeText(c.software)}</span>}
+      </>,
+      detailText: (c.description || "No description available.") + kevLine,
+      // Lazy: the impact narrative is only generated when the modal actually
+      // opens, not for every CVE in the list — real cost control on an AI call.
+      impactFetcher: () => authFetch(`${API_BASE}/api/client/cve-exposure/${encodeURIComponent(c.id)}/impact`)
+        .then(r => r.json()),
+      recommendation: c.kev
+        ? `Patch immediately — this is confirmed under active exploitation. Update ${c.software || "the affected software"} to a version beyond this CVE, or take the affected system offline until patched.`
+        : `Update ${c.software || "the affected software"} to a version that resolves ${c.id}. Check the vendor's advisory for the specific patched release.`,
+      taskTitle: `Patch ${c.id}${c.software ? ` (${c.software})` : ""}`,
+      taskPriority: c.kev ? "critical" : (String(c.severity||"").toUpperCase() === "CRITICAL" ? "critical" : String(c.severity||"").toUpperCase() === "HIGH" ? "high" : "medium"),
+      findingRef: { sourceType: "cve", sourceId: c.id, facts: { description: c.description, severity: c.severity, score: c.score, kev: c.kev, software: c.software } },
+      mastermindQuestion: `What does ${c.id} mean for us and how should we fix it? ${c.description || ""}${c.score != null ? ` CVSS ${c.score}.` : ""}${c.kev ? " It's actively exploited (CISA KEV)." : ""}`,
+    });
+  }
 
   async function load() {
     setLoading(true); setError(null);
@@ -2382,10 +2592,12 @@ function CveExposureCard() {
                     HIGHEST-SEVERITY MATCHES
                   </div>
                   {(exposure.top || []).map((c,i) => (
-                    <div key={c.id+i} style={{marginBottom:8,padding:"10px 12px",
+                    <div key={c.id+i} onClick={()=>openCveDetail(c)}
+                      style={{marginBottom:8,padding:"10px 12px",cursor:"pointer",
                       background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                         <a href={c.url||`https://www.cve.org/CVERecord?id=${c.id}`} target="_blank" rel="noreferrer"
+                          onClick={e=>e.stopPropagation()}
                           style={{color:C.accentText,fontSize:12.5,fontWeight:700,textDecoration:"none"}}>{c.id}</a>
                         <Badge label={String(c.severity||"UNKNOWN")} color={cveSevColor(c.severity)}/>
                         {c.kev && <Badge label="ACTIVELY EXPLOITED" color={C.redText}/>}
@@ -2403,6 +2615,7 @@ function CveExposureCard() {
                           {c.kev.knownRansomwareCampaignUse ? " · known ransomware use" : ""}
                         </div>
                       )}
+                      <div style={{fontSize:10.5,color:C.textMut,marginTop:6}}>Click for impact &amp; remediation →</div>
                     </div>
                   ))}
                 </>
@@ -2417,6 +2630,7 @@ function CveExposureCard() {
           )}
         </>
       )}
+      <FindingDetailModal finding={detail} onClose={()=>setDetail(null)}/>
     </Card>
   );
 }
@@ -2441,6 +2655,7 @@ function DarkWebExposureCard({ clientId } = {}) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -2454,6 +2669,52 @@ function DarkWebExposureCard({ clientId } = {}) {
     finally { setLoading(false); }
   }
   useEffect(() => { if (hasAccess) load(); }, [clientId, hasAccess]);
+
+  // One recommendation covers the whole exposure — individual breached
+  // accounts aren't independently actionable beyond "reset the password,
+  // turn on MFA," so this is an aggregate finding, not one per account.
+  function openBreachDetail(exp) {
+    const domain = exp.domain || "your domain";
+    setDetail({
+      id: `darkweb:${domain}`,
+      sourceType: "darkweb",
+      title: `Breach exposure — ${domain}`,
+      severity: (exp.breachedAccounts ?? 0) > 0 ? "high" : "info",
+      detailText: `${exp.breachedAccounts ?? 0} account${exp.breachedAccounts===1?"":"s"} on ${domain} ` +
+        `${exp.breachedAccounts===1?"has":"have"} turned up across ${exp.distinctBreaches ?? 0} distinct data breach${exp.distinctBreaches===1?"":"es"}. ` +
+        `Email addresses in a breach usually mean the password used at the time is exposed too — anyone who ` +
+        `reused that password on this domain's accounts is at risk until it's changed.`,
+      items: (exp.sampleAccounts || []).length > 0
+        ? exp.sampleAccounts.map(a => ({ label: a, meta: `@${domain}` }))
+        : undefined,
+      recommendation: "Force a password reset for accounts on this domain, require MFA everywhere it isn't already " +
+        "enforced, and check for the same password reused on other business systems.",
+      canRemediate: (exp.breachedAccounts ?? 0) > 0,
+      canRemediateNote: (exp.breachedAccounts ?? 0) === 0 ? "No breached accounts to remediate right now." : null,
+      taskTitle: `Respond to breach exposure — ${domain}`,
+      taskPriority: (exp.breachedAccounts ?? 0) > 5 ? "high" : "medium",
+      findingRef: { sourceType: "darkweb", sourceId: domain, facts: { breachedAccounts: exp.breachedAccounts, distinctBreaches: exp.distinctBreaches, breaches: exp.breaches } },
+      mastermindQuestion: `We have ${exp.breachedAccounts ?? 0} breached account(s) on ${domain} across ${exp.distinctBreaches ?? 0} breaches` +
+        `${(exp.breaches||[]).length ? ` (${exp.breaches.join(", ")})` : ""}. What should we do about it?`,
+    });
+  }
+
+  function openBreachNameDetail(name, exp) {
+    setDetail({
+      id: `darkweb-breach:${name}`,
+      sourceType: "darkweb",
+      title: name,
+      severity: "medium",
+      detailText: `Your domain (${exp.domain || "unknown"}) has at least one account exposed in the "${name}" breach. ` +
+        `Have I Been Pwned confirms membership in this breach but does not disclose which specific accounts or what ` +
+        `data was exposed beyond what's summarized above.`,
+      recommendation: "Force a password reset for accounts on this domain and enable MFA if it isn't already required.",
+      taskTitle: `Respond to "${name}" breach exposure`,
+      taskPriority: "medium",
+      findingRef: { sourceType: "darkweb", sourceId: `${exp.domain || "domain"}:${name}`, facts: { breachName: name, domain: exp.domain } },
+      mastermindQuestion: `What is the "${name}" data breach, and what should we do since our domain has accounts in it?`,
+    });
+  }
 
   if (!hasAccess) {
     return <ThreatIntelLockedCard title="Breach & Dark-Web Exposure"
@@ -2532,12 +2793,14 @@ function DarkWebExposureCard({ clientId } = {}) {
               background:`${statusColor}12`,border:`1px solid ${statusColor}33`,borderRadius:9}}>
               <span style={{fontSize:13,fontWeight:700,color:statusColor}}>{exp.statusLevel}</span>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+            <div onClick={()=>openBreachDetail(exp)} title="Click for detail & remediation"
+              style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",cursor:"pointer",
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
               <span style={{fontSize:16,fontWeight:800,color:C.text}}>{exp.breachedAccounts ?? 0}</span>
               <span style={{fontSize:11,color:C.textSec}}>breached account{exp.breachedAccounts===1?"":"s"}</span>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+            <div onClick={()=>openBreachDetail(exp)} title="Click for detail & remediation"
+              style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",cursor:"pointer",
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
               <span style={{fontSize:16,fontWeight:800,color:C.text}}>{exp.distinctBreaches ?? 0}</span>
               <span style={{fontSize:11,color:C.textSec}}>distinct breach{exp.distinctBreaches===1?"":"es"}</span>
@@ -2559,7 +2822,8 @@ function DarkWebExposureCard({ clientId } = {}) {
               </div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
                 {exp.breaches.map((b,i) => (
-                  <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
+                  <span key={i} onClick={()=>openBreachNameDetail(b, exp)} title="Click for detail & remediation"
+                    style={{padding:"3px 10px",borderRadius:6,background:C.surface,cursor:"pointer",
                     border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5}}>{b}</span>
                 ))}
               </div>
@@ -2579,6 +2843,7 @@ function DarkWebExposureCard({ clientId } = {}) {
           )}
         </>
       )}
+      <FindingDetailModal finding={detail} onClose={()=>setDetail(null)}/>
     </Card>
   );
 }
@@ -2599,6 +2864,7 @@ function AttackSurfaceCard({ clientId } = {}) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   async function load() {
     setLoading(true); setError(null);
@@ -2612,6 +2878,52 @@ function AttackSurfaceCard({ clientId } = {}) {
     finally { setLoading(false); }
   }
   useEffect(() => { if (hasAccess) load(); }, [clientId, hasAccess]);
+
+  // Raw subdomain/live-host lists aren't individually actionable — the
+  // remediation is the same review-and-reduce work regardless of which one
+  // you're looking at — so these open a list view plus ONE aggregate
+  // Add to Remediation for the exposure as a whole, rather than a button
+  // per subdomain.
+  function openSubdomainList(surf) {
+    setDetail({
+      id: `attack-surface-subdomains:${surf.domain}`,
+      sourceType: "attack-surface",
+      title: `Subdomains found — ${surf.domain}`,
+      severity: "info",
+      detailText: `Discovered via certificate-transparency logs (crt.sh) for ${surf.domain}. Each of these is a real, ` +
+        `publicly resolvable subdomain — anything here that isn't actively maintained is worth decommissioning, ` +
+        `since an attacker enumerates the same public records.`,
+      items: surf.subdomains || [],
+      recommendation: "Review each subdomain: decommission anything no longer in use, and confirm the rest are " +
+        "intentionally public and kept up to date.",
+      taskTitle: `Review exposed subdomains — ${surf.domain}`,
+      taskPriority: "medium",
+      findingRef: { sourceType: "attack-surface", sourceId: `${surf.domain}:subdomains`, facts: { domain: surf.domain, count: (surf.subdomains||[]).length } },
+      mastermindQuestion: `We found ${(surf.subdomains||[]).length} subdomains for ${surf.domain}: ${(surf.subdomains||[]).slice(0,20).join(", ")}${(surf.subdomains||[]).length>20?", …":""}. What should we do about our attack surface?`,
+    });
+  }
+
+  function openLiveHostList(surf) {
+    setDetail({
+      id: `attack-surface-livehosts:${surf.domain}`,
+      sourceType: "attack-surface",
+      title: `Live hosts — ${surf.domain}`,
+      severity: "info",
+      detailText: `These subdomains responded to a live HTTP probe — each one is a real, currently-running service ` +
+        `reachable from the internet, not just a DNS record.`,
+      items: (surf.liveHosts || []).map(h => ({
+        label: h.host,
+        meta: [h.statusCode ? `HTTP ${h.statusCode}` : null, h.server, h.poweredBy].filter(Boolean).join(" · "),
+      })),
+      recommendation: "Confirm every live host is meant to be internet-facing, keep its software patched (see CVE " +
+        "Exposure for anything matched from what's detected here), and restrict access to anything that doesn't " +
+        "need to be public.",
+      taskTitle: `Review live internet-facing hosts — ${surf.domain}`,
+      taskPriority: "medium",
+      findingRef: { sourceType: "attack-surface", sourceId: `${surf.domain}:livehosts`, facts: { domain: surf.domain, count: (surf.liveHosts||[]).length } },
+      mastermindQuestion: `We have ${(surf.liveHosts||[]).length} live internet-facing hosts for ${surf.domain}. What should we check on them?`,
+    });
+  }
 
   if (!hasAccess) {
     return <ThreatIntelLockedCard title="Attack Surface"
@@ -2672,12 +2984,14 @@ function AttackSurfaceCard({ clientId } = {}) {
       ) : (
         <>
           <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:14}}>
-            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+            <div onClick={()=>openSubdomainList(surf)} title="Click to see the full list"
+              style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",cursor:"pointer",
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
               <span style={{fontSize:16,fontWeight:800,color:C.text}}>{(surf.subdomains||[]).length}</span>
               <span style={{fontSize:11,color:C.textSec}}>subdomain{(surf.subdomains||[]).length===1?"":"s"} found</span>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",
+            <div onClick={()=>openLiveHostList(surf)} title="Click to see the full list"
+              style={{display:"flex",alignItems:"center",gap:7,padding:"8px 14px",cursor:"pointer",
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
               <span style={{fontSize:16,fontWeight:800,color:C.text}}>{(surf.liveHosts||[]).length}</span>
               <span style={{fontSize:11,color:C.textSec}}>live host{(surf.liveHosts||[]).length===1?"":"s"}</span>
@@ -2707,7 +3021,8 @@ function AttackSurfaceCard({ clientId } = {}) {
               <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,marginBottom:8}}>
                 LIVE HOSTS
               </div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+              <div onClick={()=>openLiveHostList(surf)} title="Click to see full detail per host"
+                style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,cursor:"pointer"}}>
                 {surf.liveHosts.map((h,i) => (
                   <span key={i} style={{padding:"3px 10px",borderRadius:6,background:C.surface,
                     border:`1px solid ${C.border}`,color:C.textSec,fontSize:11.5,fontFamily:"monospace"}}>
@@ -2731,6 +3046,7 @@ function AttackSurfaceCard({ clientId } = {}) {
           )}
         </>
       )}
+      <FindingDetailModal finding={detail} onClose={()=>setDetail(null)}/>
     </Card>
   );
 }
@@ -2750,6 +3066,13 @@ const TASK_STATUS_TONE = {
 };
 const TASK_PRIO_TONE = {
   critical: C.red, high: "#FF8C00", medium: C.amber, low: C.textSec,
+};
+// Mirrors taskRoutes.js FINDING_SOURCE_TYPES — human labels for a
+// finding-based task's origin, shown where a checklist task would show its
+// NIST function.
+const FINDING_SOURCE_LABEL = {
+  cve: "CVE", "attack-surface": "Attack Surface", darkweb: "Dark Web",
+  "email-security": "Email Security", "vendor-review": "Vendor Risk",
 };
 
 // Small dependency-free SVG line chart for posture over time.
@@ -2893,10 +3216,17 @@ function RemediationSection() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not complete task.");
-      const p = d.posture || {};
-      const delta = p.delta ?? 0;
-      flash(`Completed · posture ${p.before} → ${p.after} (${delta >= 0 ? "+" : ""}${delta})`,
-        delta >= 0 ? C.greenText : C.amberText);
+      // A finding-based task (CVE/attack-surface/dark-web/vendor) never moves
+      // the posture score — posture comes back null rather than a real delta,
+      // and the flash message says so instead of fabricating a "+0" claim.
+      if (d.posture == null) {
+        flash("Marked complete", C.greenText);
+      } else {
+        const p = d.posture;
+        const delta = p.delta ?? 0;
+        flash(`Completed · posture ${p.before} → ${p.after} (${delta >= 0 ? "+" : ""}${delta})`,
+          delta >= 0 ? C.greenText : C.amberText);
+      }
       await loadAll();
     } catch (e) { setError(e.message); }
     finally { setBusyId(null); }
@@ -3063,7 +3393,10 @@ function RemediationSection() {
                         padding:"2px 9px",borderRadius:20,background:`${tone.color}18`}}>{tone.label}</span>
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.textMut,marginBottom:10,flexWrap:"wrap"}}>
-                      <span>{safeText(t.nistFunction)}</span>
+                      {/* A finding-based task (CVE/attack-surface/dark-web/vendor)
+                          has no checklist control and therefore no NIST function —
+                          label it by its source instead of leaving this blank. */}
+                      <span>{t.findingRef ? FINDING_SOURCE_LABEL[t.findingRef.sourceType] || "Finding" : safeText(t.nistFunction)}</span>
                       {t.dueDate && (
                         <span style={{color:overdue?C.redText:C.textMut}}>
                           {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
@@ -3321,6 +3654,29 @@ function EvidenceSection() {
   const [attachMode, setAttachMode] = useState("note"); // "note" | "existing"
   const [existingEvidenceId, setExistingEvidenceId] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null); // evidence item or null
+  const [findingDetail, setFindingDetail] = useState(null);
+
+  // Ask Mastermind ONLY — canRemediate: false. The underlying work is
+  // already done (the task is already completed); there's nothing new to
+  // remediate here, only documentation to gather. An "Add to Remediation"
+  // button would create a pointless duplicate task for work that's finished.
+  function openMissingProofDetail(m) {
+    setFindingDetail({
+      id: `evidence-gap:${m.id}`,
+      // Not a FINDING_SOURCE_TYPES value — this finding never creates a task
+      // (canRemediate: false below), so it's only ever used as Mastermind's
+      // entityType label, which has no fixed vocabulary.
+      sourceType: "evidence-gap",
+      title: m.title,
+      severity: "info",
+      detailText: `"${m.title}" was marked complete${m.completedAt ? ` on ${new Date(m.completedAt).toLocaleDateString()}` : ""}, ` +
+        `but there's no evidence on file proving it. If an auditor asked to see proof this was actually done, there's ` +
+        `currently nothing to show them.`,
+      canRemediate: false,
+      canRemediateNote: "The work is already done — attach proof above, or ask Mastermind what would count as acceptable evidence.",
+      mastermindQuestion: `The task "${m.title}" is marked complete but has no evidence attached. What would count as acceptable proof for this, and how should I document it?`,
+    });
+  }
 
   async function loadAll() {
     setLoading(true); setError(null);
@@ -3485,7 +3841,8 @@ function EvidenceSection() {
               {coverage.missing.map(m => (
                 <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",
                   background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
-                  <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{safeText(m.title)}</span>
+                  <span onClick={()=>openMissingProofDetail(m)} title="Click for detail"
+                    style={{color:C.textSec,fontSize:12.5,flex:1,cursor:"pointer"}}>{safeText(m.title)}</span>
                   {m.completedAt && <span style={{fontSize:11,color:C.textMut}}>{new Date(m.completedAt).toLocaleDateString()}</span>}
                   <button onClick={()=>openAttach(m.id, m.title)} disabled={busy}
                     style={miniBtn(C.accent,busy)}>Attach proof</button>
@@ -3626,6 +3983,8 @@ function EvidenceSection() {
         confirmDisabled={busy}
         danger
       />
+
+      <FindingDetailModal finding={findingDetail} onClose={()=>setFindingDetail(null)}/>
     </div>
   );
 }
@@ -3647,6 +4006,14 @@ const VENDOR_REVIEW_TONE = {
   current:  { color: C.greenText,  label: "Current" },
   not_set:  { color: C.textMut,label: "Not scheduled" },
 };
+
+// Module-level (not closing over any component's setState) so the
+// react-hooks/purity rule doesn't treat this impure Date.now() read as
+// happening during render — it's only ever called from a click handler.
+function daysOverdue(dueDateIso) {
+  if (!dueDateIso) return null;
+  return Math.round((Date.now() - new Date(dueDateIso).getTime()) / 86400000);
+}
 
 function emptyVendorForm() {
   return {
@@ -3960,6 +4327,36 @@ function VendorRiskSection() {
   const [reassessTarget, setReassessTarget] = useState(null); // vendor being reassessed, or null
   const [reassessNote, setReassessNote] = useState("");
   const [removeTarget, setRemoveTarget] = useState(null); // vendor pending removal, or null
+  const [findingDetail, setFindingDetail] = useState(null);
+
+  // An overdue/due-soon review is the "finding" here — clicking it explains
+  // why it matters (criticality + how much data this vendor can reach) and
+  // offers to turn it into a tracked task, same as a Threats finding.
+  function openVendorReviewDetail(v) {
+    const tone = VENDOR_REVIEW_TONE[v.reviewStatus] || VENDOR_REVIEW_TONE.not_set;
+    const overdueDays = daysOverdue(v.nextReassessmentDue);
+    setFindingDetail({
+      id: `vendor-review:${v.id}`,
+      sourceType: "vendor-review",
+      title: v.name,
+      severity: v.reviewStatus === "overdue" && v.criticality === "critical" ? "critical"
+        : v.reviewStatus === "overdue" ? "high" : v.reviewStatus === "due_soon" ? "medium" : "info",
+      detailText: `${v.name} (${v.category}) is rated ${v.criticality} criticality with ${v.dataAccessLevel} data access. ` +
+        `Its risk reassessment is ${tone.label.toLowerCase()}` +
+        (overdueDays != null && overdueDays > 0 ? ` — ${overdueDays} day${overdueDays===1?"":"s"} past due.` : ".") +
+        ` A vendor with higher criticality or broader data access carries more risk from a stale review, since ` +
+        `you have less current assurance about how they're protecting what they can reach.`,
+      recommendation: `Reassess ${v.name} — confirm their security posture, certifications, and any incidents since ` +
+        `the last review, then log the outcome with "Reassess" on this vendor.`,
+      canRemediate: v.reviewStatus === "overdue" || v.reviewStatus === "due_soon",
+      canRemediateNote: (v.reviewStatus === "overdue" || v.reviewStatus === "due_soon") ? null : "This vendor's review is current — nothing to remediate.",
+      taskTitle: `Reassess vendor: ${v.name}`,
+      taskPriority: v.reviewStatus === "overdue" && v.criticality === "critical" ? "critical"
+        : v.reviewStatus === "overdue" ? "high" : "medium",
+      findingRef: { sourceType: "vendor-review", sourceId: v.id, facts: { name: v.name, criticality: v.criticality, dataAccessLevel: v.dataAccessLevel, reviewStatus: v.reviewStatus } },
+      mastermindQuestion: `Our vendor "${v.name}" (${v.criticality} criticality, ${v.dataAccessLevel} data access) has a ${tone.label.toLowerCase()} security review. How urgent is this and what should we ask them?`,
+    });
+  }
 
   async function load() {
     setLoading(true); setError(null);
@@ -4124,7 +4521,10 @@ function VendorRiskSection() {
                           </td>
                           <td style={{padding:"9px 10px",color:C.textSec}}>{v.dataAccessLevel}</td>
                           <td style={{padding:"9px 10px"}}>
-                            <span style={{color:tone.color,fontWeight:600}}>{tone.label}</span>
+                            <span onClick={()=>openVendorReviewDetail(v)} title="Click for detail & remediation"
+                              style={{color:tone.color,fontWeight:600,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>
+                              {tone.label}
+                            </span>
                           </td>
                           <td style={{padding:"9px 10px",color:C.textSec}}>
                             {v.nextReassessmentDue ? new Date(v.nextReassessmentDue).toLocaleDateString() : "—"}
@@ -4184,6 +4584,8 @@ function VendorRiskSection() {
         confirmDisabled={busy}
         danger
       />
+
+      <FindingDetailModal finding={findingDetail} onClose={()=>setFindingDetail(null)}/>
     </div>
   );
 }
@@ -5492,6 +5894,30 @@ function EmailSecurityCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [noDomain, setNoDomain] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  // Already has real per-check remediation text (emailSecurityService.js) —
+  // no new recommendation-generation needed here, unlike CVE/attack-surface/
+  // dark-web. Every check gets Add to Remediation regardless of status: a
+  // "good" DMARC=p=quarantine check still has a real "move to p=reject"
+  // recommendation worth tracking even though nothing is technically broken.
+  function openCheckDetail(label, c, domain) {
+    setDetail({
+      id: `email-security:${domain}:${label}`,
+      sourceType: "email-security",
+      title: `${label} — ${domain}`,
+      severity: c.status === "missing" ? "high" : c.status === "warning" ? "medium" : c.status === "unknown" ? "info" : "info",
+      detailText: [c.summary, c.detail].filter(Boolean).join("\n\n"),
+      items: c.found ? [{ label: String(c.found).slice(0, 300) }] : undefined,
+      recommendation: c.remediation || (c.status === "good" ? "No action needed — this check is already configured well." : null),
+      canRemediate: !!c.remediation,
+      canRemediateNote: !c.remediation ? "Nothing to remediate here." : null,
+      taskTitle: `Fix ${label} — ${domain}`,
+      taskPriority: c.status === "missing" ? "high" : "medium",
+      findingRef: { sourceType: "email-security", sourceId: `${domain}:${label}`, facts: { check: label, status: c.status, summary: c.summary } },
+      mastermindQuestion: `Our ${label} check for ${domain} says: "${c.summary}"${c.detail ? ` (${c.detail})` : ""}. What does this mean and what should we do?`,
+    });
+  }
 
   async function load(rescan = false) {
     if (rescan) setBusy(true); else setLoading(true);
@@ -5548,7 +5974,8 @@ function EmailSecurityCard() {
 
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))",gap:10,marginBottom:14}}>
             {checks.map(({ key, label, c }) => (
-              <div key={key} style={{padding:"12px 14px",background:C.surface,
+              <div key={key} onClick={()=>openCheckDetail(label, c, scan.domain)} title="Click for detail & remediation"
+                style={{padding:"12px 14px",background:C.surface,cursor:"pointer",
                 border:`1px solid ${STATUS_TONE[c.status]}33`,borderRadius:8}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                   <span style={{color:STATUS_TONE[c.status],fontSize:12,fontWeight:800}}>{STATUS_ICON[c.status]}</span>
@@ -5581,6 +6008,7 @@ function EmailSecurityCard() {
           </div>
         </>
       )}
+      <FindingDetailModal finding={detail} onClose={()=>setDetail(null)}/>
     </Card>
   );
 }
@@ -23398,6 +23826,14 @@ const PROPOSED_EDIT_HANDLERS = {
   evidenceLink: {
     create: { method: "POST", url: id => `/api/evidence/${encodeURIComponent(id)}/link` },
   },
+  // Same route the "Add to Remediation" buttons on Threats/Vendor Risk use
+  // (taskRoutes.js) — Mastermind proposing this and a client clicking Add to
+  // Remediation both end up at the identical POST /api/tasks call. No
+  // entityId (create-only, like calendarEntry), no staff variant (this
+  // proposal only ever comes from the client-facing chat).
+  findingTask: {
+    create: { method: "POST", url: () => `/api/tasks` },
+  },
 };
 
 function extractProposedEdit(content) {
@@ -23414,6 +23850,7 @@ const PROPOSAL_ENTITY_LABEL = {
   learner: "team member", trainingAssignment: "training assignment", policyDoc: "policy",
   trainingCurriculum: "training curriculum", calendarEntry: "calendar reminder",
   policyAssignment: "policy assignment", evidenceLink: "evidence link",
+  findingTask: "remediation task",
 };
 // Fallback for a proposal that arrives (or was cached from before this
 // existed) without a model-supplied `summary`.
@@ -23433,7 +23870,7 @@ function ProposedEditCard({ proposal, scope = "client", onApplied }) {
   const handler = proposal ? PROPOSED_EDIT_HANDLERS[proposal.entityType]?.[op] : null;
   // Every operation needs a real entityId except creating a brand-new custom
   // calendar reminder, which has nothing to reference yet.
-  const needsId = !(op === "create" && proposal?.entityType === "calendarEntry");
+  const needsId = !(op === "create" && (proposal?.entityType === "calendarEntry" || proposal?.entityType === "findingTask"));
   // Every operation but delete acts on `fields` — a malformed or truncated
   // model response with an empty/missing fields object would otherwise still
   // render an Apply button that sends an effectively no-op write and reports
@@ -23496,8 +23933,8 @@ function ClientMastermind({ onClose, pageContext }) {
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState(null);
 
-  async function send() {
-    const text = input.trim();
+  async function send(overrideText) {
+    const text = (overrideText ?? input).trim();
     if (!text || thinking) return;
     const next = [...msgs, { role:"user", content:text }];
     setMsgs(next); setInput(""); setThinking(true); setError(null);
@@ -23514,6 +23951,22 @@ function ClientMastermind({ onClose, pageContext }) {
       setMsgs(m => [...m, { role:"assistant", content: "(I couldn't respond — "+e.message+")" }]);
     } finally { setThinking(false); }
   }
+
+  // "Ask Mastermind about this finding" opens the chat already carrying the
+  // finding's real facts (CVE description/CVSS/KEV, vendor criticality, etc.)
+  // as the first user turn — pageContext.seedMessage — so the client never
+  // has to type out the CVE id themselves and Mastermind answers with the
+  // real facts in front of it from the very first reply. Sent once per open;
+  // clicking Ask Mastermind is itself the explicit human action that
+  // authorizes this one chat message (no side effect beyond an AI reply).
+  const seedSentRef = useRef(false);
+  useEffect(() => {
+    if (pageContext?.seedMessage && !seedSentRef.current) {
+      seedSentRef.current = true;
+      send(pageContext.seedMessage);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageContext?.seedMessage]);
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"Inter,system-ui,sans-serif",color:C.text}}>
@@ -23860,6 +24313,15 @@ export default function ShieldAI() {
     setUpgradeHandler((data) => setUpgradePrompt(data || { error: "Upgrade required." }));
     return () => setUpgradeHandler(null);
   }, []);
+
+  // Same registration for the Mastermind-open handler, so a leaf component
+  // like FindingDetailModal (declared outside this component, with no access
+  // to its closures) can trigger the real openMastermind below via the
+  // module-level function of the same name.
+  useEffect(() => {
+    setMastermindOpenHandler(openMastermind);
+    return () => setMastermindOpenHandler(null);
+  }, [openMastermind]);
 
   // Expired/invalid session (fired by authFetch on any HTTP 401 that carried a
   // token). Gated on restoringSession so it never fires for the silent

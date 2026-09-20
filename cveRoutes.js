@@ -9,7 +9,9 @@ import {
   exposureForSoftware,
   clientSoftwareDescriptors,
   refreshClientExposure,
+  cachedExposure,
 } from "./cveService.js";
+import { cveImpact } from "./findingImpact.js";
 import {
   clientDomain,
   clientExposure,
@@ -22,7 +24,7 @@ import {
 } from "./attackSurfaceService.js";
 import { THREAT_INTEL_SOURCES } from "./threatIntelSources.js";
 
-export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate }) {
+export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient, gate, callClaudeText, aiLimiter }) {
   // Real CVE/dark-web exposure viewing is the `threatIntel` capability
   // (Growth+) — matches the Dashboard's Threat Intel tab and FEATURE_CATALOG.
   // Domain registration/verification and the plain SPF/DKIM/DMARC email-
@@ -105,6 +107,37 @@ export function registerCveRoutes(app, { db, requireAuth, requireAdmin, analystO
     }
     const exposure = await exposureForSoftware(software);
     res.json({ userId: targetId, software, exposure });
+  });
+
+  // Plain-language "what this could mean for your business" narrative for one
+  // CVE, on top of the real NVD description/CVSS/KEV facts already shown
+  // inline. Grounded and cached — see findingImpact.js's own header for why.
+  //
+  // The CVE is looked up in the CLIENT'S OWN cached exposure (cachedExposure's
+  // `top` list) rather than accepted as facts in the request body — the
+  // client can only request a narrative for a CVE their own scan actually
+  // found, not fabricate arbitrary "facts" to get free-text generation out of
+  // the AI budget.
+  app.get("/api/client/cve-exposure/:cveId/impact", requireAuth, threatIntelGate, aiLimiter, async (req, res) => {
+    let targetId = req.userId;
+    const isStaff = req.isAdmin || req.isAnalyst;
+    if (req.query.userId && req.query.userId !== req.userId) {
+      if (!isStaff) return res.status(403).json({ error: "Not permitted." });
+      if (req.isAnalyst && analystOwnsClient && !analystOwnsClient(db, req.userId, req.query.userId)) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+      targetId = req.query.userId;
+    }
+
+    const exposure = cachedExposure(db, targetId);
+    const cve = (exposure?.top || []).find(c => c.id === req.params.cveId);
+    if (!cve) {
+      return res.status(404).json({ error: "That CVE isn't in this client's current exposure results. Refresh CVE exposure and try again." });
+    }
+
+    const result = await cveImpact(db, cve, { callClaudeText });
+    await db.write();
+    res.json(result);
   });
 
   // Recompute and cache a client's CVE exposure (so Mastermind sees it fresh).

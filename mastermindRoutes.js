@@ -1356,10 +1356,11 @@ Limit findings to 6 and recommendations to 5.`;
       }
     }
 
-    // ── Threat intelligence: CVE + dark-web (Growth+) ───────────
+    // ── Threat intelligence: CVE + dark-web + attack surface (Growth+) ──
     if (has("threatIntel")) {
       const exp = cachedExposure(db, userId);
       const dw = cachedDarkweb(db, userId);
+      const surf = cachedAttackSurface(db, userId);
       snap.cveExposure = exp
         ? { counts: exp.counts, top: exp.top, software: exp.software, refreshedAt: exp.refreshedAt, degraded: exp.degraded }
         : { counts: {}, note: "No CVE exposure computed yet." };
@@ -1368,6 +1369,17 @@ Limit findings to 6 and recommendations to 5.`;
             breachedAccounts: dw.breachedAccounts ?? null, distinctBreaches: dw.distinctBreaches ?? null,
             breaches: dw.breaches || [], reason: dw.reason || null, refreshedAt: dw.refreshedAt }
         : { statusLevel: "Not checked", note: "No breach exposure computed yet." };
+      // Real subdomain/live-host arrays, not just counts — without this a
+      // client asking "what subdomains did you find?" got nothing, because
+      // even the separate admin/analyst snapshot (see the platform-wide
+      // snapshot function above) only ever carried counts + discoveredSoftware.
+      snap.attackSurfaceExposure = surf
+        ? { monitored: !!surf.monitored, domain: surf.domain,
+            subdomains: surf.subdomains || [], liveHosts: surf.liveHosts || [],
+            discoveredSoftware: surf.discoveredSoftware || [],
+            ...(surf.reason ? { reason: surf.reason } : {}),
+            refreshedAt: surf.refreshedAt }
+        : { monitored: false, note: "No attack-surface scan run yet." };
     }
 
     // ── Compliance / framework control status (any tier with a program) ──
@@ -1596,6 +1608,7 @@ Entity types, what each operation means, and where their real ids live in the da
 - "calendarEntry" — create, edit, or delete a CUSTOM calendar reminder (insurance renewal, license, audit date — not a system-surfaced due date, which is edited through its own entity type above). create: no entityId; fields = {title, category ("insurance"|"license"|"audit"|"contract"|"regulatory"|"other"), dueDate (ISO), recurrenceMonths?, notes?}. edit/delete: entityId = a calendar.customReminders id (looks like "custom:<uuid>"); edit fields = {dueDate} only.
 - "policyAssignment" — create only. entityId = a policies.list id (the policy to assign). fields = {learnerIds: [ids from roster.list or trainingDelivery.learnerList], dueDate?}.
 - "evidenceLink" — create only. entityId = an evidence.list id (the existing evidence item to reuse). fields = {kind: "task", refId: "<a task id from tasks.topOpen>"}.
+- "findingTask" — create only, no entityId. Turns a specific CVE, attack-surface issue, dark-web breach, email-security check, or overdue vendor review from the data below into a tracked remediation task. fields = {title, detail (the recommended fix — be concrete), priority ("critical"|"high"|"medium"|"low"), findingRef: {sourceType: "cve"|"attack-surface"|"darkweb"|"email-security"|"vendor-review", sourceId: "<the real CVE id / vendor id / etc. from the data below>"}}. This never touches the posture score — say so if the client asks whether fixing it will move their score.
 
 Never fabricate an id for any of these — if the data below doesn't contain a real id for what you want to propose, describe the action in prose instead and tell the client where to do it themselves.
 

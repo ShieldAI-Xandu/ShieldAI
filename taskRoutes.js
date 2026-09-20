@@ -17,6 +17,22 @@
 // BONUS: because scoring is deterministic, we can *simulate* a task's effect
 // before doing the work (projectedScore) — rank gaps by score improvement.
 //
+// FINDING-BASED TASKS (no controlId) — the one deliberate exception
+// -------------------------------------------------------------------
+// A CVE, an exposed subdomain, a breached account, or an overdue vendor
+// review doesn't correspond to any checklist control. There's no honest
+// answer to "which checklist question does patching CVE-2024-1234 satisfy?" —
+// forcing a mapping would let one scan result silently move a checklist
+// answer nobody actually re-verified.
+//
+// So a task may instead carry `findingRef: {sourceType, sourceId, facts}` in
+// place of `controlId`. These tasks are real — assignable, trackable,
+// completable, deletable — they just never touch the posture score.
+// `simulateControlChange()` is never called for them (`projectedGain`/
+// `scoreAtCreate` stay null structurally, not by a flag someone could forget
+// to set), and completing one skips the checklist write and re-score in
+// POST /api/tasks/:id/complete entirely. See that route for the branch.
+//
 // Mount from server.js:
 //   import { registerTaskRoutes } from "./taskRoutes.js";
 //   registerTaskRoutes(app, { db, requireAuth, requireAdmin, logClientAction,
@@ -31,6 +47,13 @@ const nowIso = () => new Date().toISOString();
 
 export const TASK_STATUSES = ["open", "in_progress", "blocked", "done", "cancelled"];
 export const TASK_PRIORITIES = ["critical", "high", "medium", "low"];
+
+// What kind of scan/surface a finding-based task came from. Purely
+// descriptive — used for icons/labels on the frontend and to distinguish
+// finding tasks from each other; never drives scoring.
+export const FINDING_SOURCE_TYPES = [
+  "cve", "attack-surface", "darkweb", "email-security", "vendor-review",
+];
 
 // ── Control helpers ───────────────────────────────────────────
 export function getControl(controlId) {
@@ -314,20 +337,47 @@ export function registerTaskRoutes(app, {
   app.post("/api/tasks", requireAuth, tasksGate, async (req, res) => {
     const actor = userById(req.userId);
     const {
-      ownerUserId, controlId, targetLabel, title, detail,
+      ownerUserId, controlId, targetLabel, findingRef, title, detail,
       priority = "medium", dueDate, assigneeUserId, effort,
     } = req.body || {};
 
     const owner = ownerUserId || req.userId;
     if (!canAccess(actor, owner)) return res.status(403).json({ error: "Not permitted." });
 
-    const control = getControl(controlId);
-    if (!control) return res.status(400).json({ error: "Unknown controlId." });
-
-    const target = targetLabel || bestOption(control)?.label;
-    if (scoreOfLabel(control, target) === null) {
-      return res.status(400).json({ error: "targetLabel is not a valid option for this control." });
+    if (controlId && findingRef) {
+      return res.status(400).json({ error: "Provide controlId or findingRef, not both — a task is scored against a checklist control or tracked as a finding, never both." });
     }
+
+    let control = null, target = null, cleanFindingRef = null;
+
+    if (findingRef) {
+      if (!FINDING_SOURCE_TYPES.includes(findingRef.sourceType)) {
+        return res.status(400).json({ error: `findingRef.sourceType must be one of: ${FINDING_SOURCE_TYPES.join(", ")}` });
+      }
+      if (!findingRef.sourceId || typeof findingRef.sourceId !== "string") {
+        return res.status(400).json({ error: "findingRef.sourceId is required." });
+      }
+      cleanFindingRef = {
+        sourceType: findingRef.sourceType,
+        sourceId: String(findingRef.sourceId).slice(0, 200),
+        // Facts are a snapshot for display/context only (e.g. the CVE's
+        // description/CVSS at the moment the task was created) — never
+        // re-interpreted into a score.
+        facts: findingRef.facts && typeof findingRef.facts === "object" ? findingRef.facts : {},
+      };
+      if (!title) {
+        return res.status(400).json({ error: "title is required for a finding-based task." });
+      }
+    } else {
+      control = getControl(controlId);
+      if (!control) return res.status(400).json({ error: "Unknown controlId." });
+
+      target = targetLabel || bestOption(control)?.label;
+      if (scoreOfLabel(control, target) === null) {
+        return res.status(400).json({ error: "targetLabel is not a valid option for this control." });
+      }
+    }
+
     if (!TASK_PRIORITIES.includes(priority)) {
       return res.status(400).json({ error: `priority must be one of: ${TASK_PRIORITIES.join(", ")}` });
     }
@@ -338,16 +388,20 @@ export function registerTaskRoutes(app, {
       return res.status(400).json({ error: "assigneeUserId does not exist." });
     }
 
-    const sim = simulateControlChange(db, owner, controlId, target);
+    // Finding-based tasks never touch the deterministic score — see the
+    // "FINDING-BASED TASKS" note at the top of this file. sim stays null,
+    // which is what keeps projectedGain/scoreAtCreate honestly null below.
+    const sim = cleanFindingRef ? null : simulateControlChange(db, owner, controlId, target);
 
     const task = {
       id: randomUUID(),
       ownerUserId: owner,
-      controlId,
-      targetLabel: target,
-      title: (title || `Improve: ${control.question}`).slice(0, 160),
+      controlId: cleanFindingRef ? null : controlId,
+      targetLabel: cleanFindingRef ? null : target,
+      findingRef: cleanFindingRef,
+      title: (title || `Improve: ${control?.question}`).slice(0, 160),
       detail: (detail || "").slice(0, 2000),
-      nistFunction: control.nistFunction,
+      nistFunction: control?.nistFunction || null,
       status: "open",
       priority,
       effort: effort || null,
@@ -357,7 +411,10 @@ export function registerTaskRoutes(app, {
       createdAt: nowIso(),
       updatedAt: nowIso(),
       completedAt: null,
-      // Snapshot of the projected benefit at creation time.
+      // Snapshot of the projected benefit at creation time. Always null for
+      // a finding-based task — there is no "projected posture gain" for
+      // fixing one CVE, and pretending otherwise would misrepresent what the
+      // score actually measures.
       projectedGain: sim ? sim.delta : null,
       scoreAtCreate: sim ? sim.current : null,
       // Set by taskTrackerRoutes.js once this task is synced to an external
@@ -455,6 +512,38 @@ export function registerTaskRoutes(app, {
     if (!canAccess(actor, task.ownerUserId)) return res.status(403).json({ error: "Not permitted." });
     if (task.status === "done") return res.status(400).json({ error: "Task is already complete." });
 
+    const actorType = actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client";
+
+    // Finding-based task: mark it done and stop. There is no checklist
+    // answer to write back and no score to move — see the "FINDING-BASED
+    // TASKS" note at the top of this file. Completing a CVE-remediation task
+    // doesn't retroactively prove any checklist answer true; the score stays
+    // exactly what the client's own answers say it is.
+    if (task.findingRef) {
+      task.status = "done";
+      task.completedAt = nowIso();
+      task.updatedAt = nowIso();
+      pushHistory(task, actorType, req.userId, "completed", "Finding remediated (no posture-score effect).");
+
+      if (logClientAction) {
+        try {
+          logClientAction(db, { clientUserId: task.ownerUserId, actorUserId: req.userId,
+            actorRole: actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client_admin",
+            action: "task_completed", detail: task.title });
+        } catch { /* non-fatal */ }
+      }
+      await db.write();
+
+      await notify(db, {
+        ownerUserId: task.ownerUserId, event: "task.completed",
+        title: `Task completed: ${task.title}`,
+        detail: "Finding remediated.",
+        severity: "info", actionable: false,
+      });
+
+      return res.json({ task: publicTask(db, task), posture: null });
+    }
+
     const assessment = latestAssessmentFor(db, task.ownerUserId);
     if (!assessment) return res.status(400).json({ error: "Client has no assessment to update." });
 
@@ -478,7 +567,7 @@ export function registerTaskRoutes(app, {
     task.updatedAt = nowIso();
     task.actualGain = after.postureScore - before.postureScore;
     task.scoreAtComplete = after.postureScore;
-    pushHistory(task, actor.isAdmin ? "admin" : actor.isAnalyst ? "analyst" : "client", req.userId,
+    pushHistory(task, actorType, req.userId,
       "completed", `Posture ${before.postureScore} → ${after.postureScore} (${task.actualGain >= 0 ? "+" : ""}${task.actualGain}).`);
 
     // Record a posture snapshot so the trend chart has real history.
