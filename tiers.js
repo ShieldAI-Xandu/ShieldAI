@@ -309,6 +309,35 @@ export const ADDONS = {
     unlocksCapability: "trainingDelivery",
     description: "Unlocks the standalone employee training delivery product — tokenized learner links, assignments, quarterly scheduling, completion tracking, and reports — for Starter customers. Bundled free at Growth and above.",
   },
+
+  // One additional compliance framework beyond the tier's included count.
+  //
+  // Unlike training_delivery this is a COUNTABLE SLOT, not a boolean feature:
+  // a client can hold several, and each one is applied to a specific
+  // framework. That's why `unlocksCapability` is null and why this must never
+  // be added to FEATURE_CATALOG — featureAccess() would render it as a
+  // has/doesn't-have feature and tell a client who already owns two that they
+  // still need to buy it.
+  //
+  // Entitlements themselves live in db.data.frameworkEntitlements (see
+  // frameworkEntitlements.js), NOT in the user/subscription `addons` string
+  // array: billingRoutes.js's webhook re-derives that array from Stripe and
+  // overwrites it wholesale, so anything written there that Stripe doesn't
+  // know about is destroyed on the next webhook. This entry exists for the
+  // price, the name, and the availableFor rule — nothing more.
+  compliance_framework: {
+    id: "compliance_framework",
+    name: "Additional Compliance Framework",
+    priceCents: 4999,              // $49.99/mo
+    interval: "month",
+    stripePriceId: null,
+    // Free can't buy: it has no compliance editing at all, so selling it a
+    // framework would sell access it still couldn't use. Managed can't buy
+    // either — its limit is already unlimited, so there is nothing to sell.
+    availableFor: ["starter", "growth", "guided"],
+    unlocksCapability: null,
+    description: "One additional compliance framework beyond your plan's included limit, assessed control-by-control like any other. Billed monthly per framework; you can move a slot to a different framework at no extra cost.",
+  },
 };
 
 // Ordered list (low → high) for UI dropdowns and up/downgrade logic.
@@ -435,10 +464,18 @@ export function priceLabel(tierId) {
   return `$${(t.priceCents / 100).toFixed(0)}/${t.interval === "month" ? "mo" : t.interval}`;
 }
 
+// Add-on price as a display string. Shows cents only when there are any:
+// "$40/mo" stays "$40/mo", but $49.99 must not round to "$50/mo" — a price
+// shown next to a buy button has to match what the client is actually
+// charged, and toFixed(0) silently misquoted it by a penny.
 export function addonPriceLabel(addonId) {
   const a = getAddon(addonId);
   if (!a) return "";
-  return `$${(a.priceCents / 100).toFixed(0)}/${a.interval === "month" ? "mo" : a.interval}`;
+  const unit = a.interval === "month" ? "mo" : a.interval;
+  const amount = a.priceCents % 100 === 0
+    ? (a.priceCents / 100).toFixed(0)
+    : (a.priceCents / 100).toFixed(2);
+  return `$${amount}/${unit}`;
 }
 
 // For a given capability flag, the lowest tier that includes it (per

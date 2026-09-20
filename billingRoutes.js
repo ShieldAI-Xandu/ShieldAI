@@ -20,6 +20,10 @@
 // server.js mounting note.
 
 import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER, SELF_SERVE_PAID_TIERS, getAddon, canPurchaseAddon, ADDONS } from "./tiers.js";
+import {
+  entitlementsFor, publicEntitlement, monthlyCentsFor,
+  pendingBillingEntitlements, ENTITLING_STATUSES,
+} from "./frameworkEntitlements.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -348,6 +352,7 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       ...(Array.isArray(user?.addons) ? user.addons : []),
       ...(Array.isArray(sub?.addons) ? sub.addons : []),
     ]);
+    const fwAddons = entitlementsFor(db, req.userId).filter(e => ENTITLING_STATUSES.has(e.status));
     res.json({
       tier: user?.tier || DEFAULT_TIER,
       addons: [...addonIds],
@@ -355,6 +360,14 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
         status: sub.status, currentPeriodEnd: sub.currentPeriodEnd,
         hasStripe: !!sub.stripeCustomerId,
       } : null,
+      // Framework slots are their own line items, not entries in `addons` —
+      // that array is re-derived from Stripe by the webhook above and would
+      // erase them. See frameworkEntitlements.js for the full reasoning.
+      frameworkAddons: {
+        assigned: fwAddons.filter(e => e.frameworkId).map(publicEntitlement),
+        unassigned: fwAddons.filter(e => !e.frameworkId).length,
+        monthlyCents: monthlyCentsFor(db, req.userId),
+      },
     });
   });
 
@@ -371,11 +384,40 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       .filter(t => t.userId === user.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const paid = txns.filter(t => t.status === "paid").reduce((s, t) => s + (t.amountCents || 0), 0);
+    const fwAddons = entitlementsFor(db, user.id);
     res.json({
       tier: user.tier || DEFAULT_TIER,
       subscription: sub || null,
       transactions: txns.slice(0, 100),
       lifetimePaidCents: paid,
+      frameworkAddons: fwAddons,
+      frameworkAddonsMrrCents: monthlyCentsFor(db, user.id),
+    });
+  });
+
+  // The manual-invoicing worklist: framework add-ons that are live but not
+  // yet invoiced. This exists because Stripe is deliberately deferred — the
+  // client already has access and we've already committed to billing them,
+  // so without somewhere for an admin to see it, the money is simply lost.
+  app.get("/api/admin/billing/framework-addons", requireAdmin, (req, res) => {
+    const status = String(req.query.status || "pending_billing");
+    const all = (db.data.frameworkEntitlements || []);
+    const rows = (status === "all" ? all : all.filter(e => e.status === status))
+      .map(e => {
+        const u = findUser(e.userId);
+        return {
+          ...e,
+          email: u?.email || null,
+          companyName: u?.companyName || "",
+          tier: u?.tier || DEFAULT_TIER,
+          ageDays: Math.floor((Date.now() - new Date(e.createdAt).getTime()) / 86400000),
+        };
+      })
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));   // oldest owed first
+    res.json({
+      rows,
+      pendingCount: all.filter(e => e.status === "pending_billing").length,
+      pendingCents: pendingBillingEntitlements(db).reduce((s, e) => s + (e.priceCents || 0), 0),
     });
   });
 
@@ -396,11 +438,18 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
         ...(Array.isArray(sub?.addons) ? sub.addons : []),
       ]);
       const addonCents = [...addonIds].reduce((s, id) => s + (getAddon(id)?.priceCents || 0), 0);
+      // Framework slots are billed per framework and live in their own
+      // collection, so they'd be invisible here without this — the same
+      // undercount the comment above describes for training_delivery.
+      // Comped slots are excluded by monthlyCentsFor(): they're real access
+      // but zero revenue, and counting them would inflate MRR.
+      const frameworkAddonCents = monthlyCentsFor(db, u.id);
       return {
         id: u.id, email: u.email, companyName: u.companyName || "",
         tier, status: sub?.status || (tier === "free" ? "free" : "none"),
-        priceCents: (getTier(tier).priceCents || 0) + addonCents,
+        priceCents: (getTier(tier).priceCents || 0) + addonCents + frameworkAddonCents,
         addons: [...addonIds],
+        frameworkAddonCents,
         lifetimePaidCents: paid,
         currentPeriodEnd: sub?.currentPeriodEnd || null,
       };
@@ -410,7 +459,18 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       .filter(r => ["active", "trialing", "manual", "past_due"].includes(r.status))
       .reduce((s, r) => s + (r.priceCents || 0), 0);
     const totalPaidCents = rows.reduce((s, r) => s + r.lifetimePaidCents, 0);
-    res.json({ rows, mrrCents, totalPaidCents, configured: !!stripe });
+
+    // Reported SEPARATELY, never folded into mrrCents or totalPaidCents.
+    // An uninvoiced framework add-on is money owed, not money earned, and
+    // quietly adding it to revenue would be exactly the kind of plausible
+    // fabrication this codebase refuses to ship. An admin needs to see it
+    // precisely because it's the queue of invoices nobody has sent yet.
+    const pending = pendingBillingEntitlements(db);
+    res.json({
+      rows, mrrCents, totalPaidCents, configured: !!stripe,
+      pendingBillingCents: pending.reduce((s, e) => s + (e.priceCents || 0), 0),
+      pendingBillingCount: pending.length,
+    });
   });
 
   console.log("ShieldAI billing routes registered.");

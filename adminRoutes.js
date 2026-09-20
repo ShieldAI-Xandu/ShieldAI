@@ -16,7 +16,13 @@
 // here is an administrative override.
 
 import { randomUUID } from "crypto";
-import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier, hasCapability } from "./tiers.js";
+import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier, hasCapability, addonPriceLabel } from "./tiers.js";
+import {
+  newEntitlement, assignEntitlement, cancelEntitlement, findEntitlement,
+  entitlementsFor, publicEntitlement, frameworkAllowance, isFoundation,
+  ENTITLEMENT_STATUSES, INVOICE_STATES, FRAMEWORK_ADDON_ID,
+} from "./frameworkEntitlements.js";
+import { getFrameworkDef } from "./complianceBridge.js";
 import { isSuperAdminEmail, accountCategory } from "./auth.js";
 import { getProviderHealth } from "./aiProviders.js";
 import { getEmailHealth } from "./emailService.js";
@@ -79,6 +85,27 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
   }
 
   const findUser = (id) => (db.data.users || []).find(u => u.id === id);
+
+  // frameworkAllowance() only ever calls gate.tierOf(), and registerAdminRoutes
+  // isn't handed the real tierGate. Rather than thread it through every
+  // existing call site, satisfy the one method it needs from userTier() —
+  // which is the same lookup tierGate.tierOf() performs.
+  const tierGateShim = { tierOf: (id) => userTier(findUser(id)) };
+
+  function latestAssessmentFor(userId) {
+    const list = (db.data.assessments || []).filter(a => a.userId === userId);
+    if (!list.length) return null;
+    return list.reduce((best, a) =>
+      !best || new Date(a.updatedAt || a.createdAt) > new Date(best.updatedAt || best.createdAt) ? a : best, null);
+  }
+
+  const allowanceForClient = (userId) =>
+    frameworkAllowance(db, tierGateShim, userId, latestAssessmentFor(userId));
+
+  // How many of this client's selected frameworks their plan no longer
+  // covers. Computed AFTER the tier field has been updated, so it reflects
+  // the new plan.
+  const pausedFrameworkCount = (userId) => allowanceForClient(userId).blockedIds.length;
 
   // ── Rich account list (tier, role, subscription, counts) ────
   app.get("/api/admin/accounts", requireAdmin, (req, res) => {
@@ -233,7 +260,215 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
       }
     }
 
+    // Downgrade-triggered "frameworks paused" notice. A downgrade is a staff
+    // action, not a client write, so the assessment's selectedFrameworks list
+    // is deliberately left whole — nothing is deleted and a re-upgrade
+    // restores everything exactly. But the read-side allow-list starts hiding
+    // whatever is now over the limit immediately, and a client watching
+    // frameworks vanish with no explanation would reasonably conclude the
+    // product broke.
+    //
+    // Deliberately does NOT auto-create entitlements to cover the overage:
+    // that would invent a recurring charge nobody agreed to.
+    if (direction === "downgrade") {
+      const paused = pausedFrameworkCount(u.id);
+      if (paused > 0) {
+        const nowIncluded = getTier(tier).limits?.complianceFrameworks ?? 0;
+        pushNotification(db, {
+          userId: u.id,
+          type: "frameworks_paused",
+          title: `${paused} compliance framework${paused === 1 ? "" : "s"} paused`,
+          body: `Your new plan includes ${nowIncluded}. Nothing was deleted — upgrade again, or add a framework for ${addonPriceLabel(FRAMEWORK_ADDON_ID)}, and they come straight back.`,
+          link: "/compliance",
+          actorRole: "admin",
+        });
+        await audit(req, "frameworks_paused", u.id, `${paused} framework(s) paused by downgrade to ${tier}`);
+      }
+    }
+
     res.json(adminUserView(db, u));
+  });
+
+  // ── Framework add-ons ($49.99/mo slots) ─────────────────────
+  //
+  // These live here rather than in frameworkAddonRoutes.js for one concrete
+  // reason: audit() is a closure inside registerAdminRoutes, not an export.
+  // Every mutating admin action in this file writes an adminAudit row, and
+  // granting or cancelling a recurring charge is exactly the kind of thing
+  // someone will need attributed six months later.
+
+  app.get("/api/admin/accounts/:id/framework-addons", requireAdmin, (req, res) => {
+    const u = findUser(req.params.id);
+    if (!u) return res.status(404).json({ error: "Account not found." });
+    const a = allowanceForClient(u.id);
+    res.json({
+      entitlements: entitlementsFor(db, u.id),
+      allowance: {
+        tier: a.tierId, limit: a.limit, included: a.included,
+        entitlements: a.entitlements,
+        blocked: a.blockedIds, grandfathered: a.grandfatheredIds,
+      },
+      addonPrice: addonPriceLabel(FRAMEWORK_ADDON_ID),
+    });
+  });
+
+  // Grant a slot. `frameworkId: null` grants an UNASSIGNED slot the client
+  // applies themselves — for when you've agreed to sell them a framework but
+  // they haven't decided which one.
+  // body: { frameworkId?: string|null, status?: "comped"|"pending_billing"|"active", note?: string }
+  app.post("/api/admin/accounts/:id/framework-addons", requireAdmin, async (req, res) => {
+    const u = findUser(req.params.id);
+    if (!u) return res.status(404).json({ error: "Account not found." });
+    if (u.isAdmin || u.isAnalyst) {
+      return res.status(400).json({ error: "Staff accounts don't hold framework add-ons." });
+    }
+
+    const { frameworkId = null, status = "comped", note = "" } = req.body || {};
+    if (!ENTITLEMENT_STATUSES.includes(status) || status === "cancelled") {
+      return res.status(400).json({ error: "status must be one of: comped, pending_billing, active." });
+    }
+
+    let frameworkName = null;
+    let kind = "registry";
+    if (frameworkId) {
+      if (isFoundation(frameworkId)) {
+        return res.status(400).json({ error: "Foundation frameworks are included on every plan — they can't be sold as add-ons." });
+      }
+      const def = getFrameworkDef(frameworkId);
+      const custom = def ? null : (db.data.customFrameworks || []).find(f => f.id === frameworkId);
+      if (!def && !custom) return res.status(404).json({ error: "Unknown framework." });
+      frameworkName = def ? (def.short || def.name) : custom.name;
+      kind = def ? "registry" : "custom";
+    }
+
+    const rec = newEntitlement({
+      userId: u.id,
+      frameworkId: frameworkId || null,
+      frameworkName,
+      kind,
+      status,
+      billingMode: status === "comped" ? "comped" : "manual_invoice",
+      source: "admin_grant",
+      grantedByUserId: req.userId,
+      note,
+    });
+    (db.data.frameworkEntitlements ||= []).push(rec);
+    await db.write();
+
+    await audit(req, "framework_addon_grant", u.id,
+      `${frameworkName || "unassigned slot"} · ${status}${note ? " · " + note : ""}`);
+    pushNotification(db, {
+      userId: u.id,
+      type: "framework_addon_granted",
+      title: frameworkName ? `${frameworkName} added to your plan` : "A framework add-on slot was added to your plan",
+      body: status === "comped"
+        ? "Added by your ShieldAI team at no charge."
+        : `Billed at ${addonPriceLabel(FRAMEWORK_ADDON_ID)}.`,
+      link: "/compliance",
+      actorRole: "admin",
+    });
+    await db.write();
+
+    res.status(201).json(rec);
+  });
+
+  // Move an add-on through its billing lifecycle, or re-point it at another
+  // framework. body: { status?, invoiceState?, lastInvoiceRef?, frameworkId?, note? }
+  app.patch("/api/admin/framework-addons/:id", requireAdmin, async (req, res) => {
+    const rec = findEntitlement(db, req.params.id);
+    if (!rec) return res.status(404).json({ error: "Add-on not found." });
+
+    const { status, invoiceState, lastInvoiceRef, frameworkId, note } = req.body || {};
+    const changes = [];
+
+    if (status !== undefined) {
+      if (!ENTITLEMENT_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${ENTITLEMENT_STATUSES.join(", ")}.` });
+      }
+      if (status === "cancelled") {
+        return res.status(400).json({ error: "Use DELETE to cancel an add-on — it keeps the record and stamps cancelledAt." });
+      }
+      if (rec.status !== status) changes.push(`status ${rec.status} → ${status}`);
+      rec.status = status;
+      if (status === "active" && !rec.activatedAt) rec.activatedAt = nowIso();
+    }
+
+    if (invoiceState !== undefined) {
+      if (!INVOICE_STATES.includes(invoiceState)) {
+        return res.status(400).json({ error: `invoiceState must be one of: ${INVOICE_STATES.join(", ")}.` });
+      }
+      rec.billing ||= {};
+      if (rec.billing.invoiceState !== invoiceState) changes.push(`invoice ${rec.billing.invoiceState} → ${invoiceState}`);
+      rec.billing.invoiceState = invoiceState;
+      if (invoiceState === "invoiced" && !rec.billing.invoicedAt) rec.billing.invoicedAt = nowIso();
+      if (invoiceState === "paid") {
+        rec.billing.paidAt = nowIso();
+        // Paid means the slot is no longer merely owed, so promote it out of
+        // pending_billing and off the invoicing worklist.
+        if (rec.status === "pending_billing") {
+          rec.status = "active";
+          rec.activatedAt ||= nowIso();
+          changes.push("status pending_billing → active (paid)");
+        }
+      }
+    }
+
+    if (lastInvoiceRef !== undefined) {
+      rec.billing ||= {};
+      rec.billing.lastInvoiceRef = String(lastInvoiceRef || "").slice(0, 120) || null;
+    }
+
+    if (frameworkId !== undefined) {
+      if (frameworkId === null) {
+        assignEntitlement(rec, { frameworkId: null, frameworkName: null, kind: rec.kind });
+        changes.push("unassigned");
+      } else {
+        if (isFoundation(frameworkId)) return res.status(400).json({ error: "Foundation frameworks can't be add-ons." });
+        const def = getFrameworkDef(frameworkId);
+        const custom = def ? null : (db.data.customFrameworks || []).find(f => f.id === frameworkId);
+        if (!def && !custom) return res.status(404).json({ error: "Unknown framework." });
+        assignEntitlement(rec, {
+          frameworkId,
+          frameworkName: def ? (def.short || def.name) : custom.name,
+          kind: def ? "registry" : "custom",
+        });
+        changes.push(`applied to ${rec.frameworkName}`);
+      }
+    }
+
+    if (note !== undefined) rec.note = String(note || "").slice(0, 500);
+    rec.updatedAt = nowIso();
+    await db.write();
+
+    if (changes.length) await audit(req, "framework_addon_billing", rec.userId, changes.join(" · "));
+    res.json(rec);
+  });
+
+  // The deliberate cancellation — the only thing that stops the charge. A
+  // client unticking a framework does NOT reach here; that only releases the
+  // slot (see frameworkAddonRoutes.js). The record is kept rather than
+  // deleted so the billing history stays answerable.
+  app.delete("/api/admin/framework-addons/:id", requireAdmin, async (req, res) => {
+    const rec = findEntitlement(db, req.params.id);
+    if (!rec) return res.status(404).json({ error: "Add-on not found." });
+    if (rec.status === "cancelled") return res.status(409).json({ error: "Already cancelled." });
+
+    const was = rec.frameworkName || "an unassigned slot";
+    cancelEntitlement(rec, String(req.body?.note || "").slice(0, 500));
+    await db.write();
+
+    await audit(req, "framework_addon_cancel", rec.userId, `${was} cancelled`);
+    pushNotification(db, {
+      userId: rec.userId,
+      type: "framework_addon_cancelled",
+      title: "A framework add-on was cancelled",
+      body: `${was} is no longer covered by an add-on, and the ${addonPriceLabel(FRAMEWORK_ADDON_ID)} charge stops. The framework stays selected on your assessment but won't be assessed unless your plan covers it.`,
+      link: "/compliance",
+      actorRole: "admin",
+    });
+    await db.write();
+
+    res.json(publicEntitlement(rec));
   });
 
   // ── Suspend / reactivate an account ─────────────────────────

@@ -11778,6 +11778,132 @@ function useFrameworkCatalog() {
   return list || COMPLIANCE_FRAMEWORKS_FALLBACK;
 }
 
+// How many compliance frameworks this client's plan includes, how many they're
+// using, and what a paid slot costs.
+//
+// Deliberately NOT module-cached the way useFrameworkCatalog is above. The
+// catalogue is a product fact that never changes mid-session; an allowance
+// changes the instant someone buys a slot, and a stale cached copy would show
+// a client they'd just paid for a framework as still locked. `refresh()` is
+// exposed for exactly that moment.
+//
+// Returns null until loaded (and on failure). Callers treat null as "don't
+// know yet" and must not render a lock from it — the backend is the real
+// enforcement point, so guessing pessimistically here would only ever show a
+// paywall to someone who doesn't need one.
+function useFrameworkAllowance() {
+  const [state, setState] = useState(null);
+  const load = useCallback(() => {
+    if (!getAuthToken()) return Promise.resolve(null);
+    return fetch(`${API_BASE}/api/client/framework-addons`, {
+      headers: { Authorization: `Bearer ${getAuthToken()}` },
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => { setState(d); return d; })
+      .catch(() => null);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  return { allowance: state, refresh: load };
+}
+
+const FOUNDATION_FRAMEWORK_IDS = ["nist-csf", "cis"];
+
+/**
+ * What the picker should show for one framework, given the client's plan.
+ *
+ * Shared by both pickers (intake and Edit Assessment) so they can't drift into
+ * showing different prices or different locks for the same framework — which
+ * is precisely what happened to the backend's two copies of this rule.
+ *
+ * `data` null means the allowance hasn't loaded. Everything reads as "open" in
+ * that case rather than locked: the backend is the real enforcement point, so
+ * guessing pessimistically here would only ever show a paywall to someone who
+ * doesn't need one.
+ */
+function frameworkSlotState(data, fwId, selectedIds) {
+  if (FOUNDATION_FRAMEWORK_IDS.includes(fwId)) return { state: "foundation", locked: true };
+  if (!data?.allowance) return { state: "open", locked: false };
+
+  const a = data.allowance;
+  const paidIds = (data.entitlements || [])
+    .filter(e => e.inUse && e.status !== "cancelled")
+    .map(e => e.frameworkId);
+  if (paidIds.includes(fwId)) return { state: "paid", locked: false, chip: data.addon?.priceLabel };
+  if ((a.grandfathered || []).includes(fwId)) return { state: "included", locked: false };
+  if (a.unlimited) return { state: "included", locked: false };
+  if ((selectedIds || []).includes(fwId)) return { state: "included", locked: false };
+
+  const roomLeft = (a.included?.limit ?? 0) - (a.included?.used ?? 0);
+  if (roomLeft > 0) return { state: "included", locked: false };
+
+  // Past the cap. A spare slot they already pay for costs nothing to apply —
+  // offering to sell a second one here would be charging twice for the same
+  // thing.
+  if ((a.entitlements?.unassigned ?? 0) > 0) {
+    return { state: "reusable", locked: true, chip: "use your spare slot" };
+  }
+  if (!data.addon?.purchasable) return { state: "upgrade", locked: true };
+  return { state: "purchasable", locked: true, chip: `+ ${data.addon?.priceLabel || "$49.99/mo"}` };
+}
+
+/**
+ * Build the upgrade-modal payload for a framework the client can't just tick.
+ * Mirrors the backend's FRAMEWORK_ADDON_REQUIRED body so the modal renders the
+ * same whether it got here from a real 402 or from a proactive click.
+ */
+function frameworkAddonPrompt(data, fw, onPurchased) {
+  const a = data?.allowance || {};
+  const price = data?.addon?.priceLabel || "$49.99/mo";
+  const spare = a.entitlements?.unassigned ?? 0;
+  // Nothing to sell — either Free (no compliance editing at all) or a plan we
+  // don't sell slots on. Fall back to the plain tier-upgrade prompt.
+  if (!data?.addon?.purchasable) {
+    return {
+      code: "UPGRADE_REQUIRED",
+      capability: "complianceAccess",
+      error: `${fw.name} isn't included on your current plan.`,
+      currentTier: a.tier,
+      requiresTier: "starter",
+      requiresTierName: "Starter",
+    };
+  }
+  return {
+    code: "FRAMEWORK_ADDON_REQUIRED",
+    addon: "compliance_framework",
+    frameworkId: fw.id,
+    frameworkName: fw.name,
+    addonPrice: price,
+    included: a.included,
+    unassignedEntitlements: spare,
+    currentTier: a.tier,
+    error: spare > 0
+      ? `You're using all ${a.included?.limit} frameworks your plan includes — but you have an unused add-on slot you can apply to ${fw.name} at no extra cost.`
+      : `You're using all ${a.included?.limit} frameworks your plan includes. Add ${fw.name} for ${price}, or upgrade.`,
+    // Called by UpgradeModal once the slot is recorded, so the picker can
+    // refresh its allowance and tick the box the client already asked for.
+    onPurchased,
+  };
+}
+
+/** The "Included: 3 of 5 · 1 add-on" line above a framework picker. */
+function FrameworkAllowanceLine({ data }) {
+  if (!data?.allowance) return null;
+  const a = data.allowance;
+  const bought = a.entitlements?.total ?? 0;
+  const spare = a.entitlements?.unassigned ?? 0;
+  return (
+    <div style={{fontSize:11.5,color:C.textMut,marginBottom:10,lineHeight:1.5}}>
+      {a.unlimited
+        ? "Unlimited compliance frameworks included on your plan."
+        : `Included: ${a.included?.used ?? 0} of ${a.included?.limit ?? 0} on your plan.`}
+      {bought > 0 && ` · ${bought} paid add-on${bought === 1 ? "" : "s"} (${data.addon?.priceLabel} each)`}
+      {spare > 0 && (
+        <span style={{color:C.greenText}}> · {spare} slot{spare === 1 ? "" : "s"} free to apply</span>
+      )}
+    </div>
+  );
+}
+
 // Public — GET /api/compliance/not-offered needs no auth, so this also
 // works on the pre-login marketing page. Fallback mirrors the current
 // NOT_OFFERED content in frameworks.js; if that ever changes, the live
@@ -11906,6 +12032,7 @@ function FrameworkFoundationScreen({ onComplete, onBack, initial = "nist" }) {
 function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialProgress = null, onProgress }) {
   // Live catalogue, not the stale 7-item constant.
   const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  const { allowance: fwAllowance, refresh: refreshFwAllowance } = useFrameworkAllowance();
   // All 35 questions, not the frozen 13. The 22 evidence questions are what
   // make most of the framework catalogue assessable — without them the backend
   // scores what it can and reports "not yet assessed" for the rest.
@@ -12030,12 +12157,29 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
 
   function toggleFramework(id) {
     // Foundation frameworks (the lens the client picked) can't be toggled off
-    // here — that decision was made on the previous screen. Everything else
-    // stacks freely.
+    // here — that decision was made on the previous screen.
     if (isFoundation(id)) return;
-    setFrameworks(prev =>
-      prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
-    );
+
+    // Turning one OFF is always allowed, including a paid one: releasing the
+    // framework keeps the slot (the backend never cancels a charge on an
+    // untick), so there's nothing to confirm and nothing to lose.
+    if (frameworks.includes(id)) {
+      setFrameworks(prev => prev.filter(f => f !== id));
+      return;
+    }
+
+    const slot = frameworkSlotState(fwAllowance, id, frameworks);
+    if (slot.locked) {
+      const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id) || { id, name: id };
+      // Click and purchase stay two separate steps on purpose. Ticking a
+      // checkbox must never be the thing that starts a recurring charge.
+      showUpgradePrompt(frameworkAddonPrompt(fwAllowance, fw, async () => {
+        await refreshFwAllowance();
+        setFrameworks(prev => prev.includes(id) ? prev : [...prev, id]);
+      }));
+      return;
+    }
+    setFrameworks(prev => [...prev, id]);
   }
 
   function toggleSection(key) {
@@ -12142,15 +12286,25 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
                 tailored gap analysis for each.
               </p>
 
+              <FrameworkAllowanceLine data={fwAllowance}/>
+
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                 {COMPLIANCE_FRAMEWORKS.map(fw => {
                   const on = frameworks.includes(fw.id);
                   const locked = isFoundation(fw.id);
+                  const slot = frameworkSlotState(fwAllowance, fw.id, frameworks);
+                  // `paywalled` is NOT `disabled`: the button still has to be
+                  // clickable, because clicking it is how the client is offered
+                  // the add-on. Only the foundation lens is genuinely inert.
+                  const paywalled = !on && !locked && slot.locked;
                   return (
                     <button key={fw.id} onClick={() => toggleFramework(fw.id)}
-                      title={locked ? "Your posture foundation — chosen on the previous screen" : fw.desc}
+                      title={locked ? "Your posture foundation — chosen on the previous screen"
+                        : paywalled ? `Beyond your plan's included frameworks — ${slot.chip || "add-on required"}`
+                        : fw.desc}
                       disabled={locked}
                       style={{textAlign:"left",padding:"9px 13px",borderRadius:9,
+                        opacity: paywalled ? 0.62 : 1,
                         cursor: locked ? "default" : "pointer",
                         background: on ? `${C.accent}18` : C.surface,
                         border:`1px solid ${on ? C.accent : C.border}`,
@@ -12171,6 +12325,10 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
                             not discover it in the report. */}
                         {locked ? (
                           <span style={{fontSize:10,color:C.accentText,fontWeight:600}}>your foundation</span>
+                        ) : slot.state === "paid" ? (
+                          <span style={{fontSize:10,color:C.greenText,fontWeight:600}}>{slot.chip} add-on</span>
+                        ) : paywalled ? (
+                          <span style={{fontSize:10,color:C.amberText,fontWeight:600}}>{slot.chip}</span>
                         ) : fw.depth === "ai-assisted" ? (
                           <span style={{fontSize:10,color:C.amberText}}>AI gap analysis</span>
                         ) : typeof fw.requirementCount === "number" ? (
@@ -13214,6 +13372,16 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
   const [billingLoaded, setBillingLoaded] = useState(false);
   const [billingLoading, setBillingLoading] = useState(false);
   const [acctBilling, setAcctBilling] = useState(null);  // one account's billing detail
+  // Framework add-on admin state. Native window.confirm/prompt are
+  // deliberately avoided here — src/ui/Modal.jsx exists specifically to
+  // replace them, and a browser dialog on a billing action reads as broken.
+  const [fwGrantFor, setFwGrantFor] = useState(null);    // userId being granted a slot
+  const [fwGrantId, setFwGrantId] = useState("");
+  const [fwGrantNote, setFwGrantNote] = useState("");
+  const [fwGrantComped, setFwGrantComped] = useState(true);
+  const [fwGrantBusy, setFwGrantBusy] = useState(false);
+  const [fwCancel, setFwCancel] = useState(null);        // { id, userId, name }
+  const [fwAddonErr, setFwAddonErr] = useState(null);
 
   // assignments state
   const [assignments, setAssignments] = useState(null);
@@ -13310,6 +13478,67 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
   }
 
   const money = (cents) => cents == null ? "—" : `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
+
+  // ── Framework add-on admin actions ──────────────────────────
+  // Every one of these moves real money, so each reloads from the server
+  // rather than patching local state — an admin looking at a billing screen
+  // should be reading what the server actually holds, not an optimistic guess.
+  const miniAdminBtn = (color) => ({
+    padding:"4px 9px", borderRadius:6, fontSize:11, fontWeight:600, cursor:"pointer",
+    background:`${color}18`, border:`1px solid ${color}55`, color,
+  });
+
+  async function refreshAfterAddonChange(userId) {
+    if (userId) await loadAcctBilling(userId);
+    if (billingLoaded) { setBillingLoaded(false); loadBilling(); }
+  }
+
+  async function patchFrameworkAddon(userId, id, patch) {
+    setFwAddonErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/framework-addons/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setFwAddonErr(data.error || "Couldn't update that add-on."); return; }
+      await refreshAfterAddonChange(userId);
+    } catch { setFwAddonErr("Couldn't reach the server."); }
+  }
+
+  async function confirmCancelFrameworkAddon() {
+    const target = fwCancel;
+    if (!target) return;
+    setFwAddonErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/framework-addons/${target.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setFwAddonErr(data.error || "Couldn't cancel that add-on."); return; }
+      setFwCancel(null);
+      await refreshAfterAddonChange(target.userId);
+    } catch { setFwAddonErr("Couldn't reach the server."); }
+  }
+
+  async function submitFrameworkGrant() {
+    if (!fwGrantFor) return;
+    setFwGrantBusy(true); setFwAddonErr(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${fwGrantFor}/framework-addons`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frameworkId: fwGrantId.trim() || null,
+          status: fwGrantComped ? "comped" : "pending_billing",
+          note: fwGrantNote.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setFwAddonErr(data.error || "Couldn't grant that add-on."); return; }
+      const uid = fwGrantFor;
+      setFwGrantFor(null); setFwGrantId(""); setFwGrantNote("");
+      await refreshAfterAddonChange(uid);
+    } catch { setFwAddonErr("Couldn't reach the server."); }
+    finally { setFwGrantBusy(false); }
+  }
 
   // Names/prices come straight from TIER_DISPLAY so this never drifts from the
   // homepage pricing grid.
@@ -13977,6 +14206,60 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
                       )}
                     </div>
 
+                    {/* Framework add-ons. These are NOT transactions — a
+                        transaction means money collected, and while Stripe is
+                        deferred these are money owed. They're listed
+                        separately for exactly that reason. */}
+                    <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>
+                      Framework add-ons ({(acctBilling.frameworkAddons || []).length})
+                      {acctBilling.frameworkAddonsMrrCents > 0 && (
+                        <span style={{color:C.greenText,fontWeight:700}}> · {money(acctBilling.frameworkAddonsMrrCents)}/mo</span>
+                      )}
+                    </div>
+                    {(acctBilling.frameworkAddons || []).length === 0 ? (
+                      <div style={{color:C.textMut,fontSize:12.5,marginBottom:16}}>No framework add-ons.</div>
+                    ) : (
+                      <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:16}}>
+                        {acctBilling.frameworkAddons.map(e=>(
+                          <div key={e.id} style={{display:"flex",gap:8,padding:"8px 12px",
+                            background:C.surface,borderRadius:6,alignItems:"center",flexWrap:"wrap"}}>
+                            <Badge label={e.status.replace("_"," ")}
+                              color={e.status==="active"?C.green:e.status==="cancelled"?C.textMut:e.status==="comped"?C.purple:C.amber}/>
+                            <span style={{flex:1,minWidth:130,color:C.text,fontSize:12.5}}>
+                              {safeText(e.frameworkName || "Unassigned slot")}
+                            </span>
+                            <span style={{color:C.textMut,fontSize:11}}>{e.billing?.invoiceState?.replace("_"," ")}</span>
+                            <span style={{color:C.text,fontSize:12.5,fontWeight:600}}>{money(e.priceCents)}/mo</span>
+                            {e.status !== "cancelled" && (
+                              <span style={{display:"flex",gap:5}}>
+                                {e.billing?.invoiceState === "not_invoiced" && (
+                                  <button onClick={()=>patchFrameworkAddon(u.id,e.id,{invoiceState:"invoiced"})}
+                                    style={miniAdminBtn(C.accent)}>Mark invoiced</button>
+                                )}
+                                {e.billing?.invoiceState === "invoiced" && (
+                                  <button onClick={()=>patchFrameworkAddon(u.id,e.id,{invoiceState:"paid"})}
+                                    style={miniAdminBtn(C.green)}>Mark paid</button>
+                                )}
+                                {e.status !== "comped" && (
+                                  <button onClick={()=>patchFrameworkAddon(u.id,e.id,{status:"comped"})}
+                                    style={miniAdminBtn(C.purple)}>Comp</button>
+                                )}
+                                <button onClick={()=>setFwCancel({id:e.id,userId:u.id,name:e.frameworkName||"this slot"})}
+                                  style={miniAdminBtn(C.red)}>Cancel</button>
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {fwAddonErr && (
+                      <div style={{color:C.redText,fontSize:12,marginBottom:10}}>{safeText(fwAddonErr)}</div>
+                    )}
+                    <button onClick={()=>{ setFwGrantFor(u.id); setFwGrantId(""); setFwGrantNote(""); setFwGrantComped(true); setFwAddonErr(null); }}
+                      style={{...miniAdminBtn(C.accent),marginBottom:18}}>
+                      + Grant a slot ($49.99/mo, or comped)
+                    </button>
+
                     <div style={{color:C.textSec,fontSize:12,fontWeight:600,marginBottom:8}}>
                       Transactions ({acctBilling.transactions?.length || 0})
                     </div>
@@ -14496,6 +14779,59 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
           </div>
         )}
       </div>
+
+      {/* Grant a framework add-on slot. Uses the shared Modal, not
+          window.prompt — src/ui/Modal.jsx exists to replace those, and a
+          native dialog on a billing action reads as broken. */}
+      <Modal
+        open={!!fwGrantFor}
+        onClose={()=>setFwGrantFor(null)}
+        title="Grant a framework add-on"
+        footer={<>
+          <Button variant="ghost" onClick={()=>setFwGrantFor(null)}>Cancel</Button>
+          <Button onClick={submitFrameworkGrant} disabled={fwGrantBusy}>
+            {fwGrantBusy ? "Granting…" : fwGrantComped ? "Grant (comped)" : "Grant (billable)"}
+          </Button>
+        </>}
+      >
+        <p style={{margin:"0 0 14px",fontSize:13,color:C.textSec,lineHeight:1.55}}>
+          Leave the framework blank to grant an unassigned slot the client applies
+          themselves — useful when they’ve agreed to buy one but haven’t chosen which.
+        </p>
+        <TextField label="Framework id (optional)" value={fwGrantId}
+          onChange={e=>setFwGrantId(e.target.value)}
+          placeholder="e.g. gdpr, pci-dss, iso-27001"
+          hint="Must match a framework id from the compliance catalogue."/>
+        <div style={{marginTop:12}}>
+          <TextField label="Note (optional)" value={fwGrantNote}
+            onChange={e=>setFwGrantNote(e.target.value)}
+            placeholder="Why this was granted — shows in the audit trail"/>
+        </div>
+        <label style={{display:"flex",alignItems:"center",gap:8,marginTop:14,
+          fontSize:13,color:C.text,cursor:"pointer"}}>
+          <input type="checkbox" checked={fwGrantComped}
+            onChange={e=>setFwGrantComped(e.target.checked)}/>
+          Comp this slot (no charge)
+        </label>
+        <div style={{marginTop:6,fontSize:11.5,color:C.textMut,lineHeight:1.5}}>
+          {fwGrantComped
+            ? "Comped slots give full access and are excluded from MRR."
+            : "Billable at $49.99/mo. It lands in the invoicing queue as pending, not as collected revenue."}
+        </div>
+        {fwAddonErr && <div style={{color:C.redText,fontSize:12,marginTop:10}}>{safeText(fwAddonErr)}</div>}
+      </Modal>
+
+      <ConfirmDialog
+        open={!!fwCancel}
+        onClose={()=>setFwCancel(null)}
+        onConfirm={confirmCancelFrameworkAddon}
+        title="Cancel this add-on?"
+        message={`This stops the $49.99/mo charge for ${fwCancel?.name || "this slot"} and notifies the client. The record is kept for the billing history, and the framework stays selected on their assessment — it just won’t be assessed unless their plan covers it.`}
+        confirmLabel="Cancel add-on"
+        cancelLabel="Keep it"
+        danger
+      />
+
     </div>
   );
 }
@@ -15578,6 +15914,7 @@ function HomeScreen({ user, onNewAssessment, onOpenProgram, onEditAssessment, ca
 function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate }) {
   // Live catalogue, not the stale 7-item constant.
   const COMPLIANCE_FRAMEWORKS = useFrameworkCatalog();
+  const { allowance: fwAllowance, refresh: refreshFwAllowance } = useFrameworkAllowance();
   const SECURITY_CHECKLIST = useSecurityChecklist();
   const { can } = useCapabilities();
   const canRegenerate = can("buildPrograms");
@@ -15603,7 +15940,24 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
   function toggleFrameworkEdit(id) {
     const fw = COMPLIANCE_FRAMEWORKS.find(f => f.id === id);
     if (fw?.always) return;
-    setFrameworks(prev => prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]);
+
+    // Removing is always allowed, paid or not. The backend releases the slot
+    // and keeps the charge, so unticking can never cost the client their
+    // add-on — and can never silently cancel it either.
+    if (frameworks.includes(id)) {
+      setFrameworks(prev => prev.filter(f => f !== id));
+      return;
+    }
+
+    const slot = frameworkSlotState(fwAllowance, id, frameworks);
+    if (slot.locked) {
+      showUpgradePrompt(frameworkAddonPrompt(fwAllowance, fw || { id, name: id }, async () => {
+        await refreshFwAllowance();
+        setFrameworks(prev => prev.includes(id) ? prev : [...prev, id]);
+      }));
+      return;
+    }
+    setFrameworks(prev => [...prev, id]);
   }
 
   useEffect(() => {
@@ -15856,13 +16210,18 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                 <p style={{color:C.textSec,fontSize:13,lineHeight:1.5,margin:"0 0 12px"}}>
                   Frameworks to map against. NIST CSF is always the scoring baseline.
                 </p>
+                <FrameworkAllowanceLine data={fwAllowance}/>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                   {COMPLIANCE_FRAMEWORKS.map(fw => {
                     const on = frameworks.includes(fw.id);
+                    const slot = frameworkSlotState(fwAllowance, fw.id, frameworks);
+                    const paywalled = !on && !fw.always && slot.locked;
                     return (
                       <button key={fw.id} onClick={() => toggleFrameworkEdit(fw.id)}
-                        title={fw.desc} disabled={fw.always}
+                        title={paywalled ? `Beyond your plan's included frameworks — ${slot.chip || "add-on required"}` : fw.desc}
+                        disabled={fw.always}
                         style={{padding:"8px 12px",borderRadius:9,
+                          opacity: paywalled ? 0.62 : 1,
                           cursor: fw.always ? "default" : "pointer",
                           background: on ? `${C.accent}18` : C.surface,
                           border:`1px solid ${on ? C.accent : C.border}`,
@@ -15880,7 +16239,11 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
                           {/* Same honesty as the intake picker: an AI-assisted
                               framework is a gap analysis, not a control
                               walkthrough, and the client picks with that known. */}
-                          {fw.depth === "ai-assisted" ? (
+                          {slot.state === "paid" ? (
+                            <span style={{fontSize:9.5,color:C.greenText,fontWeight:600}}>{slot.chip} add-on</span>
+                          ) : paywalled ? (
+                            <span style={{fontSize:9.5,color:C.amberText,fontWeight:600}}>{slot.chip}</span>
+                          ) : fw.depth === "ai-assisted" ? (
                             <span style={{fontSize:9.5,color:C.amberText,fontWeight:400}}>AI gap analysis</span>
                           ) : typeof fw.requirementCount === "number" ? (
                             <span style={{fontSize:9.5,color:C.textMut,fontWeight:400}}>{fw.requirementCount} controls</span>
@@ -22222,6 +22585,35 @@ function PlanBillingSection() {
         {me?.addons?.includes("training_delivery") && (
           <div style={{marginTop:8,fontSize:12,color:C.greenText}}>✓ Training Delivery add-on active</div>
         )}
+        {/* Framework slots are separate line items on top of the tier price,
+            so a client reading "Growth $349/mo" here should see what they're
+            actually paying in total. */}
+        {(me?.frameworkAddons?.assigned?.length > 0 || me?.frameworkAddons?.unassigned > 0) && (
+          <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11.5,color:C.textMut,marginBottom:5}}>
+              Compliance framework add-ons · {(() => {
+                const c = me.frameworkAddons.monthlyCents || 0;
+                return c === 0 ? "no charge" : `$${(c/100).toFixed(2)}/mo total`;
+              })()}
+            </div>
+            {me.frameworkAddons.assigned.map(e => (
+              <div key={e.id} style={{fontSize:12,color:C.greenText,lineHeight:1.7}}>
+                ✓ {safeText(e.frameworkName)}
+                <span style={{color:C.textMut}}>
+                  {" · "}{e.status === "comped" ? "included by your ShieldAI team"
+                    : e.status === "pending_billing" ? "pending invoice"
+                    : `$${((e.priceCents||0)/100).toFixed(2)}/mo`}
+                </span>
+              </div>
+            ))}
+            {me.frameworkAddons.unassigned > 0 && (
+              <div style={{fontSize:12,color:C.amberText,lineHeight:1.7}}>
+                {me.frameworkAddons.unassigned} slot{me.frameworkAddons.unassigned===1?"":"s"} paid for but not applied —
+                pick a framework in Edit Assessment at no extra cost.
+              </div>
+            )}
+          </div>
+        )}
         {me?.subscription?.hasStripe && (
           <button onClick={openPortal} disabled={busy==="portal"}
             style={{marginTop:12,padding:"8px 16px",background:C.surface,border:`1px solid ${C.border}`,
@@ -22332,10 +22724,42 @@ function UpgradeModal({ info, onClose }) {
   if (!info) return null;
   const isLimit = info.code === "LIMIT_REACHED";
   const isTrainingAddon = info.addon === "training_delivery";
+  // A countable framework slot, not a boolean feature. Unlike training
+  // delivery this one shows BOTH cards — "add this one for $49.99" and
+  // "or move to Growth where five are included" are genuinely different
+  // answers and the client should get to pick, so hasTierTarget below is
+  // deliberately left as-is rather than being excluded here too.
+  const isFrameworkAddon = info.addon === "compliance_framework";
+  const reusingSpare = isFrameworkAddon && (info.unassignedEntitlements || 0) > 0;
   // The backend names the specific tier that unlocks this (see tierGate.js).
   // Older/hardcoded prompts that predate that change may not carry it — the
   // UI falls back to a generic "contact your admin" message in that case.
   const hasTierTarget = !isTrainingAddon && !!info.requiresTier;
+
+  async function buyFrameworkAddon() {
+    setAddonBusy(true); setAddonMsg(null);
+    try {
+      // Deliberately NOT /api/billing/checkout-addon: that route 503s while
+      // Stripe is deferred, which would block a sale we're happy to make.
+      const res = await authFetch(`${API_BASE}/api/client/framework-addons`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frameworkId: info.frameworkId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      // Dead code today, and intentionally so. When Stripe goes live the
+      // server starts returning a checkout url here and this redirect takes
+      // over with no other change to the UI.
+      if (res.ok && data.url) { window.location.href = data.url; return; }
+      if (res.ok) {
+        await info.onPurchased?.();
+        onClose();
+        return;
+      }
+      setAddonMsg(data.error || "Couldn't add that framework. Contact your ShieldAI admin.");
+    } catch {
+      setAddonMsg("Couldn't add that framework. Contact your ShieldAI admin.");
+    } finally { setAddonBusy(false); }
+  }
 
   async function buyTrainingAddon() {
     setAddonBusy(true); setAddonMsg(null);
@@ -22374,9 +22798,11 @@ function UpgradeModal({ info, onClose }) {
       display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.accent}55`,
         borderRadius:14,maxWidth:440,width:"100%",padding:"26px 28px",textAlign:"center"}}>
-        <div style={{fontSize:30,marginBottom:10}}>{isTrainingAddon ? "🎓" : isLimit ? "📦" : "🔒"}</div>
+        <div style={{fontSize:30,marginBottom:10}}>{isTrainingAddon ? "🎓" : isFrameworkAddon ? "📋" : isLimit ? "📦" : "🔒"}</div>
         <h2 style={{color:C.text,fontSize:19,margin:"0 0 8px"}}>
-          {isTrainingAddon ? "Add employee training delivery" : isLimit ? "Plan limit reached" : "Upgrade to unlock"}
+          {isTrainingAddon ? "Add employee training delivery"
+            : isFrameworkAddon ? (reusingSpare ? `Apply your spare slot to ${info.frameworkName}` : `Add ${info.frameworkName}`)
+            : isLimit ? "Plan limit reached" : "Upgrade to unlock"}
         </h2>
         <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 18px"}}>
           {info.error || "This feature isn't included in your current plan."}
@@ -22396,6 +22822,34 @@ function UpgradeModal({ info, onClose }) {
             </div>
           </div>
         )}
+        {isFrameworkAddon && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
+            <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:14}}>{safeText(info.frameworkName)}</span>
+              <span style={{color:C.greenText,fontWeight:800,fontSize:15}}>
+                {reusingSpare ? "No extra charge" : info.addonPrice || "$49.99/mo"}
+              </span>
+            </div>
+            <div style={{color:C.textMut,fontSize:12,lineHeight:1.5}}>
+              {reusingSpare
+                ? "You already pay for a framework slot that isn't applied to anything. We'll move it here rather than charging you twice."
+                : "Assessed control-by-control like every other framework. Billed monthly; you can move the slot to a different framework later at no extra cost."}
+              {info.included && (
+                <div style={{marginTop:6,color:C.textSec}}>
+                  Using {info.included.used} of {info.included.limit} included on {info.currentTier || "your plan"}.
+                </div>
+              )}
+            </div>
+            {/* Stripe isn't live yet. Say what actually happens rather than
+                implying a card will be charged at checkout. */}
+            {!reusingSpare && (
+              <div style={{marginTop:8,color:C.textMut,fontSize:11,lineHeight:1.5}}>
+                Access turns on immediately; your ShieldAI admin invoices the add-on.
+              </div>
+            )}
+          </div>
+        )}
         {hasTierTarget && (
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
             padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
@@ -22412,7 +22866,14 @@ function UpgradeModal({ info, onClose }) {
           <button onClick={onClose}
             style={{padding:"9px 18px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.textSec,fontSize:13,cursor:"pointer"}}>Maybe later</button>
-          {isTrainingAddon ? (
+          {isFrameworkAddon ? (
+            <button onClick={buyFrameworkAddon} disabled={addonBusy}
+              style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.green},${C.accent})`,
+                color:"#04121F",border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+                cursor:addonBusy?"default":"pointer",opacity:addonBusy?0.7:1}}>
+              {addonBusy ? "Adding…" : reusingSpare ? "Use my spare slot" : `Add for ${info.addonPrice || "$49.99/mo"}`}
+            </button>
+          ) : isTrainingAddon ? (
             <button onClick={buyTrainingAddon} disabled={addonBusy}
               style={{padding:"9px 20px",background:`linear-gradient(135deg,${C.green},${C.accent})`,
                 color:"#04121F",border:"none",borderRadius:8,fontSize:13,fontWeight:700,
@@ -22437,6 +22898,8 @@ function UpgradeModal({ info, onClose }) {
         <div style={{color:C.textMut,fontSize:11,marginTop:14,lineHeight:1.5}}>
           {isTrainingAddon
             ? "Or upgrade to Growth or higher, where training delivery is included."
+            : isFrameworkAddon && info.requiresTierName
+              ? `Or upgrade to ${info.requiresTierName} (${info.requiresPrice}) — it includes more frameworks outright.`
             : hasTierTarget
               ? "You can also view the full plan comparison under Plan & Billing."
               : "Contact your ShieldAI admin to change your subscription tier."}

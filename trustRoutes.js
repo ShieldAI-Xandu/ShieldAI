@@ -106,7 +106,7 @@ function buildPublicTrustPayload(db, gate, trustPage) {
       // never selected) — same rule the client's own Compliance tab and
       // submissionPacket.js enforce, so this can't drift ahead of what a
       // tier downgrade or a framework they dropped should still show.
-      const access = checkFrameworkAccess(gate, trustPage.ownerUserId, def, a);
+      const access = checkFrameworkAccess(db, gate, trustPage.ownerUserId, def, a);
       if (!access.ok) continue;
       const opts = optsByFramework[toRegistryId(fid)] || {};
       const report = evaluateFramework(fid, checklist, opts);
@@ -157,7 +157,7 @@ export function registerTrustRoutes(app, { db, requireAuth, gate }) {
     for (const fid of selectedFrameworkIdsFor(a)) {
       const def = getFrameworkDef(fid);
       if (!def) continue;
-      const access = checkFrameworkAccess(gate, userId, def, a);
+      const access = checkFrameworkAccess(db, gate, userId, def, a);
       if (!access.ok) continue;
       out.push({ id: def.id, name: def.name });
     }

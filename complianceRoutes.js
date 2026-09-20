@@ -34,7 +34,12 @@ import { NOT_OFFERED } from "./frameworks.js";
 import { corroborate, RESOLUTION_OPTIONS } from "./agentEvidence.js";
 import { toEvidence, SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
-import { complianceFrameworkLimit, hasCapability } from "./tiers.js";
+import {
+  hasCapability, addonPriceLabel, nextTierForLimit, getTier, priceLabel,
+} from "./tiers.js";
+import {
+  frameworkAllowance, FRAMEWORK_ADDON_ID,
+} from "./frameworkEntitlements.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -49,38 +54,70 @@ function checklistOf(assessment) {
   return assessment?.data?.checklist || assessment?.data?.securityChecklist || {};
 }
 
-// "Only the frameworks this client selected, capped to their plan's limit" —
-// the rule the walkthrough route enforces before showing a framework's
-// detail. Extracted so the submission-packet report builder
-// (submissionPacket.js) enforces the exact same rule rather than a second
-// copy that could drift from this one.
-export function checkFrameworkAccess(gate, clientId, frameworkDef, assessment) {
-  const selectedIds = Array.isArray(assessment?.data?.selectedFrameworks)
-    ? assessment.data.selectedFrameworks.map(f => f.id)
-    : null;
-  if (selectedIds && selectedIds.length > 0 && !selectedIds.includes(frameworkDef.id)) {
-    return { ok: false, status: 403, body: { error: "This framework wasn't selected for this assessment." } };
+// "Only the frameworks this client selected, and only the ones their plan or
+// a paid add-on covers" — the rule the walkthrough route enforces before
+// showing a framework's detail. Shared with the submission-packet builder
+// (submissionPacket.js) and the public trust page (trustRoutes.js) so all
+// three enforce one rule rather than three copies that drift.
+//
+// The cap arithmetic itself lives in frameworkEntitlements.frameworkAllowance(),
+// which the assessment write-side clamp also uses — so a framework can never
+// be saved that this function would then refuse to show.
+export function checkFrameworkAccess(db, gate, clientId, frameworkDef, assessment) {
+  const allowance = frameworkAllowance(db, gate, clientId, assessment);
+
+  // Not selected at all is a different answer from not paid for, and stays a
+  // 403. The `.length > 0` guard is deliberate and predates this: an empty
+  // selection array means "nothing recorded", not "explicitly chose none".
+  if (allowance.selectedIds && allowance.selectedIds.length > 0
+      && !allowance.selectedIds.includes(frameworkDef.id)) {
+    // One case deserves better than the generic line: they're PAYING for this
+    // framework and simply haven't added it back to the assessment. Telling
+    // someone with a live add-on that they never selected it is technically
+    // true and completely unhelpful.
+    const paidFor = allowance.entitledIds.includes(frameworkDef.id);
+    return {
+      ok: false, status: 403,
+      body: {
+        error: paidFor
+          ? `You have an active add-on for ${frameworkDef.short || frameworkDef.name}, but it isn't selected on your current assessment. Add it in Edit Assessment and it'll appear here.`
+          : "This framework wasn't selected for this assessment.",
+        code: paidFor ? "ENTITLED_NOT_SELECTED" : "NOT_SELECTED",
+        frameworkId: frameworkDef.id,
+        frameworkName: frameworkDef.short || frameworkDef.name,
+      },
+    };
   }
-  const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
-  if (selectedIds && !FOUNDATION_FRAMEWORK_IDS.has(frameworkDef.id)) {
-    const tierId = gate.tierOf(clientId);
-    const frameworkLimit = complianceFrameworkLimit(tierId);
-    if (frameworkLimit != null) {
-      const allowedAdditional = selectedIds
-        .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
-        .slice(0, frameworkLimit);
-      if (!allowedAdditional.includes(frameworkDef.id)) {
-        return {
-          ok: false, status: 402,
-          body: {
-            error: "This framework is beyond your plan's compliance-framework limit. Upgrade to view it.",
-            code: "UPGRADE_REQUIRED", capability: "complianceAccess", currentTier: tierId,
-          },
-        };
-      }
-    }
-  }
-  return { ok: true };
+
+  if (allowance.allowedIds.has(frameworkDef.id) || allowance.selectedIds === null) return { ok: true };
+  if (!allowance.blockedIds.includes(frameworkDef.id)) return { ok: true };
+
+  // Beyond the plan. Say which framework, what it costs, and whether they
+  // already hold a spare slot they could move onto it — a bare "upgrade to
+  // view this" leaves a client who has already paid for a slot with no idea
+  // they can use it.
+  const nextTier = nextTierForLimit(allowance.tierId, "complianceFrameworks", allowance.included.used + 1);
+  return {
+    ok: false, status: 402,
+    body: {
+      error: allowance.entitlements.unassigned > 0
+        ? `${frameworkDef.short || frameworkDef.name} is beyond your plan's ${allowance.limit} included frameworks — but you have an unused add-on slot you can apply to it at no extra cost.`
+        : `${frameworkDef.short || frameworkDef.name} is beyond your plan's ${allowance.limit} included frameworks. Add it for ${addonPriceLabel(FRAMEWORK_ADDON_ID)}, or upgrade.`,
+      code: "FRAMEWORK_ADDON_REQUIRED",
+      // Kept so client code that branches on the old shape still behaves.
+      capability: "complianceAccess",
+      addon: FRAMEWORK_ADDON_ID,
+      frameworkId: frameworkDef.id,
+      frameworkName: frameworkDef.short || frameworkDef.name,
+      addonPrice: addonPriceLabel(FRAMEWORK_ADDON_ID),
+      included: allowance.included,
+      unassignedEntitlements: allowance.entitlements.unassigned,
+      currentTier: allowance.tierId,
+      requiresTier: nextTier,
+      requiresTierName: nextTier ? getTier(nextTier).name : null,
+      requiresPrice: nextTier ? priceLabel(nextTier) : null,
+    },
+  };
 }
 
 // Attach each requirement's latest non-rejected remediation attestation (if
@@ -251,35 +288,23 @@ export function registerComplianceRoutes(app, {
     const posture = computePostureScore(a.data);
     let frameworks = evaluateAllFrameworks(checklist, optsFor(a));
 
-    // Only show frameworks the client actually selected during their assessment
-    // (their framework-lens foundation plus whatever they checked in the
-    // compliance-framework picker) — not the entire 11-framework catalogue.
-    // Older assessments predating this field have no selectedFrameworks
-    // recorded; show everything for those rather than silently hiding
-    // compliance data no one ever chose to hide.
-    const selectedIds = Array.isArray(a.data?.selectedFrameworks)
-      ? a.data.selectedFrameworks.map(f => f.id)
-      : null;
-    if (selectedIds && selectedIds.length > 0) {
-      frameworks = frameworks.filter(f => selectedIds.includes(f.id));
-    }
-
-    // Cap ADDITIONAL frameworks (beyond the NIST/CIS scoring foundation) to
-    // the client's tier limit — Starter 2, Growth 5, Guided 10, Managed
-    // unlimited. Foundation frameworks don't count against this (they're not
-    // control-mapped anyway — they score via riskEngine.js — but excluded
-    // explicitly here in case that ever changes). Keeps the client's own
-    // selection order rather than an arbitrary registry order.
-    const FOUNDATION_FRAMEWORK_IDS = new Set(["nist-csf", "cis"]);
-    const tierId = gate.tierOf(targetId);
-    const frameworkLimit = complianceFrameworkLimit(tierId);
-    if (frameworkLimit != null) {
-      const orderedIds = selectedIds || frameworks.map(f => f.id);
-      const allowedAdditional = orderedIds
-        .filter(id => !FOUNDATION_FRAMEWORK_IDS.has(id))
-        .slice(0, frameworkLimit);
-      const allowedIds = new Set([...allowedAdditional, ...FOUNDATION_FRAMEWORK_IDS]);
-      frameworks = frameworks.filter(f => allowedIds.has(f.id));
+    // Only the frameworks this client selected and is entitled to see.
+    //
+    // Both halves of that rule — "did they pick it" and "does their plan (or
+    // a paid add-on) cover it" — now come from frameworkAllowance(), the same
+    // function checkFrameworkAccess() below and the assessment write-side
+    // clamp use. This route used to carry its own inline copy of the cap
+    // logic, which is exactly the kind of duplicate that drifts: the two
+    // copies disagreed the moment paid slots existed, because one of them
+    // had never heard of them.
+    //
+    // Older assessments predating selectedFrameworks have none recorded;
+    // frameworkAllowance returns selectedIds: null for those and allows
+    // everything, rather than silently hiding compliance data no one ever
+    // chose to hide.
+    const allowance = frameworkAllowance(db, gate, targetId, a);
+    if (allowance.selectedIds && allowance.selectedIds.length > 0) {
+      frameworks = frameworks.filter(f => allowance.allowedIds.has(f.id));
     }
 
     res.json({
@@ -287,6 +312,18 @@ export function registerComplianceRoutes(app, {
       assessedAt: a.updatedAt || a.createdAt,
       posture: { score: posture.postureScore, level: posture.postureLevel },
       frameworks,
+      // What the client is using vs. what they're entitled to, so the
+      // Compliance tab can say "3 of 5 included · 1 add-on" instead of
+      // leaving a truncated list unexplained.
+      allowance: {
+        tier: allowance.tierId,
+        limit: allowance.limit,
+        included: allowance.included,
+        entitlements: allowance.entitlements,
+        blocked: allowance.blockedIds.map(id => ({ id, name: allowance.nameById.get(id) || id })),
+        grandfathered: allowance.grandfatheredIds,
+        addonPrice: addonPriceLabel(FRAMEWORK_ADDON_ID),
+      },
     });
   });
 
@@ -311,7 +348,7 @@ export function registerComplianceRoutes(app, {
     // the overview — a client shouldn't be able to open a framework's detail
     // walkthrough by guessing the id if they never selected it, or reach one
     // beyond their plan's limit even if they selected it at intake.
-    const access = checkFrameworkAccess(gate, targetId, def, a);
+    const access = checkFrameworkAccess(db, gate, targetId, def, a);
     if (!access.ok) return res.status(access.status).json(access.body);
     // evaluateWithAgent, not evaluateFramework: the walkthrough is exactly where
     // a client needs to see both sources on the control itself. Falls back to a

@@ -424,12 +424,32 @@ You have no ability to change account settings, billing, or any client data from
     if (!message) return res.status(400).json({ error: "message is required." });
     if (message.length > 2000) return res.status(400).json({ error: "message is too long (2000 char max)." });
 
+    // Optional structured hint about what the ticket is asking for, so the
+    // admin queue can offer the matching one-click action instead of making
+    // someone re-read the prose and retype it.
+    //
+    // This is how an analyst asks for a paid framework add-on on a client's
+    // behalf: they file a ticket here (the one route that still enforces
+    // analystOwnsClient strictly) rather than getting any direct write path
+    // to entitlements. Staff never create a charge themselves; an admin
+    // actions it. Purely additive — pre-existing tickets have no `meta` and
+    // every consumer must treat it as optional.
+    const rawMeta = req.body?.meta;
+    const meta = rawMeta && typeof rawMeta === "object" && !Array.isArray(rawMeta)
+      ? {
+        kind: String(rawMeta.kind || "").slice(0, 40) || null,
+        frameworkId: rawMeta.frameworkId ? String(rawMeta.frameworkId).slice(0, 80) : null,
+        frameworkName: rawMeta.frameworkName ? String(rawMeta.frameworkName).slice(0, 120) : null,
+      }
+      : null;
+
     const actor = findUser(req.userId);
     const at = nowIso();
     const ticket = {
       id: randomUUID(),
       clientUserId,
       topic,
+      meta,
       status: "open",
       createdAt: at,
       updatedAt: at,

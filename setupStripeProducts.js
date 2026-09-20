@@ -45,6 +45,14 @@ const ITEMS = [
   { kind: "tier",  id: "growth",  name: "ShieldAI Growth",   priceCents: 34900 },
   { kind: "tier",  id: "guided",  name: "ShieldAI Guided",   priceCents: 69900 },
   { kind: "addon", id: "training_delivery", name: "ShieldAI Training Delivery Add-on", priceCents: 4000 },
+  // One price, bought with a QUANTITY, not one price id per framework. There
+  // are 12 registry frameworks plus an unbounded number of admin-registered
+  // custom ones, so per-framework price ids would grow forever and need a
+  // tiers.js edit each time. Which framework a slot is applied to stays in
+  // db.data.frameworkEntitlements and never becomes Stripe's business — that
+  // separation is what lets billing go live without the client-facing flow
+  // changing at all.
+  { kind: "addon", id: "compliance_framework", name: "ShieldAI Additional Compliance Framework", priceCents: 4999 },
 ];
 
 async function findExistingProduct(metadataKey, id) {

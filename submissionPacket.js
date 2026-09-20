@@ -79,7 +79,7 @@ export function buildSubmissionPacketData(db, gate, clientId, frameworkId) {
   // Same "only what they selected, capped to their plan's limit" rule the
   // Compliance tab enforces — a client can't build a packet for a framework
   // they never selected or that's beyond their plan.
-  const access = checkFrameworkAccess(gate, clientId, def, a);
+  const access = checkFrameworkAccess(db, gate, clientId, def, a);
   if (!access.ok) return { error: { status: access.status, body: access.body } };
 
   const checklist = checklistOf(a);

@@ -98,6 +98,8 @@ import { TRAINING_TOPICS, MANAGER_TOPICS, DEFAULT_SCHEDULE, getTopic } from "./t
 import { computePostureScore, deriveFreePriorities, deriveFreeExecSummary } from "./riskEngine.js";
 import { makeTierGate, counters } from "./tierGate.js";
 import { hasCapability, getTier } from "./tiers.js";
+import { clampSelectedFrameworks, snapshotGrandfatheredFrameworks } from "./frameworkEntitlements.js";
+import { registerFrameworkAddonRoutes } from "./frameworkAddonRoutes.js";
 import { callAI, providerStatus, recordProviderSuccess, recordProviderFailure } from "./aiProviders.js";
 import {
   registerUser,
@@ -901,9 +903,11 @@ app.post("/api/assessments", requireAuth, async (req, res) => {
       createdAt: new Date().toISOString(),
       data: syncCisImplementationGroup(stripGatedAssessmentKeys(req.body)),
     };
+    const clamped = clampSelectedFrameworks(db, gate, req, record.data, null);
+    record.data = clamped.data;
     db.data.assessments.push(record);
     await db.write();
-    res.json({ id });
+    res.json({ id, frameworksDropped: clamped.dropped });
   } catch (err) {
     console.error("Assessment save error:", err.message);
     res.status(500).json({ error: "Could not save your assessment. Please try again." });
@@ -964,17 +968,24 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   const record = db.data.assessments.find(a => a.id === req.params.id && a.userId === req.userId);
   if (!record) return res.status(404).json({ error: "Assessment not found" });
 
+  let droppedFrameworks = [];
+
   // Merge incoming data into the stored assessment data.
   // Frontend sends the full updated `data` object.
   if (req.body.data && typeof req.body.data === "object") {
     // Strip from the INCOMING data only, before the merge — stripping after
     // would delete the client's legitimately-saved extended answers that the
     // gated route wrote.
-    record.data = syncCisImplementationGroup({ ...record.data, ...stripGatedAssessmentKeys(req.body.data) });
+    // The framework clamp runs on the INCOMING data for the same reason the
+    // strip does: the question is "may they save THIS selection?", and the
+    // stored record doesn't carry it yet.
+    const clamped = clampSelectedFrameworks(db, gate, req, stripGatedAssessmentKeys(req.body.data), record);
+    droppedFrameworks = clamped.dropped;
+    record.data = syncCisImplementationGroup({ ...record.data, ...clamped.data });
   }
   record.updatedAt = new Date().toISOString();
   await db.write();
-  res.json({ ok: true, id: record.id, data: record.data });
+  res.json({ ok: true, id: record.id, data: record.data, frameworksDropped: droppedFrameworks });
 });
 
 // Delete an assessment. Cascades to any program generated from it — a
@@ -2507,6 +2518,7 @@ registerVendorRoutes(app, { db, requireAuth, requireAdmin, gate, analystOwnsClie
 registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, analystOwnsClient, analystClientIds, gate, callClaudeText, aiLimiter });
 registerTrustRoutes(app, { db, requireAuth, gate });
 registerExtendedAssessmentRoutes(app, { db, requireAuth, gate });
+registerFrameworkAddonRoutes(app, { db, requireAuth, gate, logClientAction });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND
@@ -2533,6 +2545,33 @@ if (!separation.ok) {
   process.exit(1);
 }
 console.log("✔ Demo/production stores are separate (db.json | demo-db.json)");
+
+// ─────────────────────────────────────────────────────────────
+// One-time amnesty for framework selections made before the plan limit was
+// enforced on write.
+//
+// The compliance-framework cap was only ever applied on READ, so clients
+// could and did save more frameworks than their tier includes. Now that
+// going past the limit is a $49.99/mo purchase, those existing selections
+// must not suddenly start costing money or disappear from the workspace —
+// nobody agreed to either. This freezes what everyone had at this moment and
+// grants it free, forever, to those clients only.
+//
+// The capture is guarded and idempotent, so it runs once per store and is a
+// no-op on every subsequent boot. A demo sandbox has no selectedFrameworks
+// key at all, so it captures nothing there and the legacy show-everything
+// path continues to apply.
+try {
+  const grandfathered = snapshotGrandfatheredFrameworks(db);
+  if (grandfathered > 0) {
+    await db.write();
+    console.log(`✔ Framework amnesty: ${grandfathered} client(s) keep their pre-enforcement selections`);
+  }
+} catch (err) {
+  // Never block boot on the amnesty. Worst case it runs on the next start;
+  // in the meantime the cap simply applies, which is the safe direction.
+  console.warn("Framework grandfather snapshot skipped:", err.message);
+}
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`✅ ShieldAI backend listening on ${HOST}:${PORT}`);
