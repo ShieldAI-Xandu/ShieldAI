@@ -81,6 +81,15 @@ export const FRAMEWORKS = [
     desc: "The scoring baseline. Every posture score ShieldAI produces is computed against the five functions.",
     audience: "All businesses — the foundation the rest map onto.",
     url: "https://www.nist.gov/cyberframework",
+    // Deliberately no `assess()` — see CLAUDE.md's "Known do not fix items."
+    // A second, independent scoring pass could disagree with the headline
+    // posture score, which is the one contradiction this codebase can't
+    // tolerate. `scoredBy` is the documented alternative the unbackedClaims()
+    // safety net (complianceBridge.test.mjs) accepts in place of `assess`.
+    // The real per-control walkthrough is complianceBridge.js's
+    // evaluateNistCsfPresentational() — a pure presentation of this same
+    // computed score, not an independent assessment.
+    scoredBy: "computePostureScore() in riskEngine.js",
   },
   {
     id: "cis",

@@ -7,6 +7,7 @@ import {
 import { corroborate, disputes, corroborationSummary, AGENT_EVIDENCE_MAP } from "./agentEvidence.js";
 import { toAssessOpts, visibleQuestions, intakeStatus, frameworksWithIntake, defaultsFor, intakeFor } from "./frameworkIntake.js";
 import { SECURITY_CHECKLIST, toEvidence } from "./securityChecklist.js";
+import { FRAMEWORKS, DEPTH } from "./frameworks.js";
 
 let fail = 0;
 const ok = (c, m) => { console.log((c ? "  ✔ " : "  ✖ ") + m); if (!c) fail++; };
@@ -75,7 +76,7 @@ const ecomQs = visibleQuestions("pci-dss", { channel: "ecommerce" }).map(q => q.
 const cardQs = visibleQuestions("pci-dss", { channel: "card-present" }).map(q => q.id);
 ok(ecomQs.includes("ecommerceIntegration") && !ecomQs.includes("terminalType"), "e-commerce path skips terminal questions");
 ok(cardQs.includes("terminalType") && !cardQs.includes("ecommerceIntegration"), "card-present path skips iframe questions");
-ok(frameworksWithIntake().length === 8, `8 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
+ok(frameworksWithIntake().length === 9, `9 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
 const st = intakeStatus("pci-dss", { isServiceProvider: false });
 ok(st.complete === false && st.missing.length > 0, "incomplete intake reports what's missing");
 ok(/worst case/.test(st.defaultIfSkipped), "states what an unscoped assessment assumed");
@@ -165,6 +166,21 @@ ok(ctx.controls.every(c => "requiredAnswer" in c), "states what answer would sat
 ok(ctx.disclaimer !== undefined, "carries the module's disclaimer through");
 ok(remediationContext("iso-27001", "NOPE", answers) === null, "unknown requirement -> null, not a guess");
 
+
+console.log("\nunbackedClaims() safety net — a control-mapped framework must have a real assess():");
+// CLAUDE.md documents this as a CI guard; it didn't exist as code anywhere in
+// the repo before this check. Deepening several frameworks' real coverage
+// (CIS IG wiring, CMMC Level 3, NIST 800-53 Moderate/High) is exactly the
+// kind of change this guard exists to catch if it ever went sideways —
+// closing the gap between what CLAUDE.md claims exists and what actually runs.
+function unbackedClaims() {
+  return FRAMEWORKS.filter(f =>
+    f.depth === DEPTH.CONTROL_MAPPED && typeof f.assess !== "function" && !f.scoredBy);
+}
+ok(unbackedClaims().length === 0,
+   `every control-mapped framework has a real assess() (unbacked: ${unbackedClaims().map(f => f.id).join(", ") || "none"})`);
+ok(FRAMEWORKS.filter(f => f.depth === DEPTH.CONTROL_MAPPED).length >= 9,
+   "at least 9 frameworks are genuinely control-mapped, not just listed");
 
 console.log(fail ? `\n${fail} FAILED` : "\nCompliance bridge verified");
 process.exit(fail ? 1 : 0);

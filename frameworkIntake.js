@@ -42,6 +42,30 @@ import { SELECTABLE_STATES } from "./statePrivacyByState.js";
 import { CIS_IMPLEMENTATION_GROUPS } from "./cisControls.js";
 
 export const FRAMEWORK_INTAKE = {
+  "nist-800-53": {
+    frameworkId: "nist-800-53",
+    title: "NIST 800-53 baseline",
+    why: "FIPS 199 impact level decides your baseline — Low (149 controls), Moderate (287), or High (370). Getting this wrong means either a wall of irrelevant red (Moderate/High for a Low system) or false comfort (Low for a system that actually needs more).",
+    questions: [
+      {
+        id: "baseline",
+        question: "What's your FIPS 199 impact level?",
+        help: "A breach with limited adverse effect is Low. Serious effect (common for federal contractors and FedRAMP-track cloud services) is Moderate. Severe or catastrophic effect is High. Most SMBs are Low.",
+        options: [
+          { label: "Low — most SMB systems", value: "low" },
+          { label: "Moderate — federal contractors, FedRAMP-track", value: "moderate" },
+          { label: "High — high-value or national-security-adjacent systems", value: "high" },
+          { label: "Not sure", value: "low" },
+        ],
+      },
+    ],
+    toOpts(answers = {}) {
+      return { baseline: answers.baseline || "low" };
+    },
+    suggestionNote:
+      "We don't determine your FIPS 199 impact level for you — that's your organization's own categorization (or your contract's). 'Not sure' assesses the conservative default (Low) rather than guessing higher.",
+  },
+
   "cis": {
     frameworkId: "cis",
     title: "CIS Implementation Group",
@@ -385,6 +409,7 @@ export function toAssessOpts(frameworkId, answers = {}) {
  */
 export function defaultsFor(frameworkId) {
   const defaults = {
+    "nist-800-53": "Low baseline (149 controls) — the conservative default when no FIPS 199 impact level is chosen.",
     "cis": "IG1 (essential cyber hygiene, 56 safeguards) — the conservative default when no Implementation Group is chosen.",
     "pci-dss": "Unscoped — all 12 requirements assessed as if you store card data. This is the worst case and probably not you.",
     "soc2": "Security category only, Type II. The most common shape.",
