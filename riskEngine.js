@@ -165,34 +165,50 @@ function scoreFromChecklist(answers) {
 //  weighted set. Only questions the client actually answered are scored (no
 //  "unanswered = 40" default like the base checklist, since these are
 //  optional and a client who hasn't reached this section yet shouldn't be
-//  penalized for it). Returns a map keyed by NIST function name, so
-//  computeNistPosture() can blend each into only the base functions the
-//  extended questions actually touch.
+//  penalized for it). Returns a map keyed by group name — NIST function by
+//  default, or CIS hygiene area when scoring through the CIS lens — so each
+//  caller can blend into only the base groups the extended questions touch.
 // ──────────────────────────────────────────────────────────────
-// Fixed weight extended answers carry once blended into a NIST function's
-// real (13-question) score. Small on purpose: refines a function already
-// built from real signals, never dominates or replaces it.
+// Fixed weight extended answers carry once blended into a group's real
+// (13-question) score. Small on purpose: refines a group already built from
+// real signals, never dominates or replaces it.
 const EXTENDED_BLEND_WEIGHT = 0.3;
 
-function scoreFromExtendedChecklist(extendedAnswers) {
-  const byFunction = {};
-  for (const q of EXTENDED_SCORING_CHECKLIST) {
-    const selectedLabel = extendedAnswers[q.id];
-    if (!selectedLabel) continue; // not yet answered — excluded, not defaulted
-    const option = q.options.find(o => o.label === selectedLabel);
-    if (!option) continue;
-    byFunction[q.nistFunction] = byFunction[q.nistFunction] || [];
-    byFunction[q.nistFunction].push({
+// Which CIS hygiene area each extended factor belongs to. Without this the
+// CIS lens would ignore extended answers entirely, so a CIS-lens client
+// would complete the paid Extended Assessment and see their headline score
+// never move — while the NIST view of the same business did move. That is
+// exactly the cross-lens contradiction CIS_GROUPS above exists to prevent:
+// a business doesn't become more or less secure because of which lens it
+// picked at intake.
+const EXTENDED_CIS_GROUP_BY_FACTOR = {
+  mfaDepth: "Secure Access & Data",
+  cloudPosture: "Identify & Protect Assets",
+};
+
+function scoreFromExtendedChecklist(extendedAnswers, groupOf = (q) => q.nistFunction) {
+  const byGroup = {};
+  const answered = EXTENDED_SCORING_CHECKLIST.filter(q => {
+    const label = extendedAnswers[q.id];
+    return label && q.options.some(o => o.label === label);
+  });
+
+  for (const q of answered) {
+    const group = groupOf(q);
+    if (!group) continue; // no home in this lens's grouping — skip, never guess
+    const option = q.options.find(o => o.label === extendedAnswers[q.id]);
+    byGroup[group] = byGroup[group] || [];
+    byGroup[group].push({
       label: q.question,
       factorId: q.factor,
       score: option.score,
-      weight: 1 / EXTENDED_SCORING_CHECKLIST.filter(x => x.nistFunction === q.nistFunction).length,
+      weight: 1 / answered.filter(x => groupOf(x) === group).length,
       finding: findingFor(q.factor, option.score, q.question),
     });
   }
 
   const out = {};
-  for (const [name, factors] of Object.entries(byFunction)) {
+  for (const [name, factors] of Object.entries(byGroup)) {
     const totalWeight = factors.reduce((s, f) => s + f.weight, 0) || 1;
     const weighted = factors.reduce((s, f) => s + f.score * f.weight, 0) / totalWeight;
     out[name] = {
@@ -203,6 +219,21 @@ function scoreFromExtendedChecklist(extendedAnswers) {
     };
   }
   return out;
+}
+
+/**
+ * Blend an extended-score map into a base group list. Groups the extended
+ * answers don't touch pass through by identity, so an assessment with no
+ * extended data comes back as the exact same array it went in as.
+ */
+function blendExtended(baseGroups, extended) {
+  if (!extended || Object.keys(extended).length === 0) return baseGroups;
+  return baseGroups.map(fn => {
+    const ext = extended[fn.name];
+    if (!ext) return fn;
+    const blended = (fn.score * 1 + ext.score * EXTENDED_BLEND_WEIGHT) / (1 + EXTENDED_BLEND_WEIGHT);
+    return { ...fn, score: clamp(blended), factors: [...fn.factors, ...ext.factors] };
+  });
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -312,19 +343,10 @@ function computeNistPosture(assessment) {
   // No extendedChecklist data → blendedFunctions === functions, identical
   // object references, so an assessment that's never touched this feature
   // takes the exact code path it took before this feature existed.
-  let blendedFunctions = functions;
   const extendedAnswers = assessment?.extendedChecklist || null;
-  if (extendedAnswers && Object.keys(extendedAnswers).length > 0) {
-    const extended = scoreFromExtendedChecklist(extendedAnswers);
-    if (Object.keys(extended).length > 0) {
-      blendedFunctions = functions.map(fn => {
-        const ext = extended[fn.name];
-        if (!ext) return fn;
-        const blended = (fn.score * 1 + ext.score * EXTENDED_BLEND_WEIGHT) / (1 + EXTENDED_BLEND_WEIGHT);
-        return { ...fn, score: clamp(blended), factors: [...fn.factors, ...ext.factors] };
-      });
-    }
-  }
+  const blendedFunctions = extendedAnswers
+    ? blendExtended(functions, scoreFromExtendedChecklist(extendedAnswers))
+    : functions;
 
   let overall = blendedFunctions.reduce(
     (sum, fn) => sum + fn.score * (FUNCTION_WEIGHTS[fn.name] || 0), 0
@@ -407,7 +429,17 @@ export function computePostureForLens(assessment, lens = "nist") {
     return { ...base, lens: "nist", frameworkLens: "NIST CSF" };
   }
 
-  const cisFunctions = scoreCisFromChecklist(checklist);
+  // Extended (paid-tier) answers blend into the CIS hygiene areas the same
+  // way they blend into NIST's functions above — otherwise a CIS-lens client
+  // could complete the whole Extended Assessment and watch their headline
+  // score never move, while the NIST view of the same answers did move.
+  const extendedAnswers = assessment?.extendedChecklist || null;
+  const cisFunctions = blendExtended(
+    scoreCisFromChecklist(checklist),
+    extendedAnswers
+      ? scoreFromExtendedChecklist(extendedAnswers, (q) => EXTENDED_CIS_GROUP_BY_FACTOR[q.factor])
+      : null,
+  );
   const cisOverall = clamp(
     cisFunctions.reduce((s, fn) => s + fn.score * (CIS_GROUPS[fn.name]?.weight || 0), 0)
     + complianceAdjustment(assessment).adjustment
@@ -465,6 +497,10 @@ const CATEGORY_BY_FACTOR = {
   monitoring: "Network", emailSecurity: "Network",
   incidentResponse: "Compliance", responseSupport: "Compliance",
   backups: "Data", disasterRecovery: "Data",
+  // Extended (paid-tier) factors — see extendedChecklist.js. Without these,
+  // an MFA-enforcement finding fell through to the "Compliance"/"Leadership"
+  // default and was shown to the client filed under the wrong team.
+  mfaDepth: "Identity", cloudPosture: "Network",
 };
 const OWNER_BY_CATEGORY = {
   Identity: "IT", Endpoint: "IT", Network: "IT",

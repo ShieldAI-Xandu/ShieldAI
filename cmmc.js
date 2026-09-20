@@ -213,7 +213,11 @@ export function assessCmmc(checklistAnswers = {}, { level = null, profile = null
     applicable: true,
     level: {
       ...spec,
-      practiceCount: lvl === 1 ? spec.controls.length : NIST800171_CONTROLS.length,
+      // Level 3 is the 110 plus the 800-172 enhanced layer actually assessed
+      // above — reporting a bare 110 here would contradict summary.inScope
+      // in this same response.
+      practiceCount: lvl === 1 ? spec.controls.length
+        : NIST800171_CONTROLS.length + (enhanced ? enhanced.summary.total : 0),
       confident: suggestion.confident,
       reason: suggestion.reason,
     },

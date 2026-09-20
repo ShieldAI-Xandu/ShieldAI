@@ -15645,11 +15645,14 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
         const d = await res.json();
         if (!live) return;
         setExtQuestions(Array.isArray(d.questions) ? d.questions : []);
-        // Answers come back as { label, score } / { value } / { label, value } —
-        // the form only needs the raw selected label/value per question id.
+        // Answers are stored raw — the selected option label for a choice
+        // question, the typed text for a free-text one — which is exactly
+        // what this form binds to and what POST expects back. The object
+        // forms are only what toExtendedEvidence() produces for scoring
+        // consumers; handle them too rather than assume which one arrived.
         const flat = {};
         for (const [id, a] of Object.entries(d.answers || {})) {
-          flat[id] = a?.label ?? a?.value ?? "";
+          flat[id] = typeof a === "string" ? a : (a?.label ?? a?.value ?? "");
         }
         setExtAnswers(flat);
       } finally {

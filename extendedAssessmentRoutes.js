@@ -42,13 +42,6 @@ function mergeSoftwareInventoryIntoTechStack(data, rawInventory) {
   data.techStack = [...merged];
 }
 
-function latestAssessmentFor(db, userId) {
-  const list = (db.data.assessments || []).filter(a => a.userId === userId);
-  if (!list.length) return null;
-  return list.reduce((best, a) =>
-    !best || new Date(a.updatedAt || a.createdAt) > new Date(best.updatedAt || best.createdAt) ? a : best, null);
-}
-
 export function registerExtendedAssessmentRoutes(app, { db, requireAuth, gate }) {
   const ALL_QUESTION_IDS = new Set([
     ...EXTENDED_SCORING_CHECKLIST.map(q => q.id),
@@ -92,15 +85,21 @@ export function registerExtendedAssessmentRoutes(app, { db, requireAuth, gate })
     record.data.extendedChecklist = { ...(record.data.extendedChecklist || {}), ...answers };
     mergeSoftwareInventoryIntoTechStack(record.data, answers.softwareInventory);
     record.updatedAt = nowIso();
-    await db.write();
 
     const after = computePostureScore(record.data);
 
     // The payoff, made visible: an explicit before/after rather than a
     // silent score jump the client discovers later on a chart.
+    //
+    // recordPostureSnapshot() only mutates db.data — the single write below
+    // has to come AFTER it, or the snapshot never reaches disk and the
+    // trend line silently never gains the point. (CLAUDE.md's "always await
+    // db.write() inside async handlers" rule, which an earlier version of
+    // this route got wrong by writing first and snapshotting second.)
     if (after.postureScore !== before.postureScore) {
       recordPostureSnapshot(db, req.userId, after.postureScore, after.postureLevel, "extended_assessment");
     }
+    await db.write();
 
     res.json({
       answers: record.data.extendedChecklist,

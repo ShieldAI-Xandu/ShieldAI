@@ -875,6 +875,23 @@ function syncCisImplementationGroup(data) {
   return data;
 }
 
+// These routes blind-merge whatever `data` the client sends, which is fine for
+// the fields the assessment screens actually own — but `extendedChecklist` is
+// NOT one of them. It belongs exclusively to extendedAssessmentRoutes.js,
+// whose GET and POST are both gated on the paid `extendedAssessment`
+// capability, and riskEngine.js blends it straight into the posture score.
+// Without this strip, a Free client could PATCH the key in directly and buy
+// themselves the paid scoring path for nothing. The dedicated route stays the
+// only way in. (`techStack` deliberately is NOT stripped — the Technology
+// Stack card on Edit Assessment is ungated by design and legitimately writes
+// it at every tier.)
+const CLIENT_UNWRITABLE_ASSESSMENT_KEYS = ["extendedChecklist"];
+function stripGatedAssessmentKeys(data) {
+  if (!data || typeof data !== "object") return data;
+  for (const key of CLIENT_UNWRITABLE_ASSESSMENT_KEYS) delete data[key];
+  return data;
+}
+
 app.post("/api/assessments", requireAuth, async (req, res) => {
   try {
     const id = randomUUID();
@@ -882,7 +899,7 @@ app.post("/api/assessments", requireAuth, async (req, res) => {
       id,
       userId: req.userId,
       createdAt: new Date().toISOString(),
-      data: syncCisImplementationGroup(req.body),
+      data: syncCisImplementationGroup(stripGatedAssessmentKeys(req.body)),
     };
     db.data.assessments.push(record);
     await db.write();
@@ -950,7 +967,10 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   // Merge incoming data into the stored assessment data.
   // Frontend sends the full updated `data` object.
   if (req.body.data && typeof req.body.data === "object") {
-    record.data = syncCisImplementationGroup({ ...record.data, ...req.body.data });
+    // Strip from the INCOMING data only, before the merge — stripping after
+    // would delete the client's legitimately-saved extended answers that the
+    // gated route wrote.
+    record.data = syncCisImplementationGroup({ ...record.data, ...stripGatedAssessmentKeys(req.body.data) });
   }
   record.updatedAt = new Date().toISOString();
   await db.write();
