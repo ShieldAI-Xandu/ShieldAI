@@ -32,10 +32,16 @@ console.log("\nNot-applicable path:");
 const na = assessCmmc({}, { profile: { handlesCui: false, handlesFci: false } });
 ok(na.applicable === false, "returns applicable:false, not a fake assessment");
 
-console.log("\nLevel 3 states what it does NOT cover:");
+console.log("\nLevel 3 assesses the real NIST SP 800-172 enhanced requirements:");
 const a3 = assessCmmc({}, { level: 3 });
 ok(a3.level3Note !== null, "Level 3 note present");
-ok(/800-172/.test(a3.level3Note), "explicit that the 800-172 layer isn't modelled");
+ok(/800-172/.test(a3.level3Note), "level3Note mentions 800-172");
+ok(/DCMA DIBCAC/.test(a3.level3Note), "explicit that programme-level applicability is the government's call, not self-determined");
+ok(a3.enhancedRequirements !== null, "enhancedRequirements block present at Level 3");
+ok(a3.enhancedRequirements.total === 35, `all 35 enhanced requirements assessed (got ${a3.enhancedRequirements.total})`);
+ok(a3.summary.inScope === 110 + 35, `Level 3 inScope is Level 2's 110 plus all 35 enhanced (got ${a3.summary.inScope})`);
+ok(assessCmmc({}, { level: 2 }).enhancedRequirements === null, "Level 2 has no enhancedRequirements block");
+ok(assessCmmc({}, { level: 2 }).summary.inScope === 110, "Level 2 inScope stays exactly 110 — untouched by the 800-172 layer");
 
 console.log("\nWraps 800-171, duplicates nothing:");
 ok(/adds the assessment and certification regime, not new controls/.test(a2.basisNote), "CMMC adds no controls");

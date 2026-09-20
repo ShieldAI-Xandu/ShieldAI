@@ -58,6 +58,7 @@ import {
   NIST800171_FAMILIES,
   assessNist800171,
 } from "./nist800171.js";
+import { assessNist800172 } from "./nist800172.js";
 
 export const CMMC_META = {
   id: "cmmc",
@@ -121,12 +122,11 @@ export const CMMC_LEVELS = {
     protects: "CUI on the highest-priority programmes",
     practiceCount: null,
     assessment: "Government-led assessment by DCMA DIBCAC every three years.",
-    basis: "Level 2's 110 requirements plus a selected subset of NIST SP 800-172 enhanced security requirements.",
+    basis: "Level 2's 110 requirements plus a selected subset of NIST SP 800-172's 35 enhanced security requirements.",
     whoNeedsIt: "A small number of contractors on the DoD's highest-priority programmes.",
     controls: null,
     note:
-      "We assess the Level 2 foundation. The 800-172 enhanced requirements layered on top are not modelled here — they are selected per programme, and guessing at which apply would be worse than saying so.",
-    partialCoverage: true,
+      "We assess the Level 2 foundation plus all 35 NIST SP 800-172 enhanced requirements (nist800172.js) for gap-analysis purposes. Which enhanced requirements actually apply to your programme is selected by the government (DCMA DIBCAC), not self-determined — see enhancedRequirements in the assessment result.",
   },
 };
 
@@ -180,6 +180,12 @@ export function assessCmmc(checklistAnswers = {}, { level = null, profile = null
 
   const spec = CMMC_LEVELS[lvl];
   const base = assessNist800171(checklistAnswers);
+  // Level 3 layers all 35 NIST SP 800-172 enhanced requirements on top of the
+  // Level 2 foundation — kept as its own `enhancedRequirements` result rather
+  // than merged into `families`, since both 800-171 and 800-172 reuse the
+  // same family ids (AC, AT, CM, ...) and merging would silently double up
+  // or overwrite one layer's controls under the other's family entry.
+  const enhanced = lvl === 3 ? assessNist800172(checklistAnswers) : null;
 
   // Level 1 assesses only its 17 practices.
   const scopeIds = lvl === 1 ? new Set(spec.controls) : null;
@@ -195,7 +201,9 @@ export function assessCmmc(checklistAnswers = {}, { level = null, profile = null
     .filter(Boolean);
 
   const all = families.flatMap(f => f.controls);
-  const scored = all.filter(c => c.status !== "unknown");
+  const enhancedAll = enhanced ? enhanced.families.flatMap(f => f.controls) : [];
+  const combinedAll = [...all, ...enhancedAll];
+  const scored = combinedAll.filter(c => c.status !== "unknown");
   const met = scored.filter(c => c.status === "met");
   const gaps = scored.filter(c => c.status === "gap");
 
@@ -212,12 +220,12 @@ export function assessCmmc(checklistAnswers = {}, { level = null, profile = null
     levelSuggestion: suggestion,
     families,
     summary: {
-      inScope: all.length,
+      inScope: combinedAll.length,
       assessed: scored.length,
       met: met.length,
       partial: scored.filter(c => c.status === "partial").length,
       gaps: gaps.length,
-      unknown: all.length - scored.length,
+      unknown: combinedAll.length - scored.length,
       coveragePct: scored.length ? Math.round((met.length / scored.length) * 100) : null,
     },
     topGaps: gaps.slice(0, 5).map(g => ({ id: g.id, family: g.family, covers: g.covers })),
@@ -226,17 +234,31 @@ export function assessCmmc(checklistAnswers = {}, { level = null, profile = null
     sprs: base.sprs,
     requiredArtifacts: base.requiredArtifacts,
 
+    // The 35 NIST SP 800-172 enhanced requirements, kept as their own block
+    // (not merged into `families`) since both modules reuse family ids like
+    // "AC"/"SC"/"SI" — see the comment above `enhanced` for why.
+    enhancedRequirements: enhanced ? {
+      total: enhanced.summary.total,
+      assessed: enhanced.summary.assessed,
+      met: enhanced.summary.met,
+      partial: enhanced.summary.partial,
+      gaps: enhanced.summary.gaps,
+      unknown: enhanced.summary.unknown,
+      families: enhanced.families,
+      topGaps: enhanced.topGaps,
+    } : null,
+
     level3Note: lvl === 3
-      ? "We assess the Level 2 foundation (the 110 requirements of 800-171 Rev 2). The NIST SP 800-172 enhanced requirements that Level 3 adds are selected per programme and are not modelled here — your DCMA DIBCAC assessment covers them."
+      ? "We assess the Level 2 foundation (110 requirements) plus all 35 NIST SP 800-172 enhanced requirements (see enhancedRequirements) for gap-analysis purposes. Which enhanced requirements actually apply to your specific programme is selected by the government (DCMA DIBCAC) — not self-determined. Treat an unmet enhanced requirement as something to discuss with your contracting officer, not a certification failure in itself."
       : null,
 
-    basisNote: `CMMC Level ${lvl} is built on ${NIST800171_META.fullName}. We assess against those requirements — CMMC adds the assessment and certification regime, not new controls.`,
+    basisNote: `CMMC Level ${lvl} is built on ${NIST800171_META.fullName}${lvl === 3 ? " plus NIST SP 800-172's enhanced requirements" : ""}. We assess against those requirements — CMMC adds the assessment and certification regime, not new controls.`,
     revisionNote: CMMC_META.revisionNote,
     deadlineNote: CMMC_META.deadline,
     assessmentNote: spec.assessment,
 
     methodology:
-      "Requirements are assessed from your assessment answers using a fixed mapping to NIST SP 800-171 Rev 2 — not by an AI's interpretation. Requirements with no corresponding assessment question are reported as 'not yet assessed' rather than assumed implemented.",
+      "Requirements are assessed from your assessment answers using a fixed mapping to NIST SP 800-171 Rev 2 (and, at Level 3, NIST SP 800-172) — not by an AI's interpretation. Requirements with no corresponding assessment question are reported as 'not yet assessed' rather than assumed implemented.",
     disclaimer:
       "This is a gap analysis, not a CMMC assessment and not a certification. Certification at Level 2 generally requires a C3PAO; Level 3 is assessed by DCMA DIBCAC. Your contract determines your level — confirm with your contracting officer.",
   };
