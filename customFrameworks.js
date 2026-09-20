@@ -82,10 +82,40 @@ export async function deleteFramework(db, id) {
 // Build a prompt block describing any selected custom frameworks + their real
 // controls, so the compliance step assesses against them (parallel to the CIS
 // block). Returns "" if none of the selected frameworks are custom.
+/**
+ * The prompt block describing a client's selected CUSTOM frameworks.
+ *
+ * NOT CURRENTLY CALLED. Nothing imports this function — custom frameworks are
+ * registered by an admin and tracked through complianceTracking.js, but they
+ * never reach the gap-analysis prompt. Wiring that up is a product decision
+ * (custom frameworks would also start consuming paid framework slots — see
+ * frameworkEntitlements.js), not a fix, so this stays uncalled for now. It's
+ * kept correct rather than deleted because the registration and tracking
+ * halves of the feature are live and someone will reconnect this.
+ *
+ * `selectedFrameworks` has two historical shapes: an array of { id, name }
+ * objects (what the pickers write today) and an array of plain name strings
+ * (older records). This used to map entries straight through frameworkKey(),
+ * which stringifies an object to "[object Object]" — so under the current
+ * shape it matched nothing at all and silently returned "". Normalise first.
+ * frameworkEntitlements.normaliseSelection() handles the same two shapes for
+ * the same reason.
+ */
 export function buildCustomFrameworkBlock(db, selectedFrameworks) {
-  const selected = (Array.isArray(selectedFrameworks) ? selectedFrameworks : []).map(frameworkKey);
+  const selected = (Array.isArray(selectedFrameworks) ? selectedFrameworks : [])
+    .flatMap(f => {
+      if (typeof f === "string") return [frameworkKey(f)];
+      // Match on either id or name: a custom framework is selected by name,
+      // but getFramework() accepts either, and a caller shouldn't have to know
+      // which one a given record happens to carry.
+      return [f?.id, f?.name].filter(Boolean).map(frameworkKey);
+    })
+    .filter(Boolean);
   if (selected.length === 0) return "";
-  const matches = (db.data.customFrameworks || []).filter(f => selected.includes(frameworkKey(f.name)));
+  // Match on name OR id, mirroring getFramework() above — comparing only
+  // against the name meant a selection recorded by id alone found nothing.
+  const matches = (db.data.customFrameworks || []).filter(f =>
+    selected.includes(frameworkKey(f.name)) || selected.includes(frameworkKey(f.id)));
   if (matches.length === 0) return "";
 
   let block = "\n\nCUSTOM FRAMEWORKS (assess against these EXACT controls — do not invent controls):";
