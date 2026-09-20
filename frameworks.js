@@ -40,6 +40,7 @@ import { NIST80053_META, assessNist80053, baselineGuidance, NIST80053_BASELINES 
 import { STATE_PRIVACY_META, assessStatePrivacy, applicabilityPrompt, STATE_ROSTER } from "./statePrivacy.js";
 import { HIPAA_SECURITY_META, assessHipaaSecurity } from "./hipaaSecurityRule.js";
 import { CIS_VERSION, assessCis } from "./cisControls.js";
+import { GDPR_META, assessGdpr, applicabilityPrompt as gdprApplicabilityPrompt } from "./gdpr.js";
 
 export const DEPTH = {
   CONTROL_MAPPED: "control-mapped",
@@ -217,20 +218,20 @@ export const FRAMEWORKS = [
     note: "Applies to far more businesses than the name suggests — auto dealers, tax preparers, accountants, mortgage brokers.",
   },
 
-  // ── AI-assisted ───────────────────────────────────────────
-  // Honest about what these are. Each is a real candidate for promotion to
-  // control-mapped; the pattern is established by HIPAA and FTC Safeguards.
-
-
-
   {
     id: "gdpr",
-    name: "GDPR",
-    fullName: "EU General Data Protection Regulation",
-    depth: DEPTH.AI_ASSISTED,
-    desc: "Contextual gap analysis against the core data-protection obligations.",
-    audience: "Businesses handling personal data of people in the EU/EEA.",
-    url: "https://gdpr.eu",
+    name: GDPR_META.shortName,
+    fullName: GDPR_META.fullName,
+    depth: DEPTH.CONTROL_MAPPED,
+    desc: "The 29 obligations the Regulation actually imposes — lawful basis, transparency, data subject rights, Article 32 security, the 72-hour breach clock, processor contracts, and transfers.",
+    audience: GDPR_META.whoMustComply,
+    citation: GDPR_META.citation,
+    url: GDPR_META.url,
+    meta: GDPR_META,
+    assess: assessGdpr,
+    helpers: { applicabilityPrompt: gdprApplicabilityPrompt },
+    legalReviewRequired: true,
+    note: "Assessed against the Regulation's obligations, Article by Article. We never determine whether GDPR applies to you — Article 3's territorial scope is a legal question with turnover-based fines attached, so applicability output is a prompt to get advice. See this framework's scoping questionnaire for the controller/processor split.",
   },
 
   {

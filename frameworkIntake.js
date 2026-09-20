@@ -348,6 +348,44 @@ export const FRAMEWORK_INTAKE = {
       "Selecting a state sharpens which obligations we score and which statute we cite. It is not a determination that state's law applies to you — that turns on resident counts, revenue, and data-sale volume this assessment doesn't collect. See the Applicability note on this framework's page.",
   },
 
+  "gdpr": {
+    frameworkId: "gdpr",
+    title: "GDPR scoping",
+    why: "Two questions, and both change the assessment rather than decorate it. The first is the one thing we refuse to decide for you — whether Article 3 reaches you — and the second decides whether the controller-only Articles (13, 14 and 35) are scored against you or marked not applicable.",
+    questions: [
+      {
+        id: "euDataSubjects",
+        question: "Do you offer goods or services to people in the EU/EEA, or monitor their behaviour?",
+        help: "Article 3(2) is wider than most expect and has nothing to do with where you're incorporated: shipping to the EU, pricing in euros, an EU-market language version, or analytics and ad retargeting that profile EU visitors all count. Answer \"not sure\" and we assess you anyway — under-scoping GDPR is the expensive direction to be wrong in.",
+        options: [
+          { label: "Yes — we have EU/EEA customers, users, or visitors we track", value: true },
+          { label: "No — we don't, and we've confirmed that", value: false },
+          { label: "Not sure", value: null },
+        ],
+      },
+      {
+        id: "role",
+        question: "Do you decide why personal data is processed, or only process it on someone else's instructions?",
+        help: "A controller decides the purposes and means; a processor acts on a controller's documented instructions. Most businesses are controllers for their own employee and customer data even when they're processors for a client's — which is what \"both\" covers.",
+        appliesWhen: { euDataSubjects: [true, null] },
+        options: [
+          { label: "Controller — we decide why and how", value: "controller" },
+          { label: "Processor only — we act on a client's instructions", value: "processor" },
+          { label: "Both, depending on the data", value: "both" },
+          { label: "Not sure", value: null },
+        ],
+      },
+    ],
+    toOpts(answers = {}) {
+      return {
+        euDataSubjects: answers.euDataSubjects === undefined ? null : answers.euDataSubjects,
+        role: answers.role ?? null,
+      };
+    },
+    suggestionNote:
+      "Answering \"no\" to the first question stops us scoring you against GDPR — it is not a finding that GDPR doesn't apply to you. Article 3 is a legal test with turnover-based fines attached, and settling it takes a privacy solicitor or an experienced DPO, not a questionnaire.",
+  },
+
   "ftc-safeguards": {
     frameworkId: "ftc-safeguards",
     title: "FTC Safeguards scoping",
@@ -418,6 +456,7 @@ export function defaultsFor(frameworkId) {
     "hipaa-security": "Assessed as a provider, plan, or business associate — not a clearinghouse.",
     "ftc-safeguards": "No exemption applied — all nine elements assessed in full.",
     "state-privacy": "No state selected — assessed against the common-obligation template shared across states, not any one state's statute.",
+    "gdpr": "Assessed as a controller against the full 29 obligations, with no applicability question answered — the broader, conservative reading.",
   };
   return defaults[frameworkId] || "Assessed with the module's documented defaults.";
 }

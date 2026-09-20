@@ -34,12 +34,56 @@ ok(evaluateFramework("iso-27001", answers) !== null, "legacy 'iso-27001' still r
 ok(listFrameworkIds().includes("hipaa"), "list uses legacy ids for the UI");
 ok(!listFrameworkIds().includes("hipaa-security"), "list doesn't leak registry ids");
 
-console.log("\nNot-control-mapped frameworks report honestly:");
+console.log("\nGDPR is control-mapped now, not an AI gap analysis:");
 const gdpr = evaluateFramework("gdpr", answers);
-ok(gdpr.notControlMapped === true, "GDPR flagged notControlMapped");
-ok(gdpr.summary.total === 0 && gdpr.requirements.length === 0, "no fabricated control walkthrough");
-ok(gdpr.summary.compliancePct === null, "null pct, not 0% — 'not assessed' != 'failing'");
-ok(/interpretation/.test(gdpr.why), "explains it's the model's interpretation");
+ok(gdpr.notControlMapped !== true, "GDPR is no longer flagged notControlMapped");
+ok(gdpr.depth === DEPTH.CONTROL_MAPPED, "registry depth is control-mapped");
+ok(gdpr.summary.total === 29, `all 29 obligations walked (got ${gdpr.summary.total})`);
+ok(gdpr.requirements.every(r => /^Article/.test(r.citation || "")), "every obligation carries an Article citation");
+ok(gdpr.requirements.every(r => r.controls.length > 0), "every obligation traces to real assessment answers");
+ok(/legal advice/i.test(gdpr.detail?.disclaimer || ""), "carries the not-legal-advice disclaimer");
+ok(getFrameworkDef("gdpr").legalReviewRequired === true, "flagged as needing legal review");
+ok(FRAMEWORKS.every(f => f.depth !== DEPTH.AI_ASSISTED), "no framework is left at ai-assisted depth");
+
+console.log("\nGDPR scope - we assess, we never decide applicability:");
+const gdprOut = evaluateFramework("gdpr", answers, { euDataSubjects: false });
+ok(gdprOut.notApplicable === true, "confirmed no EU data subjects -> notApplicable, not a wall of red");
+ok(gdprOut.summary.compliancePct === null, "scoped out -> null pct, never 0%");
+ok(!!gdprOut.summary.pctSuppressedReason, "says why there's no percentage");
+ok(/confirm/i.test(gdprOut.detail?.confirmFirst || ""), "tells them to confirm it before relying on it");
+ok(remediationContext("gdpr", "GDPR-1", answers, { euDataSubjects: false }) === null,
+   "no remediation advice for a framework we were told is out of scope");
+
+const gdprUnknown = evaluateFramework("gdpr", answers, { euDataSubjects: null });
+ok(gdprUnknown.summary.total === 29, "unsure about scope -> assessed anyway, the conservative reading");
+
+const gdprProcessor = evaluateFramework("gdpr", answers, { euDataSubjects: true, role: "processor" });
+ok(gdprProcessor.excludedCount === 3, `processor-only: 3 controller obligations excluded (got ${gdprProcessor.excludedCount})`);
+ok(gdprProcessor.excluded.every(e => /controller/i.test(e.reason)), "each exclusion says why it's the controller's duty");
+ok(gdprProcessor.summary.total === 26, `processor-only: 26 obligations assessed (got ${gdprProcessor.summary.total})`);
+ok(!gdprProcessor.requirements.some(r => ["GDPR-6", "GDPR-7", "GDPR-25"].includes(r.id)),
+   "Articles 13, 14 and 35 aren't scored against a pure processor");
+
+console.log("\nGDPR has no B2B carve-out - the trap statePrivacy.js sets:");
+ok(/no B2B carve-out|does not exempt/i.test(gdpr.detail?.b2bNote || ""),
+   "says plainly that B2B doesn't exempt you");
+const gdprB2B = evaluateFramework("gdpr", { ...answers, personalDataCategories: "None - we're B2B and hold no consumer data" });
+ok(gdprB2B.summary.total === 29 && gdprB2B.summary.assessed > 0,
+   "a B2B answer does NOT suppress the GDPR assessment the way it does state privacy");
+
+console.log("\nGDPR intake asks the two questions that change the assessment:");
+ok(frameworksWithIntake().includes("gdpr"), "GDPR has a scoping questionnaire");
+ok(visibleQuestions("gdpr", {}).length === 1, "territorial scope asked first, on its own");
+ok(visibleQuestions("gdpr", { euDataSubjects: true }).some(q => q.id === "role"),
+   "controller/processor asked once they're in scope");
+ok(!visibleQuestions("gdpr", { euDataSubjects: false }).some(q => q.id === "role"),
+   "not asked to self-classify for a framework they've scoped out");
+ok(toAssessOpts("gdpr", { euDataSubjects: true, role: "processor" }).role === "processor",
+   "intake answers reach the module");
+ok(toAssessOpts("gdpr", {}).euDataSubjects === null, "skipped intake -> null, not false");
+ok(/controller/i.test(defaultsFor("gdpr")), "states what skipping the intake assumes");
+ok(/legal|solicitor|DPO/i.test(intakeFor("gdpr")?.suggestionNote || ""),
+   "intake refuses to be the applicability determination");
 
 console.log("\nPercentages are over ASSESSED, never over total:");
 const empty = evaluateFramework("iso-27001", {});
@@ -76,7 +120,7 @@ const ecomQs = visibleQuestions("pci-dss", { channel: "ecommerce" }).map(q => q.
 const cardQs = visibleQuestions("pci-dss", { channel: "card-present" }).map(q => q.id);
 ok(ecomQs.includes("ecommerceIntegration") && !ecomQs.includes("terminalType"), "e-commerce path skips terminal questions");
 ok(cardQs.includes("terminalType") && !cardQs.includes("ecommerceIntegration"), "card-present path skips iframe questions");
-ok(frameworksWithIntake().length === 9, `9 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
+ok(frameworksWithIntake().length === 10, `10 frameworks have scoping intake (got ${frameworksWithIntake().length})`);
 const st = intakeStatus("pci-dss", { isServiceProvider: false });
 ok(st.complete === false && st.missing.length > 0, "incomplete intake reports what's missing");
 ok(/worst case/.test(st.defaultIfSkipped), "states what an unscoped assessment assumed");

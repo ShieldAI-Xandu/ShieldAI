@@ -188,9 +188,11 @@ export function registerComplianceRoutes(app, {
 
   // ── Framework catalogue ──
   app.get("/api/compliance/frameworks", requireAuth, (req, res) => {
-    // depth is the honesty flag the picker needs: a client choosing GDPR should
-    // know it gets an AI-assisted gap analysis rather than a control-level
-    // walkthrough BEFORE they pick it, not after.
+    // depth is the honesty flag the picker needs: a client should know whether
+    // a framework gets a real control-level walkthrough BEFORE they pick it,
+    // not after. Every framework served today is control-mapped or (NIST CSF)
+    // presentational over the posture score; the flag still ships because the
+    // moment it stops being true is exactly when it has to be visible.
     //
     // requirementCount previously read f.requirements.length off the
     // back-compat FRAMEWORKS object, whose `requirements` array is always
@@ -209,7 +211,8 @@ export function registerComplianceRoutes(app, {
         citation: def.citation,
         note: def.note,
         legalReviewRequired: def.legalReviewRequired || false,
-        requirementCount: report && !report.notControlMapped ? report.summary.total : null,
+        requirementCount: report && !report.notControlMapped && !report.notApplicable
+          ? report.summary.total : null,
       };
     }));
   });

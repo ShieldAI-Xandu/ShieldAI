@@ -233,8 +233,11 @@ export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
 
   const def = getFrameworkDef(frameworkId);
 
-  // Not control-mapped (GDPR, which scores via an AI-assisted gap analysis
-  // instead): report honestly rather than fabricating a control walkthrough.
+  // Not control-mapped: report honestly rather than fabricating a control
+  // walkthrough. Nothing in the registry sits here today — GDPR was the last
+  // ai-assisted framework and it's control-mapped now (gdpr.js) — but the
+  // branch stays, because the honest-reporting path is the thing that makes
+  // adding a new framework at a shallower depth safe.
   if (!isControlMapped(rid)) {
     return {
       framework: def,
@@ -254,6 +257,40 @@ export function evaluateFramework(frameworkId, checklist = {}, opts = {}) {
 
   const evidence = toEvidence(checklist);
   const result = f.assess(evidence, opts);
+
+  // A module can decline the whole assessment on scope, not just decline a
+  // percentage. GDPR does this when the client has confirmed they don't offer
+  // goods or services to people in the EU/EEA and don't monitor them: rather
+  // than render 29 obligations in red for a business that owes none of them,
+  // assessGdpr() returns applicable:false with its reasoning, and this carries
+  // that reasoning through instead of flattening it into an empty report.
+  //
+  // The distinction matters and the shape preserves it: `notApplicable` is
+  // "we were told this is out of scope", which is not the same claim as
+  // `notControlMapped` ("we can't assess this deeply") or an unanswered
+  // assessment ("we haven't asked yet"). All three produce a null percentage;
+  // only one of them means the client is fine.
+  if (result && result.applicable === false) {
+    return {
+      framework: def,
+      depth: f.depth,
+      notApplicable: true,
+      summary: {
+        total: 0, compliant: 0, partial: 0, gap: 0, unknown: 0, assessed: 0,
+        compliancePct: null, readinessPct: null,
+        pctSuppressedReason: result.applicabilityNote
+          || "This framework was scoped out of your assessment.",
+      },
+      sectionNames: [],
+      requirements: [],
+      excluded: [],
+      excludedCount: 0,
+      why: result.applicabilityNote || "Scoped out — this framework wasn't assessed.",
+      // confirmFirst, the disclaimer, and the module's reasoning all live here.
+      detail: result,
+    };
+  }
+
   const { noun, groups } = normaliseGroups(result);
 
   const requirements = [];
@@ -358,6 +395,7 @@ export function evaluateAllFrameworks(checklist = {}, opts = {}) {
       short: r.framework.short,
       depth: r.depth,
       notControlMapped: r.notControlMapped || false,
+      notApplicable: r.notApplicable || false,
       ...r.summary,
     };
   }).filter(Boolean);
@@ -369,7 +407,7 @@ export function evaluateAllFrameworks(checklist = {}, opts = {}) {
  */
 export function remediationContext(frameworkId, requirementId, checklist = {}, opts = {}) {
   const report = evaluateFramework(frameworkId, checklist, opts);
-  if (!report || report.notControlMapped) return null;
+  if (!report || report.notControlMapped || report.notApplicable) return null;
   const req = report.requirements.find(r => r.id === requirementId);
   if (!req) return null;
 

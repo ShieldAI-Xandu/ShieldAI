@@ -7285,7 +7285,10 @@ function ReportsSection({ hasFullReports = true, hasEvidenceAccess = false }) {
     authFetch(`${API_BASE}/api/compliance/overview`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        const list = (d?.frameworks || []).filter(f => !f.notControlMapped);
+        // notApplicable is excluded too: a framework the client scoped out
+        // (GDPR with no EU data subjects) has no controls to evidence, so
+        // offering it here would build an empty packet.
+        const list = (d?.frameworks || []).filter(f => !f.notControlMapped && !f.notApplicable);
         setPacketFrameworks(list);
         if (list.length && !packetFrameworkId) setPacketFrameworkId(list[0].id);
       })
@@ -9855,7 +9858,13 @@ function TrustPage({ token }) {
                       <div key={f.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
                         padding:"11px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
                         <span style={{fontSize:13.5,color:C.text,fontWeight:600}}>{safeText(f.name)}</span>
-                        {f.notControlMapped || f.compliancePct == null ? (
+                        {/* "Not applicable" and "in progress" both have no
+                            percentage, but they are opposite news for a client
+                            — one is done, the other is unstarted. Don't collapse
+                            them into the same badge. */}
+                        {f.notApplicable ? (
+                          <Badge label="Not applicable" color={C.textMut}/>
+                        ) : f.notControlMapped || f.compliancePct == null ? (
                           <Badge label="In progress" color={C.textMut}/>
                         ) : (
                           <Badge label={`${f.compliancePct}% addressed`} color={f.compliancePct >= 80 ? C.green : f.compliancePct >= 50 ? C.amber : C.red}/>
@@ -11680,7 +11689,7 @@ const COMPLIANCE_FRAMEWORKS_FALLBACK = [
   { id:"hipaa",    name:"HIPAA",         desc:"Health data privacy & security (US healthcare)." },
   { id:"pci-dss",  name:"PCI DSS",       desc:"Payment card data security." },
   { id:"soc2",     name:"SOC 2",         desc:"Trust Services Criteria for service organizations." },
-  { id:"gdpr",     name:"GDPR",          desc:"EU personal data protection." },
+  { id:"gdpr",     name:"GDPR",          desc:"EU personal data protection - 29 obligations, Article by Article." },
   { id:"iso27001", name:"ISO 27001",     desc:"International information security management standard." },
 ];
 
@@ -11733,8 +11742,9 @@ function useSecurityChecklist() {
 // The live framework catalogue, straight from the registry that actually
 // assesses them. Depth ("control-mapped" vs "ai-assisted") comes through so the
 // picker can be honest about which frameworks get a real control walkthrough and
-// which get an AI gap analysis — a client choosing GDPR should know before they
-// pick it, not after.
+// which get an AI gap analysis. Every framework served today is control-mapped,
+// GDPR included; the badge stays wired because the moment that stops being true
+// is exactly when a client needs to see it before they pick, not after.
 let _fwCatalogCache = null;
 function useFrameworkCatalog() {
   const [list, setList] = useState(_fwCatalogCache);
