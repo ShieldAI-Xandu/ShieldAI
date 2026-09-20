@@ -18,18 +18,36 @@ export default function Modal({ open, onClose, title, children, footer, closeOnB
   const titleId = useId();
   const panelRef = useRef(null);
 
+  // onClose is read through a ref, NOT taken as an effect dependency.
+  //
+  // This looks like boilerplate and isn't. Every call site passes an inline
+  // arrow (`onClose={()=>setAttachTask(null)}`), so onClose is a brand-new
+  // function identity on every render of the component that owns the modal.
+  // With onClose in the dependency array below, typing a single character
+  // into any field inside a modal re-rendered the owner, changed that
+  // identity, re-ran the effect, and re-fired panelRef.focus() — yanking the
+  // caret out of the input and onto the dialog panel. That made the evidence
+  // "Attach proof" note box, and every other in-modal text field, impossible
+  // to type in.
+  //
+  // The ref keeps Escape calling the CURRENT onClose while letting the effect
+  // depend only on `open`, so focus and the body-scroll lock fire on a real
+  // open/close transition and nothing else.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; });
+
   useEffect(() => {
     if (!open) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     panelRef.current?.focus();
-    const onKeyDown = (e) => { if (e.key === "Escape") onClose?.(); };
+    const onKeyDown = (e) => { if (e.key === "Escape") onCloseRef.current?.(); };
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.body.style.overflow = prevOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
