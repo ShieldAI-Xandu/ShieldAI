@@ -973,6 +973,16 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
   // Merge incoming data into the stored assessment data.
   // Frontend sends the full updated `data` object.
   if (req.body.data && typeof req.body.data === "object") {
+    // Snapshot posture before the merge — this is the ONLY write path for a
+    // direct checklist edit (Edit Assessment, not a task completion) that
+    // records any posture history at all. Without it, editing a checklist
+    // answer directly moved the score but left no trace either history
+    // collection reads, so the Program Overview trend (and the Remediation
+    // tab's chart, which reads the same merged history as of the fix above)
+    // stayed frozen between task completions no matter how the score
+    // actually changed via a direct edit.
+    const before = computePostureScore(record.data);
+
     // Strip from the INCOMING data only, before the merge — stripping after
     // would delete the client's legitimately-saved extended answers that the
     // gated route wrote.
@@ -982,6 +992,13 @@ app.patch("/api/assessments/:id", requireAuth, async (req, res) => {
     const clamped = clampSelectedFrameworks(db, gate, req, stripGatedAssessmentKeys(req.body.data), record);
     droppedFrameworks = clamped.dropped;
     record.data = syncCisImplementationGroup({ ...record.data, ...clamped.data });
+
+    // recordPostureSnapshot() de-dupes internally (unchanged score, <20 days
+    // -> no-op), so this is safe to call on every save rather than needing
+    // to detect "did the checklist portion actually change" ourselves.
+    const after = computePostureScore(record.data);
+    recordPostureSnapshot(db, req.userId, after.postureScore, after.postureLevel,
+      after.postureScore === before.postureScore ? null : "assessment_edit");
   }
   record.updatedAt = new Date().toISOString();
   await db.write();

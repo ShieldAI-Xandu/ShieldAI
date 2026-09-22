@@ -569,6 +569,20 @@ export function registerPortfolioRoutes(
       if (s.userId !== clientId) continue;
       points.push({ at: s.at, score: s.score, level: s.level, source: "snapshot", reason: s.reason || null });
     }
+    // db.data.postureHistory is the OTHER posture-history collection —
+    // written on task completion (taskRoutes.js) and on the compliance
+    // remediation-attestation flows (complianceRoutes.js) — same shape as
+    // postureSnapshots above (userId/at/score/level/reason). Without this,
+    // the two most common ways a client's score actually moves day-to-day
+    // were invisible here: this screen would stay frozen at whatever it was
+    // when the program was last generated, while the Remediation tab's own
+    // chart (GET /api/tasks/posture-history, reading this same collection)
+    // showed the real trend. One history, shown consistently everywhere.
+    for (const h of db.data.postureHistory || []) {
+      if (h.userId !== clientId) continue;
+      if (typeof h.score !== "number") continue;
+      points.push({ at: h.at, score: h.score, level: h.level, source: "history", reason: h.reason || null });
+    }
     points.sort((a, b) => new Date(a.at) - new Date(b.at));
     const byDay = new Map();
     for (const pt of points) {
