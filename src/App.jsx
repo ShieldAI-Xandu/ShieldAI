@@ -11754,8 +11754,11 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             {[
               { l:"Pricing", them:"Custom quote only — book a demo to see a price", us:"Published in full, $159–$1,950/mo" },
               { l:"Core product", them:"Compliance platform; vCISO is a separate add-on", us:"vCISO-native from day one — assess, score, remediate, manage" },
-              { l:"Frameworks", them:"13 listed publicly", us:"12, control-mapped — and we publish what we don't do, and why" },
+              { l:"Frameworks", them:"8 named publicly, plus \"+10 more\" (~18 total)", us:"12, control-mapped — and we publish what we don't do, and why" },
               { l:"Threat intelligence", them:"Not a listed product module", us:"Live NVD CVE + HIBP breach monitoring, sourced" },
+              { l:"Identity & MFA posture", them:"Agent-based; flags overprivileged accounts and unenforced MFA", us:"Native connectors for Microsoft 365, Google Workspace, Okta & Zoom — no agent required for this check" },
+              { l:"Getting started", them:"No free trial — every prospect books a demo for a quote", us:"Free, functioning $0 tier — live in minutes, no sales call" },
+              { l:"Framework handling", them:"\"Start with SOC 2. Expand without starting over\" — their own framing", us:"All 12 control-mapped frameworks assessed in parallel from one intake" },
               { l:"Built for", them:"Startups through 6,000+-employee enterprises", us:"Purpose-built for small & mid-sized businesses" },
             ].map((r,i,arr)=>(
               <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",padding:"14px 20px",
@@ -11767,8 +11770,8 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
             ))}
           </div>
           <p style={{fontSize:11.5,color:C.textMut,marginTop:12,maxWidth:640}}>
-            Sourced from oneleet.com's homepage, pricing, and products pages. ShieldAI has
-            no affiliation with Oneleet.
+            Sourced from oneleet.com's homepage, pricing, frameworks, and products pages.
+            ShieldAI has no affiliation with Oneleet.
           </p>
         </Section>
       </div>
