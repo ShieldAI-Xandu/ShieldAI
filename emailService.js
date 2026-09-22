@@ -37,10 +37,18 @@
 // Setup: see PHISHING_SIMULATION_SETUP.md.
 
 const PROVIDER = (process.env.EMAIL_PROVIDER || "resend").toLowerCase();
-const FROM_DOMAIN = process.env.EMAIL_FROM_DOMAIN || "simulate.shieldai.io";
+// `let`, not `const`: the Mailgun branch below corrects this to
+// MAILGUN_DOMAIN when EMAIL_FROM_DOMAIN wasn't explicitly set — see that
+// branch's comment for why this exists.
+let FROM_DOMAIN = process.env.EMAIL_FROM_DOMAIN || "simulate.shieldai.io";
 
 let sendImpl = null;
 let configured = false;
+// The domain actually being authenticated against for sending (only set for
+// Mailgun, where it's a distinct concept from the from-address domain) —
+// surfaced through getEmailHealth() so an admin can see both domains at a
+// glance instead of digging through startup logs.
+let providerDomain = null;
 
 // ── Resend ───────────────────────────────────────────────────────
 // POST https://api.resend.com/emails, Bearer token, JSON body.
@@ -84,8 +92,29 @@ if (PROVIDER === "mailgun") {
   const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || FROM_DOMAIN;
   const MAILGUN_REGION = (process.env.MAILGUN_REGION || "us").toLowerCase(); // "us" | "eu"
   const MAILGUN_BASE = MAILGUN_REGION === "eu" ? "https://api.eu.mailgun.net" : "https://api.mailgun.net";
+  // THE BUG THIS FIXES: sendEmail()'s `from:` header is built from the
+  // module-level FROM_DOMAIN, which is EMAIL_FROM_DOMAIN or else
+  // "simulate.shieldai.io" — completely independent of MAILGUN_DOMAIN above.
+  // Set only MAILGUN_DOMAIN (the normal path — you register one domain in
+  // Mailgun's dashboard and point this at it) and every send's `from:`
+  // address still landed on simulate.shieldai.io, a domain Mailgun never
+  // authorized for this account, so Mailgun rejected every send. Real
+  // instance of this: MAILGUN_DOMAIN=mg.xandultd.com set, EMAIL_FROM_DOMAIN
+  // left unset, so `from` stayed simulate.shieldai.io.
+  //
+  // Fix: when EMAIL_FROM_DOMAIN was NOT explicitly set, the effective
+  // from-domain for this provider IS MAILGUN_DOMAIN — the one place they're
+  // allowed to differ is when an operator explicitly sets EMAIL_FROM_DOMAIN
+  // to something else on purpose, which still wins and gets a loud warning
+  // below since it's the unusual case and worth a second look.
+  if (!process.env.EMAIL_FROM_DOMAIN) {
+    FROM_DOMAIN = MAILGUN_DOMAIN;
+  } else if (MAILGUN_DOMAIN !== FROM_DOMAIN) {
+    console.warn(`ShieldAI email: EMAIL_FROM_DOMAIN ("${FROM_DOMAIN}") differs from MAILGUN_DOMAIN ("${MAILGUN_DOMAIN}") — outbound mail will claim to be from ${FROM_DOMAIN} while authenticating against Mailgun's ${MAILGUN_DOMAIN} account. This is only valid if ${FROM_DOMAIN} is also verified in that same Mailgun account; otherwise sends will be rejected. If that's not intentional, unset EMAIL_FROM_DOMAIN and let it default to MAILGUN_DOMAIN.`);
+  }
   if (MAILGUN_API_KEY) {
     configured = true;
+    providerDomain = MAILGUN_DOMAIN;
     sendImpl = async ({ to, from, subject, html, text, replyTo }) => {
       const body = new URLSearchParams();
       body.set("from", from);
@@ -107,7 +136,7 @@ if (PROVIDER === "mailgun") {
       if (!res.ok) throw new Error(data?.message || `Mailgun API error (${res.status})`);
       return { id: data.id || null };
     };
-    console.log(`ShieldAI email: Mailgun configured (${MAILGUN_REGION.toUpperCase()} region, domain ${MAILGUN_DOMAIN}).`);
+    console.log(`ShieldAI email: Mailgun configured (${MAILGUN_REGION.toUpperCase()} region, domain ${MAILGUN_DOMAIN}, sending as @${FROM_DOMAIN}).`);
   } else {
     console.warn("ShieldAI email: EMAIL_PROVIDER=mailgun but MAILGUN_API_KEY is not set — sends return \"not configured\" until you set it.");
   }
@@ -127,7 +156,15 @@ export function emailConfigured() {
 const health = { lastSuccessAt: null, lastErrorAt: null, lastError: null };
 
 export function getEmailHealth() {
-  return { provider: PROVIDER, configured, ...health };
+  return {
+    provider: PROVIDER, configured,
+    // fromDomain: what every outbound `from:` address actually uses.
+    // providerDomain: (Mailgun only) the domain the API request authenticates
+    // against. If these two ever disagree, sends fail — see the "THE BUG
+    // THIS FIXES" comment on the Mailgun config block above.
+    fromDomain: FROM_DOMAIN, providerDomain,
+    ...health,
+  };
 }
 
 /**
