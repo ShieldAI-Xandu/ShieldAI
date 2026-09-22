@@ -58,7 +58,7 @@ const ALLOWED = {
 // "policy" and "training" are system-created only (see createEvidenceRecord
 // below) — a policy acknowledgment or a finished training module becomes
 // evidence automatically, the same way a task's "Attach proof" always has.
-export const EVIDENCE_KINDS = ["task", "control", "assessment", "policy", "training", "general"];
+export const EVIDENCE_KINDS = ["task", "control", "assessment", "policy", "training", "general", "pentestReferral"];
 
 function ensure(db) {
   db.data.evidence ||= [];
@@ -219,6 +219,12 @@ export function registerEvidenceRoutes(app, {
       const a = (db.data.trainingAssignments || []).find(x => x.id === refId);
       if (!a) return { ok: false, error: "Training assignment not found." };
       if (a.clientUserId !== ownerUserId) return { ok: false, error: "That assignment belongs to a different client." };
+      return { ok: true };
+    }
+    if (kind === "pentestReferral") {
+      const r = (db.data.pentestReferrals || []).find(x => x.id === refId);
+      if (!r) return { ok: false, error: "Pentest referral not found." };
+      if (r.clientUserId !== ownerUserId) return { ok: false, error: "That referral belongs to a different client." };
       return { ok: true };
     }
     return { ok: false, error: "Unknown kind." };

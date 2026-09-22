@@ -4213,6 +4213,172 @@ function VendorQuestionnaireLockedCard() {
 //  the live subscribe feed live there now; see that file's header comment).
 // ─────────────────────────────────────────────────────────────
 
+const PENTEST_STATUS_TONE = {
+  requested:   { color: C.textMut,   label: "Requested" },
+  scoped:      { color: C.amberText, label: "Scoped" },
+  in_progress: { color: C.accent,    label: "In progress" },
+  delivered:   { color: C.greenText, label: "Delivered" },
+  declined:    { color: C.redText,   label: "Cancelled" },
+};
+
+function PentestReferralSection() {
+  const [referrals, setReferrals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [scopeNotes, setScopeNotes] = useState("");
+  const [cancelTarget, setCancelTarget] = useState(null);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/pentest-referrals`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load your penetration-test referrals.");
+      setReferrals(Array.isArray(data) ? data : []);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function submitRequest() {
+    if (!scopeNotes.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/pentest-referrals`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scopeNotes: scopeNotes.trim() }),
+      });
+      const data = await res.json();
+      if (res.status === 402) { setShowNew(false); return showUpgradePrompt(data); }
+      if (!res.ok) throw new Error(data.error || "Could not submit that request.");
+      setShowNew(false); setScopeNotes("");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function cancelReferral(r) {
+    setCancelTarget(null);
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/pentest-referrals/${r.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not cancel that request.");
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+        <SectionLabel text="Penetration-Test Partner Referral"/>
+        <button onClick={()=>setShowNew(true)}
+          style={{padding:"6px 12px",background:`${C.accent}1E`,border:`1px solid ${C.accent}55`,
+            borderRadius:7,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+          + Request a pentest
+        </button>
+      </div>
+      <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 18px",maxWidth:640}}>
+        ShieldAI doesn't perform penetration testing itself — this connects you with a vetted
+        penetration-testing partner through your ShieldAI console. Tell us what you'd like tested;
+        we'll scope it with a partner and track it here through delivery. When results are in,
+        findings are added to your recommendations for your team to review and act on.
+      </p>
+
+      {error && <div style={{marginBottom:14,color:C.redText,fontSize:13}}>{error}</div>}
+
+      {loading ? (
+        <div style={{color:C.textMut,fontSize:13}}>Loading…</div>
+      ) : referrals.length === 0 ? (
+        <div style={{padding:"28px 20px",background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
+          color:C.textMut,fontSize:13,textAlign:"center"}}>
+          No penetration-test referrals yet. Request one when you're ready.
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {referrals.map(r => {
+            const tone = PENTEST_STATUS_TONE[r.status] || PENTEST_STATUS_TONE.requested;
+            return (
+              <div key={r.id} style={{padding:"14px 16px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:11,fontWeight:700,color:tone.color,padding:"2px 8px",
+                      borderRadius:5,background:`${tone.color}18`,border:`1px solid ${tone.color}44`}}>
+                      {tone.label}
+                    </span>
+                    {r.partner && <span style={{fontSize:12,color:C.textSec}}>Partner: {r.partner}</span>}
+                  </div>
+                  <span style={{fontSize:11,color:C.textMut}}>
+                    Requested {new Date(r.createdAt).toLocaleDateString()}
+                  </span>
+                </div>
+                <p style={{margin:"10px 0 0",color:C.text,fontSize:13,lineHeight:1.6}}>{r.scopeNotes}</p>
+                {r.status === "delivered" && r.recommendationIds?.length > 0 && (
+                  <p style={{margin:"8px 0 0",color:C.greenText,fontSize:12}}>
+                    {r.recommendationIds.length} finding{r.recommendationIds.length===1?"":"s"} added to your recommendations — see Priorities or Remediation.
+                  </p>
+                )}
+                {r.status === "requested" && (
+                  <button onClick={()=>setCancelTarget(r)} disabled={busy}
+                    style={{marginTop:10,padding:"5px 11px",background:"transparent",
+                      border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,
+                      fontSize:11.5,cursor:busy?"wait":"pointer"}}>
+                    Cancel request
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <Modal
+        open={showNew}
+        onClose={()=>setShowNew(false)}
+        title="Request a Penetration Test"
+        footer={
+          <>
+            <button onClick={()=>setShowNew(false)}
+              style={{padding:"10px 16px",background:"transparent",border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.textSec,fontSize:13,cursor:"pointer"}}>
+              Cancel
+            </button>
+            <button onClick={submitRequest} disabled={busy || !scopeNotes.trim()}
+              style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+                color:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+                cursor:(busy||!scopeNotes.trim())?"not-allowed":"pointer"}}>
+              {busy ? "Submitting…" : "Submit request"}
+            </button>
+          </>
+        }>
+        <p style={{color:C.textSec,fontSize:12.5,lineHeight:1.6,margin:"0 0 14px"}}>
+          What would you like tested? Your ShieldAI team will scope this with a vetted
+          penetration-testing partner and keep you updated here.
+        </p>
+        <textarea value={scopeNotes} onChange={e=>setScopeNotes(e.target.value)} rows={5}
+          placeholder="e.g. Our customer-facing web app and VPN gateway"
+          style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box",resize:"vertical"}}/>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!cancelTarget}
+        onClose={()=>setCancelTarget(null)}
+        onConfirm={()=>cancelReferral(cancelTarget)}
+        title="Cancel this request?"
+        message="This referral hasn't been scoped with a partner yet — cancelling now removes it with no charge."
+        confirmLabel={busy ? "Cancelling…" : "Yes, cancel"}
+        cancelLabel="Keep it"
+        confirmDisabled={busy}
+        danger
+      />
+    </div>
+  );
+}
+
 function VendorRiskSection() {
   const { can } = useCapabilities();
   const hasQuestionnaire = can("vendorQuestionnaireAssistant");
@@ -9067,6 +9233,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   const canCalendarExports = can("downloadExports");
   const hasTrainingView = can("trainingPlan");       // Starter+: view the recommendation preview
   const hasTrainingFull = can("trainingDelivery");   // Growth+ (or Starter w/ add-on): full generation
+  const hasPentestReferral = can("pentestReferral"); // Guided+: vetted pentest partner referral
 
   // A client-access demo (prospect) can't open the analyst console, so we give
   // them a "Your vCISO" explainer showing what a human analyst does for them at
@@ -9083,6 +9250,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     { id:"vendors",     icon:"🤝", label:"Vendor Risk",        badge:null },
     { id:"calendar",    icon:"🗓️", label:"Calendar",           badge:null },
     { id:"threats",     icon:"🔍", label:"Threat Intel",      badge:null },
+    { id:"pentest",     icon:"🕵️", label:"Pentest Referral",  badge:null },
     ...(showVciso ? [{ id:"vciso", icon:"🤝", label:"Your vCISO", badge:null }] : []),
     { id:"tools",       icon:"🔧", label:"Tool Stack",        badge:!hasPrograms?null:results?.tools?.toolStack?.length },
     { id:"training",    icon:"🎓", label:"Training",          badge:!hasTrainingView?null:results?.training?.trainingProgram?.modules?.length },
@@ -9100,7 +9268,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   // per-section LockedFeature fallback is untouched.
   const FREE_LOCKED_NAV_IDS = new Set([
     "workflows", "remediation", "evidence", "vendors", "calendar",
-    "threats", "tools", "training", "trainingmgr", "reports", "library",
+    "threats", "tools", "training", "trainingmgr", "reports", "library", "pentest",
   ]);
   const navWithLock = nav.map(n => ({ ...n, locked: tier === "free" && FREE_LOCKED_NAV_IDS.has(n.id) }));
 
@@ -9112,7 +9280,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   // pinned at the top as the always-first landing tab.
   const NAV_GROUPS = [
     { label: null, ids: ["overview"] },
-    { label: "Your Risk & Roadmap", ids: ["priorities", "remediation", "threats", "vendors", "tools"] },
+    { label: "Your Risk & Roadmap", ids: ["priorities", "remediation", "threats", "vendors", "pentest", "tools"] },
     { label: "Policies & Compliance", ids: ["workflows", "compliance", "library", "evidence", "calendar"] },
     { label: "People & Training", ids: ["training", "trainingmgr"] },
     { label: "Reports", ids: ["report", "reports"] },
@@ -9165,6 +9333,9 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     calendar: <LockedFeature icon="🗓️" title="Compliance Calendar" capability="complianceCalendar"
       blurb="Everything coming due — vendor reassessments, policy sign-offs, training deadlines — in one place."
       points={["Auto-pulled from your vendor, policy, and training data — nothing to re-enter","Add your own reminders for insurance, licenses, audits, and contracts","One-time or recurring, with overdue items surfaced first"]}/>,
+    pentest: <LockedFeature icon="🕵️" title="Penetration-Test Partner Referral" capability="pentestReferral"
+      blurb="Connect with a vetted penetration-testing partner through your ShieldAI console."
+      points={["Tell us what you want tested — we scope it with a vetted partner","Track status from request through delivery","Findings land as tracked recommendations, reviewed by your team"]}/>,
   };
 
   const sectionMap = {
@@ -9191,6 +9362,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     vendors:     !hasVendorRegistry ? lockedSections.vendors : <VendorRiskSection/>,
     calendar:    !hasCalendar ? lockedSections.calendar : <ComplianceCalendarSection authFetch={authFetch} apiBase={API_BASE}
       onNavigate={setSection} canDownloadExports={canCalendarExports} onUpgrade={showUpgradePrompt}/>,
+    pentest:     !hasPentestReferral ? lockedSections.pentest : <PentestReferralSection/>,
     vciso:       <VirtualCISOSection/>,
     threats:    !hasThreatIntel ? lockedSections.threats : <ThreatIntelSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     tools:      !hasPrograms ? lockedSections.tools : <ToolsSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
@@ -22267,7 +22439,7 @@ function IntegrationsScreen({ onBack }) {
       </div>
       <p style={{color:C.textSec,fontSize:13.5,lineHeight:1.6,margin:"0 0 22px"}}>
         Connect a vulnerability scanner/EDR/SIEM's outbound webhook, a directory (Microsoft 365,
-        Google Workspace, Okta, Zoom), cloud infrastructure (AWS, Azure), a chat tool (Slack, Teams),
+        Google Workspace, Okta, Zoom), cloud infrastructure (AWS, Azure, Google Cloud), a chat tool (Slack, Teams),
         or a task tracker (Jira, Asana, Trello) to feed real findings into ShieldAI, get notified
         about new security work, and sync remediation tasks. Read-only where it matters — ShieldAI
         never changes anything on your systems, in your directory, or in your cloud account, only

@@ -100,6 +100,7 @@ import { makeTierGate, counters } from "./tierGate.js";
 import { hasCapability, getTier } from "./tiers.js";
 import { clampSelectedFrameworks, snapshotGrandfatheredFrameworks } from "./frameworkEntitlements.js";
 import { registerFrameworkAddonRoutes } from "./frameworkAddonRoutes.js";
+import { registerPentestRoutes } from "./pentestRoutes.js";
 import { callAI, providerStatus, recordProviderSuccess, recordProviderFailure } from "./aiProviders.js";
 import {
   registerUser,
@@ -2536,6 +2537,7 @@ registerReportRoutes(app, { db, requireAuth, requireAdmin, logClientAction, anal
 registerTrustRoutes(app, { db, requireAuth, gate });
 registerExtendedAssessmentRoutes(app, { db, requireAuth, gate });
 registerFrameworkAddonRoutes(app, { db, requireAuth, gate, logClientAction });
+registerPentestRoutes(app, { db, requireAuth, requireAdmin, gate, logClientAction, analystOwnsClient, analystClientIds });
 
 // ─────────────────────────────────────────────────────────────
 //  STATIC FRONTEND
