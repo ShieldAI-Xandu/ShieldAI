@@ -42,6 +42,7 @@ import { IAMClient, GetAccountSummaryCommand, GetAccountPasswordPolicyCommand, L
 import { S3Client, ListBucketsCommand, GetPublicAccessBlockCommand } from "@aws-sdk/client-s3";
 import { EC2Client, DescribeSecurityGroupsCommand } from "@aws-sdk/client-ec2";
 import { CloudTrailClient, DescribeTrailsCommand } from "@aws-sdk/client-cloudtrail";
+import jwt from "jsonwebtoken";
 
 const CANON_SEVERITIES = new Set(["critical", "high", "medium", "low", "info"]);
 function sev(s) {
@@ -372,8 +373,215 @@ export function mapAzurePostureToFindings(facts) {
   return out;
 }
 
+// ── Google Cloud ─────────────────────────────────────────────────────
+// Source: cloud.google.com REST API references (Cloud Resource Manager v3,
+// Cloud Storage JSON API v1, Compute Engine v1).
+// Credential: a Service Account JSON key (downloaded once from the GCP
+// console) granted the basic `Viewer` role (roles/viewer) at the project
+// level — GCP's closest analog to AWS's SecurityAudit policy and Azure's
+// Reader role: broad, built-in, read-only. Like Azure, auth is a plain
+// OAuth2 exchange against a fixed, well-known Google host — the JWT
+// Bearer / service-account flow (RFC 7523), which this signs with the
+// `jsonwebtoken` package already a dependency for this app's own auth
+// (auth.js) rather than pulling in google-auth-library for one flow.
+const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GCP_READONLY_SCOPE = "https://www.googleapis.com/auth/cloud-platform.read-only";
+
+async function getGcpAccessToken({ clientEmail, privateKey }) {
+  const now = Math.floor(Date.now() / 1000);
+  const assertion = jwt.sign({
+    iss: clientEmail,
+    scope: GCP_READONLY_SCOPE,
+    aud: GCP_TOKEN_URL,
+    iat: now,
+    exp: now + 3600,
+  }, privateKey, { algorithm: "RS256" });
+
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+  const res = await fetch(GCP_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error_description || json.error || `GCP token request failed (${res.status})`);
+  return json.access_token;
+}
+
+async function gcpGet(accessToken, url) {
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+  if (!res.ok) throw new Error(`GCP API ${url} failed: ${res.status} ${await res.text().catch(() => "")}`);
+  return res.json();
+}
+
+// Cloud Resource Manager's getIamPolicy is a POST despite being a read —
+// GCP's own API shape, not a mistake here (it accepts an optional
+// GetPolicyOptions body, which an empty object satisfies).
+async function gcpPost(accessToken, url, body = {}) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`GCP API ${url} failed: ${res.status} ${await res.text().catch(() => "")}`);
+  return res.json();
+}
+
+// The pasted credential is the raw JSON key file's text — parsed here, not
+// by the caller, so cloudRoutes.js's credentialFromBody() can stay a plain
+// string-field extraction like AWS/Azure's, with no provider-specific JSON
+// parsing leaking into the route layer. `projectId` may be passed separately
+// to audit a project the service account was granted access to but wasn't
+// created in (a normal GCP pattern) — it defaults to the key's own project.
+export async function fetchGcpPosture({ serviceAccountKeyJson, projectId }) {
+  let key;
+  try {
+    key = JSON.parse(serviceAccountKeyJson);
+  } catch {
+    throw new Error("Service account key must be the full JSON key file contents, pasted as-is.");
+  }
+  if (!key.client_email || !key.private_key) {
+    throw new Error("Service account key JSON is missing client_email or private_key.");
+  }
+  const project = projectId || key.project_id;
+  if (!project) throw new Error("No project ID in the key file and none provided — specify which project to audit.");
+
+  const accessToken = await getGcpAccessToken({ clientEmail: key.client_email, privateKey: key.private_key });
+
+  const [iamPolicy, buckets, firewalls] = await Promise.all([
+    gcpPost(accessToken, `https://cloudresourcemanager.googleapis.com/v1/projects/${encodeURIComponent(project)}:getIamPolicy`)
+      .catch(() => null),
+    gcpGet(accessToken, `https://storage.googleapis.com/storage/v1/b?project=${encodeURIComponent(project)}`).catch(() => null),
+    gcpGet(accessToken, `https://compute.googleapis.com/compute/v1/projects/${encodeURIComponent(project)}/global/firewalls`).catch(() => null),
+  ]);
+
+  return {
+    projectId: project,
+    iamBindings: iamPolicy?.bindings || null,     // null = couldn't determine, never assumed "no owners"
+    auditConfigs: iamPolicy?.auditConfigs || null, // same
+    buckets: buckets?.items || null,       // null = couldn't determine (e.g. Storage API not enabled), never assumed empty
+    firewalls: firewalls?.items || null,   // same
+  };
+}
+
+export function mapGcpPostureToFindings(facts) {
+  const out = [];
+
+  // Project Owner sprawl — GCP's `roles/owner` is its single most privileged
+  // primitive role (full control, including IAM itself), the closest analog
+  // to AWS root or an Azure subscription Owner. A handful of owners is
+  // normal; a growing count is real, common over-privilege drift. Same
+  // graduated-threshold style Azure's secure-score mapping above already
+  // uses — a judgment call, stated plainly rather than hidden in a bare number.
+  const ownerBinding = facts.iamBindings.find(b => b.role === "roles/owner");
+  const ownerCount = ownerBinding?.members?.length ?? 0;
+  out.push(finding({
+    externalId: "gcp-project-owners",
+    title: ownerCount <= 1 ? `${ownerCount} project Owner` : `${ownerCount} principals hold project Owner`,
+    severity: ownerCount <= 1 ? "info" : ownerCount <= 3 ? "medium" : "high",
+    message: ownerCount <= 1
+      ? "At most one principal holds the primitive Owner role on this project — the expected baseline."
+      : `${ownerCount} principals hold roles/owner, GCP's most privileged role: ${(ownerBinding?.members || []).slice(0, 10).join(", ")}. Review whether each genuinely needs full project control, or a narrower predefined role would do.`,
+    raw: ownerBinding || null,
+  }));
+
+  // Audit logging — GCP's Admin Activity log is always on and can't be
+  // disabled, but Data Access logs (who read/wrote what) are opt-in per
+  // service and commonly left off. auditConfigs is where that's configured;
+  // an empty array means no Data Access logging beyond the mandatory
+  // Admin Activity baseline — a real, reportable gap, same spirit as AWS's
+  // CloudTrail check and Azure's diagnostic-settings/Activity-Log-export check.
+  const dataAccessServices = facts.auditConfigs.filter(c =>
+    (c.auditLogConfigs || []).some(l => l.logType === "DATA_READ" || l.logType === "DATA_WRITE"));
+  out.push(finding({
+    externalId: "gcp-audit-data-access-logging",
+    title: dataAccessServices.length === 0
+      ? "No Data Access audit logging configured beyond the mandatory baseline"
+      : `Data Access audit logging configured for ${dataAccessServices.length} service(s)`,
+    severity: dataAccessServices.length === 0 ? "high" : "info",
+    message: dataAccessServices.length === 0
+      ? "Admin Activity logs are always on (GCP can't disable them), but Data Access logs — who actually read or wrote data — are opt-in and none are configured here."
+      : `Data Access logging is configured for: ${dataAccessServices.map(c => c.service).slice(0, 10).join(", ")}.`,
+    raw: facts.auditConfigs,
+  }));
+
+  // Public storage exposure — publicAccessPrevention is GCS's own bucket-level
+  // field for this, directly analogous to AWS's PublicAccessBlock and Azure's
+  // allowBlobPublicAccess. `null` facts.buckets means the Storage API call
+  // itself failed (e.g. not enabled on this project) — reported honestly as
+  // "couldn't check," never silently treated as "no buckets."
+  if (facts.buckets === null) {
+    out.push(finding({
+      externalId: "gcp-storage-unavailable",
+      title: "Could not check Cloud Storage bucket exposure",
+      severity: "info",
+      message: "The Cloud Storage API call failed for this project — it may not be enabled, or the service account's Viewer role may not extend to it.",
+      raw: null,
+    }));
+  } else if (facts.buckets.length > 0) {
+    const exposed = facts.buckets.filter(b => b.iamConfiguration?.publicAccessPrevention !== "enforced");
+    out.push(finding({
+      externalId: "gcp-storage-public-access",
+      title: exposed.length === 0
+        ? `All ${facts.buckets.length} bucket(s) enforce public access prevention`
+        : `${exposed.length} of ${facts.buckets.length} bucket(s) do not enforce public access prevention`,
+      severity: exposed.length === 0 ? "info" : "high",
+      message: exposed.length === 0
+        ? "Every bucket checked has publicAccessPrevention set to \"enforced\"."
+        : exposed.slice(0, 10).map(b => b.name).join(", "),
+      raw: exposed.map(b => b.name),
+    }));
+  }
+
+  // Firewall rules open to the world — sourceRanges containing 0.0.0.0/0 on
+  // an enabled INGRESS rule allowing SSH/RDP, directly analogous to AWS
+  // security groups and Azure NSGs above.
+  if (facts.firewalls === null) {
+    out.push(finding({
+      externalId: "gcp-firewall-unavailable",
+      title: "Could not check VPC firewall rules",
+      severity: "info",
+      message: "The Compute Engine API call failed for this project — it may not be enabled, or the service account's Viewer role may not extend to it.",
+      raw: null,
+    }));
+  } else if (facts.firewalls.length > 0) {
+    const wideOpen = [];
+    for (const fw of facts.firewalls) {
+      if (fw.disabled || fw.direction !== "INGRESS") continue;
+      const openToWorld = (fw.sourceRanges || []).includes("0.0.0.0/0");
+      if (!openToWorld) continue;
+      for (const rule of (fw.allowed || [])) {
+        for (const p of SENSITIVE_PORTS) {
+          const ports = rule.ports || [];
+          const allAllowed = ports.length === 0; // GCP: no ports listed for a protocol = all ports
+          if (allAllowed || ports.some(pr => portInRange(...pr.split("-").map(Number), p.port))) {
+            wideOpen.push({ name: fw.name, port: p.name });
+          }
+        }
+      }
+    }
+    out.push(finding({
+      externalId: "gcp-firewall-open-to-world",
+      title: wideOpen.length === 0
+        ? "No firewall rules expose SSH/RDP to the internet"
+        : `${wideOpen.length} firewall rule(s) expose SSH or RDP to the internet`,
+      severity: wideOpen.length === 0 ? "info" : "critical",
+      message: wideOpen.length === 0
+        ? `Checked ${facts.firewalls.length} firewall rule(s) — none allow SSH/RDP from 0.0.0.0/0.`
+        : wideOpen.slice(0, 10).map(g => `${g.name}: ${g.port} open to 0.0.0.0/0`).join("; "),
+      raw: wideOpen,
+    }));
+  }
+
+  return out;
+}
+
 // ── dispatch ─────────────────────────────────────────────────────────
 export const CLOUD_PROVIDERS = {
   aws: { kind: "token", fetchPosture: fetchAwsPosture, mapPostureToFindings: mapAwsPostureToFindings },
   azure: { kind: "token", fetchPosture: fetchAzurePosture, mapPostureToFindings: mapAzurePostureToFindings },
+  gcp: { kind: "token", fetchPosture: fetchGcpPosture, mapPostureToFindings: mapGcpPostureToFindings },
 };

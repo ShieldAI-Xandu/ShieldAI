@@ -21026,11 +21026,13 @@ function DirectoryConnectionDetail({ connectionId, onBack }) {
 const CLOUD_PROVIDER_OPTIONS = [
   { id: "aws", label: "AWS" },
   { id: "azure", label: "Azure" },
+  { id: "gcp", label: "Google Cloud" },
 ];
 
 const CLOUD_SETUP_NOTES = {
   aws: "Create an IAM user with AWS's own managed \"SecurityAudit\" policy attached, then generate an access key for it — that policy is read-only by AWS's design. ShieldAI only ever makes read calls with it.",
   azure: "Create an Entra ID app registration (a service principal), then grant it the built-in \"Reader\" role at your subscription scope — that role is read-only by Azure's design. ShieldAI only ever makes read calls with it.",
+  gcp: "Create a service account, grant it the built-in \"Viewer\" role (or narrower: Security Reviewer + Storage Object Viewer) at your project scope, then generate and paste its JSON key — that role is read-only by Google Cloud's design. ShieldAI only ever makes read calls with it.",
 };
 
 function AddCloudConnectionModal({ onClose }) {
@@ -21045,15 +21047,21 @@ function AddCloudConnectionModal({ onClose }) {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [subscriptionId, setSubscriptionId] = useState("");
+  const [serviceAccountKeyJson, setServiceAccountKeyJson] = useState("");
+  const [gcpProjectId, setGcpProjectId] = useState("");
 
   async function connect() {
     const body = provider === "aws"
       ? { label: label.trim() || "AWS", accessKeyId: accessKeyId.trim(), secretAccessKey: secretAccessKey.trim(), region: region.trim() || undefined }
-      : { label: label.trim() || "Azure", tenantId: tenantId.trim(), clientId: clientId.trim(), clientSecret: clientSecret.trim(), subscriptionId: subscriptionId.trim() };
+      : provider === "azure"
+      ? { label: label.trim() || "Azure", tenantId: tenantId.trim(), clientId: clientId.trim(), clientSecret: clientSecret.trim(), subscriptionId: subscriptionId.trim() }
+      : { label: label.trim() || "Google Cloud", serviceAccountKeyJson: serviceAccountKeyJson.trim(), projectId: gcpProjectId.trim() || undefined };
     const missing = provider === "aws"
       ? !body.accessKeyId || !body.secretAccessKey
-      : !body.tenantId || !body.clientId || !body.clientSecret || !body.subscriptionId;
-    if (missing) { setError("All fields (except the AWS region) are required."); return; }
+      : provider === "azure"
+      ? !body.tenantId || !body.clientId || !body.clientSecret || !body.subscriptionId
+      : !body.serviceAccountKeyJson;
+    if (missing) { setError(provider === "gcp" ? "The service account JSON key is required." : "All fields (except the AWS region) are required."); return; }
 
     setConnecting(true); setError(null);
     try {
@@ -21106,7 +21114,7 @@ function AddCloudConnectionModal({ onClose }) {
 
         <div style={{marginBottom:12}}>
           <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Name</label>
-          <input value={label} onChange={e=>setLabel(e.target.value)} placeholder={provider === "aws" ? "e.g. Production AWS account" : "e.g. Production Azure subscription"}
+          <input value={label} onChange={e=>setLabel(e.target.value)} placeholder={provider === "aws" ? "e.g. Production AWS account" : provider === "azure" ? "e.g. Production Azure subscription" : "e.g. Production GCP project"}
             style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
         </div>
@@ -21132,7 +21140,7 @@ function AddCloudConnectionModal({ onClose }) {
                   borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
             </div>
           </>
-        ) : (
+        ) : provider === "azure" ? (
           <>
             <div style={{marginBottom:12}}>
               <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Tenant ID</label>
@@ -21155,6 +21163,22 @@ function AddCloudConnectionModal({ onClose }) {
             <div style={{marginBottom:8}}>
               <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Subscription ID</label>
               <input value={subscriptionId} onChange={e=>setSubscriptionId(e.target.value)} placeholder="Azure subscription ID"
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Service Account JSON Key</label>
+              <textarea value={serviceAccountKeyJson} onChange={e=>setServiceAccountKeyJson(e.target.value)}
+                placeholder="Paste the full contents of the downloaded service-account JSON key file" rows={6}
+                style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,fontSize:12,fontFamily:"monospace",boxSizing:"border-box",resize:"vertical"}}/>
+            </div>
+            <div style={{marginBottom:8}}>
+              <label style={{display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6}}>Project ID <span style={{fontWeight:400,color:C.textMut}}>(optional — read from the key if omitted)</span></label>
+              <input value={gcpProjectId} onChange={e=>setGcpProjectId(e.target.value)} placeholder="my-gcp-project-id"
                 style={{width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
                   borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"}}/>
             </div>

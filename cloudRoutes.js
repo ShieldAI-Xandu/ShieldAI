@@ -34,7 +34,7 @@ const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
-const PROVIDER_LABELS = { aws: "AWS", azure: "Azure" };
+const PROVIDER_LABELS = { aws: "AWS", azure: "Azure", gcp: "Google Cloud" };
 
 // Public view of a connection — never leaks the encrypted secret.
 function publicConnection(c) {
@@ -128,21 +128,32 @@ function credentialFromBody(provider, body) {
       subscriptionId: String(body?.subscriptionId || "").trim(),
     };
   }
+  if (provider === "gcp") {
+    return {
+      serviceAccountKeyJson: String(body?.serviceAccountKeyJson || "").trim(),
+      projectId: String(body?.projectId || "").trim() || undefined,
+    };
+  }
   return null;
 }
 
 function missingCredentialFields(provider, cred) {
   if (provider === "aws") return !cred.accessKeyId || !cred.secretAccessKey;
   if (provider === "azure") return !cred.tenantId || !cred.clientId || !cred.clientSecret || !cred.subscriptionId;
+  if (provider === "gcp") return !cred.serviceAccountKeyJson;
   return true;
 }
 
 // A short, human-readable account label shown in the UI without exposing
 // the credential itself — e.g. "us-east-1" for AWS, the subscription id for
-// Azure. Best-effort; never throws.
+// Azure, the project id for GCP. Best-effort; never throws.
 function accountLabelFor(provider, cred) {
   if (provider === "aws") return cred.region || "us-east-1";
   if (provider === "azure") return cred.subscriptionId;
+  if (provider === "gcp") {
+    if (cred.projectId) return cred.projectId;
+    try { return JSON.parse(cred.serviceAccountKeyJson)?.project_id || ""; } catch { return ""; }
+  }
   return "";
 }
 
