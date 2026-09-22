@@ -20,7 +20,7 @@ import { TIERS, TIER_ORDER, DEFAULT_TIER, getTier, hasCapability, addonPriceLabe
 import {
   newEntitlement, assignEntitlement, cancelEntitlement, findEntitlement,
   entitlementsFor, publicEntitlement, frameworkAllowance, isFoundation,
-  ENTITLEMENT_STATUSES, INVOICE_STATES, FRAMEWORK_ADDON_ID,
+  entitlementForFramework, ENTITLEMENT_STATUSES, INVOICE_STATES, FRAMEWORK_ADDON_ID,
 } from "./frameworkEntitlements.js";
 import { getFrameworkDef } from "./complianceBridge.js";
 import { isSuperAdminEmail, accountCategory } from "./auth.js";
@@ -339,6 +339,19 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
       if (!def && !custom) return res.status(404).json({ error: "Unknown framework." });
       frameworkName = def ? (def.short || def.name) : custom.name;
       kind = def ? "registry" : "custom";
+
+      // Without this, granting twice for the same framework (a double
+      // click, or re-granting after a miscommunication) silently created a
+      // second billable slot and doubled this client's counted MRR — the
+      // client-facing self-serve route already guards the identical case.
+      const existing = entitlementForFramework(db, u.id, frameworkId);
+      if (existing) {
+        return res.status(409).json({
+          error: `${frameworkName} already has an add-on (${existing.status}). Use PATCH to change it instead of granting a second one.`,
+          code: "ALREADY_ENTITLED",
+          existingEntitlementId: existing.id,
+        });
+      }
     }
 
     const rec = newEntitlement({

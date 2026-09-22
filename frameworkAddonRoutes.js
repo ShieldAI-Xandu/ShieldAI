@@ -189,7 +189,6 @@ export function registerFrameworkAddonRoutes(app, {
     const spare = findUnassignedEntitlement(db, req.userId);
     if (spare) {
       assignEntitlement(spare, { frameworkId, frameworkName, kind });
-      await db.write();
       logClientAction?.(db, {
         clientUserId: req.userId,
         actorUserId: req.userId,
@@ -217,7 +216,6 @@ export function registerFrameworkAddonRoutes(app, {
       requestedByUserId: req.userId,
     });
     entitlements().push(rec);
-    await db.write();
 
     logClientAction?.(db, {
       clientUserId: req.userId,
@@ -266,7 +264,6 @@ export function registerFrameworkAddonRoutes(app, {
     }
 
     unassignEntitlement(rec);
-    await db.write();
 
     logClientAction?.(db, {
       clientUserId: req.userId,

@@ -21,7 +21,7 @@
 
 import { TIERS, TIER_ORDER, getTier, DEFAULT_TIER, SELF_SERVE_PAID_TIERS, getAddon, canPurchaseAddon, ADDONS } from "./tiers.js";
 import {
-  entitlementsFor, publicEntitlement, monthlyCentsFor,
+  entitlementsFor, publicEntitlement, monthlyCentsFor, activeMonthlyCentsFor,
   pendingBillingEntitlements, ENTITLING_STATUSES,
 } from "./frameworkEntitlements.js";
 
@@ -391,7 +391,12 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       transactions: txns.slice(0, 100),
       lifetimePaidCents: paid,
       frameworkAddons: fwAddons,
-      frameworkAddonsMrrCents: monthlyCentsFor(db, user.id),
+      // "Mrr" means confirmed recurring revenue — active only. A
+      // pending_billing entitlement is owed, not earned; it's already
+      // visible per-row in `frameworkAddons` above and in the
+      // pending-billing worklist, so it isn't hidden, just not counted here
+      // as if it were collected.
+      frameworkAddonsMrrCents: activeMonthlyCentsFor(db, user.id),
     });
   });
 
@@ -441,9 +446,16 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       // Framework slots are billed per framework and live in their own
       // collection, so they'd be invisible here without this — the same
       // undercount the comment above describes for training_delivery.
-      // Comped slots are excluded by monthlyCentsFor(): they're real access
-      // but zero revenue, and counting them would inflate MRR.
-      const frameworkAddonCents = monthlyCentsFor(db, u.id);
+      //
+      // activeMonthlyCentsFor(), not monthlyCentsFor(): comped slots are real
+      // access but zero revenue, and pending_billing is owed but not yet
+      // invoiced — both would inflate MRR with money that isn't earned.
+      // Using monthlyCentsFor() here was the actual bug: it counts
+      // pending_billing, which then got summed a SECOND time below into
+      // pendingBillingCents — the same $49.99 double-counted as both earned
+      // revenue and money owed, the exact "no fabricated data" this project
+      // exists to avoid shipping.
+      const frameworkAddonCents = activeMonthlyCentsFor(db, u.id);
       return {
         id: u.id, email: u.email, companyName: u.companyName || "",
         tier, status: sub?.status || (tier === "free" ? "free" : "none"),

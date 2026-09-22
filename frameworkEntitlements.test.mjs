@@ -3,7 +3,7 @@ import {
   frameworkAllowance, clampSelectedFrameworks, newEntitlement, assignEntitlement,
   unassignEntitlement, cancelEntitlement, paidFrameworkIds, entitlementCounts,
   findUnassignedEntitlement, hasFreeIncludedSlot, snapshotGrandfatheredFrameworks,
-  normaliseSelection, monthlyCentsFor, pendingBillingEntitlements,
+  normaliseSelection, monthlyCentsFor, activeMonthlyCentsFor, pendingBillingEntitlements,
   FOUNDATION_FRAMEWORK_IDS, ENTITLING_STATUSES, FRAMEWORK_ADDON_ID,
 } from "./frameworkEntitlements.js";
 import { addonPriceLabel, canPurchaseAddon, TIER_ORDER, FEATURE_CATALOG } from "./tiers.js";
@@ -265,6 +265,30 @@ console.log("\ncheckFrameworkAccess speaks for all four call sites:");
   const withSpare = checkFrameworkAccess(spareDb, gate, CLIENT, def("pci-dss"), a);
   ok(withSpare.body.unassignedEntitlements === 1, "reports a spare slot they could apply");
   ok(/no extra cost/.test(withSpare.body.error), "and offers it rather than selling a second one");
+}
+
+console.log("\nMRR must never double-count a pending_billing entitlement as both owed and earned:");
+{
+  const active = assignEntitlement(newEntitlement({ userId: CLIENT, status: "active" }),
+    { frameworkId: "iso-27001", frameworkName: "ISO 27001" });
+  const pending = assignEntitlement(newEntitlement({ userId: CLIENT, status: "pending_billing" }),
+    { frameworkId: "gdpr", frameworkName: "GDPR" });
+  const comped = assignEntitlement(newEntitlement({ userId: CLIENT, status: "comped" }),
+    { frameworkId: "pci-dss", frameworkName: "PCI DSS" });
+  const db = mkDb({ entitlements: [active, pending, comped] });
+
+  ok(monthlyCentsFor(db, CLIENT) === 9998,
+     `client's own "what you owe" includes pending (active+pending, got ${monthlyCentsFor(db, CLIENT)})`);
+  ok(activeMonthlyCentsFor(db, CLIENT) === 4999,
+     `MRR/revenue counts ONLY active — not pending, not comped (got ${activeMonthlyCentsFor(db, CLIENT)})`);
+
+  // The bug this guards: activeMonthlyCentsFor's result plus
+  // pendingBillingEntitlements()'s result must never sum to more than what's
+  // actually outstanding — each entitlement counted in exactly one bucket.
+  const pendingCents = pendingBillingEntitlements(db).reduce((s, e) => s + e.priceCents, 0);
+  ok(pendingCents === 4999, `the pending bucket has exactly the pending entitlement (got ${pendingCents})`);
+  ok(activeMonthlyCentsFor(db, CLIENT) + pendingCents === 9998,
+     "active + pending together account for the whole non-comped total exactly once each");
 }
 
 console.log(fail === 0 ? "\nFramework entitlements verified" : `\n${fail} FAILED`);

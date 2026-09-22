@@ -15483,6 +15483,32 @@ function SupportRequestConsole({ viewerIsAdmin }) {
   const [newClients, setNewClients] = useState(null);
   const [newForm, setNewForm] = useState({ clientUserId: "", topic: "", message: "" });
   const [newSaving, setNewSaving] = useState(false);
+  // Which ticket's "Grant framework add-on" action is mid-flight, and the
+  // outcome per ticket id — self-contained here rather than reusing the
+  // admin account-detail screen's grant modal (a different component with
+  // its own state), since this is the one-click action the ticket's `meta`
+  // field exists to offer. Closes the gap where meta was set on the analyst
+  // ticket-creation route but nothing ever read it back on the admin side.
+  const [grantBusyId, setGrantBusyId] = useState(null);
+  const [grantResultById, setGrantResultById] = useState({});
+
+  async function grantFromTicket(t) {
+    if (!t.clientUserId) return;
+    setGrantBusyId(t.id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/accounts/${t.clientUserId}/framework-addons`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        // No frameworkId on the request → an unassigned slot the client
+        // applies themselves, for a ticket that asked for "a framework
+        // add-on" without naming which one yet.
+        body: JSON.stringify({ frameworkId: t.meta?.frameworkId || null, status: "pending_billing", note: `From support ticket: ${t.topic}` }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setGrantResultById(m => ({ ...m, [t.id]: res.ok ? { ok: true } : { ok: false, error: data.error } }));
+    } catch {
+      setGrantResultById(m => ({ ...m, [t.id]: { ok: false, error: "Could not reach the server." } }));
+    } finally { setGrantBusyId(null); }
+  }
 
   const load = useCallback(() => {
     const qs = !viewerIsAdmin && scope !== "mine" ? `?scope=${scope}` : "";
@@ -15697,6 +15723,35 @@ function SupportRequestConsole({ viewerIsAdmin }) {
                     </div>
                   )}
                 </div>
+
+                {/* One-click action for a framework-add-on request — only
+                    admins can grant (POST /api/admin/accounts/:id/framework-addons
+                    is requireAdmin-gated), and only while nothing's been
+                    granted from this ticket yet. */}
+                {viewerIsAdmin && t.meta?.kind === "framework_addon" && t.clientUserId && (
+                  <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8}}
+                    onClick={e=>e.stopPropagation()}>
+                    {grantResultById[t.id]?.ok ? (
+                      <span style={{fontSize:12,color:C.greenText,fontWeight:600}}>
+                        ✓ Granted {safeText(t.meta.frameworkName || t.meta.frameworkId || "an unassigned slot")}
+                      </span>
+                    ) : (
+                      <>
+                        <button onClick={()=>grantFromTicket(t)} disabled={grantBusyId===t.id}
+                          style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.accent}55`,
+                            background:`${C.accent}18`,color:C.accentText,fontSize:12,fontWeight:600,
+                            cursor:grantBusyId===t.id?"default":"pointer"}}>
+                          {grantBusyId===t.id ? "Granting…"
+                            : t.meta.frameworkName || t.meta.frameworkId ? `Grant ${safeText(t.meta.frameworkName || t.meta.frameworkId)}`
+                            : "Grant an unassigned slot"}
+                        </button>
+                        {grantResultById[t.id]?.error && (
+                          <span style={{fontSize:11.5,color:C.redText}}>{safeText(grantResultById[t.id].error)}</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {isOpen && (
                   <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
@@ -16349,6 +16404,12 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  // Set when the server's write-side clamp (clampSelectedFrameworks,
+  // frameworkEntitlements.js) silently drops a framework the client picked
+  // beyond their plan/entitlements — the save still succeeds, but not
+  // exactly as submitted, and that used to vanish with zero feedback since
+  // the response's frameworksDropped field was never read here.
+  const [droppedWarning, setDroppedWarning] = useState(null);
   const [company, setCompany] = useState({ name: "", industry: "", employees: "" });
   const [techStack, setTechStack] = useState([]);
   const [techInput, setTechInput] = useState("");
@@ -16499,6 +16560,12 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
     };
   }
 
+  function noteDroppedFrameworks(dropped) {
+    if (!Array.isArray(dropped) || dropped.length === 0) { setDroppedWarning(null); return; }
+    const names = dropped.map(d => d.name || d.id).join(", ");
+    setDroppedWarning(`${dropped.length === 1 ? "One framework wasn't" : `${dropped.length} frameworks weren't`} saved — ${names}. ${dropped[0]?.reason || "Beyond your plan's included frameworks."}`);
+  }
+
   async function saveOnly() {
     setSaving(true);
     setError(null);
@@ -16509,6 +16576,13 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
         body: JSON.stringify({ data: buildUpdatedData() }),
       });
       if (!res.ok) throw new Error("Failed to save changes");
+      const data = await res.json().catch(() => ({}));
+      // onSaved() closes this screen and navigates away, so if something was
+      // silently dropped the client needs to see why BEFORE that happens —
+      // setting the warning and then immediately unmounting would mean it's
+      // never actually seen. The save already succeeded; staying put just
+      // means they read the notice before leaving, on their own timing.
+      if (data.frameworksDropped?.length) { noteDroppedFrameworks(data.frameworksDropped); return; }
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -16527,6 +16601,8 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
         body: JSON.stringify({ data: buildUpdatedData() }),
       });
       if (!res.ok) throw new Error("Failed to save changes");
+      const data = await res.json().catch(() => ({}));
+      if (data.frameworksDropped?.length) { noteDroppedFrameworks(data.frameworksDropped); setSaving(false); return; }
       // Hand off to the root regenerate handler (it manages the program lifecycle)
       await onRegenerate(assessmentId, replaceOld);
     } catch (err) {
@@ -16566,6 +16642,12 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
               {error && (
                 <div style={{marginBottom:16,padding:"10px 14px",background:`${C.red}15`,
                   border:`1px solid ${C.red}33`,borderRadius:8,color:C.redText,fontSize:13}}>{error}</div>
+              )}
+              {droppedWarning && (
+                <div style={{marginBottom:16,padding:"10px 14px",background:`${C.amber}15`,
+                  border:`1px solid ${C.amber}33`,borderRadius:8,color:C.amberText,fontSize:13,lineHeight:1.5}}>
+                  {droppedWarning}
+                </div>
               )}
 
               {/* Company info */}

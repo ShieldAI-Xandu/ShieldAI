@@ -421,10 +421,37 @@ export function cancelEntitlement(rec, note = "") {
   return rec;
 }
 
-/** Monthly cents this client owes for live framework slots. */
+/**
+ * Monthly cents this client is committed to pay for live framework slots —
+ * pending_billing included, comped excluded. This is the client's own "what
+ * you'll owe" number (GET /api/billing/me): a pending_billing slot is a real
+ * commitment they already have access to, just not yet invoiced, so it
+ * belongs in what THEY see as their total.
+ *
+ * NOT for revenue/MRR reporting — see activeMonthlyCentsFor for that. Mixing
+ * the two was a real bug: a pending_billing entitlement was being summed into
+ * both the admin overview's mrrCents (via this function) AND pendingCents
+ * (via pendingBillingEntitlements), double-counting the same $49.99 as both
+ * earned revenue and money owed, directly contradicting billingRoutes.js's
+ * own "never folded into mrrCents" comment.
+ */
 export function monthlyCentsFor(db, userId) {
   return entitlementsFor(db, userId)
     .filter(e => ENTITLING_STATUSES.has(e.status) && e.status !== "comped")
+    .reduce((sum, e) => sum + (e.priceCents || 0), 0);
+}
+
+/**
+ * Monthly cents ACTUALLY BEING BILLED for this client's framework slots —
+ * `active` only. Excludes both `comped` (real access, zero revenue) and
+ * `pending_billing` (owed, not yet invoiced — see pendingBillingEntitlements
+ * for that queue). This is the one that belongs in MRR and in anything
+ * labeled revenue; monthlyCentsFor above is a different, larger number by
+ * design and must not be used for financial reporting.
+ */
+export function activeMonthlyCentsFor(db, userId) {
+  return entitlementsFor(db, userId)
+    .filter(e => e.status === "active")
     .reduce((sum, e) => sum + (e.priceCents || 0), 0);
 }
 
