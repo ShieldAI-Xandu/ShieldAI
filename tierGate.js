@@ -35,8 +35,27 @@ export function makeTierGate(db) {
   }
 
   // Gate a route on a capability flag (on/off feature).
-  function capability(cap) {
+  //
+  // `clientOnly` (default false): also block staff outright instead of
+  // waving them through. The plain staff-bypass below is correct for nearly
+  // everything this gates — an admin/analyst acting on a client's behalf
+  // isn't bound by that client's plan limits. It's WRONG for a route shaped
+  // around "the caller's own account" (a purchase, a self-service action) —
+  // there, staff have no account of their own to act on, and letting them
+  // through would let an analyst rack up a billable entitlement on their own
+  // login. Before this option existed, routes needing that exclusion
+  // (frameworkAddonRoutes.js) each hand-rolled their own 403 check after the
+  // gate — easy for a new route copying the pattern to forget. One flag on
+  // the shared gate instead of N bespoke guards.
+  function capability(cap, { clientOnly = false } = {}) {
     return (req, res, next) => {
+      if (clientOnly && (req.isAdmin || req.isAnalyst)) {
+        return res.status(403).json({
+          error: "This is a client-only action. Staff act on a client's behalf through the admin console or a support request instead.",
+          code: "CLIENT_ONLY",
+          capability: cap,
+        });
+      }
       // Admins and analysts are staff — not bound by client plan limits.
       if (req.isAdmin || req.isAnalyst) return next();
       const tier = tierOf(req.userId);
@@ -51,6 +70,21 @@ export function makeTierGate(db) {
         requiresTierName: minTier ? getTier(minTier).name : null,
         requiresPrice: minTier ? priceLabel(minTier) : null,
       });
+    };
+  }
+
+  // Same client-only exclusion, standalone — for a route with no capability/
+  // tier check of its own (e.g. releasing something the client already
+  // holds) that still must not be reachable by staff acting as "themselves."
+  function clientOnly() {
+    return (req, res, next) => {
+      if (req.isAdmin || req.isAnalyst) {
+        return res.status(403).json({
+          error: "This is a client-only action. Staff act on a client's behalf through the admin console or a support request instead.",
+          code: "CLIENT_ONLY",
+        });
+      }
+      next();
     };
   }
 
@@ -100,7 +134,7 @@ export function makeTierGate(db) {
     };
   }
 
-  return { capability, limit, trainingDelivery, tierOf, addonsOf };
+  return { capability, limit, trainingDelivery, clientOnly, tierOf, addonsOf };
 }
 
 // Common counting helpers (creation-time enforcement).

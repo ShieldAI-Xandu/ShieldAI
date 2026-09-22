@@ -30,10 +30,13 @@
 // limits. That's correct for every other route it protects and WRONG here:
 // without an explicit block, an analyst hitting this endpoint would create a
 // billable entitlement on their own account, and — worse — the capability
-// gate would never stop them. Staff are 403'd on purpose. They add a
-// framework for a client through the admin grant (adminRoutes.js) or by
-// filing a support request, which is the one path that still enforces
-// analystOwnsClient.
+// gate would never stop them. Staff are 403'd on purpose, via tierGate.js's
+// `clientOnly` option/middleware (see gate.capability(..., {clientOnly:true})
+// and gate.clientOnly() below) — a shared mechanism rather than a bespoke
+// per-route guard, so a future client-only route gets this by construction
+// instead of needing to remember to reinvent it. They add a framework for a
+// client through the admin grant (adminRoutes.js) or by filing a support
+// request, which is the one path that still enforces analystOwnsClient.
 
 import {
   frameworkAllowance, hasFreeIncludedSlot, newEntitlement, assignEntitlement,
@@ -73,19 +76,6 @@ export function registerFrameworkAddonRoutes(app, {
       .map(a => a.analystUserId);
     const admins = users().filter(u => u.isAdmin).map(u => u.id);
     return [...new Set([...analystIds, ...admins])];
-  }
-
-  // Staff have no plan of their own to exceed, so "buy a slot" is meaningless
-  // for them and would silently create a charge against a staff account.
-  function blockStaff(req, res) {
-    if (req.isAdmin || req.isAnalyst) {
-      res.status(403).json({
-        error: "Staff accounts don't hold framework add-ons. Grant one to the client from the admin console, or file a support request for their assigned analyst to action.",
-        code: "STAFF_NOT_PURCHASER",
-      });
-      return true;
-    }
-    return false;
   }
 
   function allowanceFor(userId) {
@@ -131,9 +121,7 @@ export function registerFrameworkAddonRoutes(app, {
   });
 
   // ── Buy (or re-use) a slot for one framework ──
-  app.post("/api/client/framework-addons", requireAuth, gate.capability("complianceAccess"), async (req, res) => {
-    if (blockStaff(req, res)) return;
-
+  app.post("/api/client/framework-addons", requireAuth, gate.capability("complianceAccess", { clientOnly: true }), async (req, res) => {
     const tierId = gate.tierOf(req.userId);
     const frameworkId = String(req.body?.frameworkId || "").trim();
     if (!frameworkId) return res.status(400).json({ error: "frameworkId is required." });
@@ -248,9 +236,7 @@ export function registerFrameworkAddonRoutes(app, {
   });
 
   // ── Release a framework, keep the slot ──
-  app.delete("/api/client/framework-addons/:id", requireAuth, async (req, res) => {
-    if (blockStaff(req, res)) return;
-
+  app.delete("/api/client/framework-addons/:id", requireAuth, gate.clientOnly(), async (req, res) => {
     const rec = entitlements().find(e => e.id === req.params.id && e.userId === req.userId);
     if (!rec) return res.status(404).json({ error: "Add-on not found." });
     if (rec.status === "cancelled") return res.status(409).json({ error: "That add-on has already been cancelled." });
