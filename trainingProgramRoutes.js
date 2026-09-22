@@ -65,6 +65,19 @@ function trainingEmailHtml(learner, title) {
 <p>Thanks,<br/>Your security team</p>`;
 }
 
+// Generic, not tied to any one assignment — for "resend my link" support
+// requests where there's no single title to reference (the learner may have
+// several assignments, or none currently active). Same token, same link;
+// see the "Resend link" route below for why the token itself never rotates.
+function learnerLinkEmailHtml(learner) {
+  const link = trainingLink(learner);
+  return `<p>Hi ${esc(learner.name.split(" ")[0])},</p>
+<p>Here's your personal security training link:</p>
+<p><a href="${link}">${link}</a></p>
+<p>Bookmark it — it's yours and doesn't change, so you can use this same link any time you have training to complete.</p>
+<p>Thanks,<br/>Your security team</p>`;
+}
+
 export const LEARNER_STATUSES = ["active", "inactive"];
 export const ASSIGNMENT_STATUSES = ["assigned", "in_progress", "completed", "overdue", "waived"];
 
@@ -523,6 +536,38 @@ export function registerTrainingProgramRoutes(app, {
     if (!result.ok) return res.status(400).json({ error: result.error });
     await db.write();
     res.json({ ok: true, learner: result.record, appliedFields: result.appliedFields, skippedFields: result.skippedFields });
+  });
+
+  // Re-send a learner's own training link by email — for "I lost my link" /
+  // "send me the link again" requests that aren't tied to any one
+  // assignment. Deliberately does NOT rotate learner.token: the link is
+  // meant to be a stable bookmark, and rotating it would silently break any
+  // copy the learner already has (email, browser history, a saved
+  // bookmark) with no way for them to know it happened. If a token ever
+  // needs to be invalidated for a real compromise, that's a different,
+  // more deliberate action than "resend" — not built here.
+  //
+  // gateDelivery (not gateRoster): this sends an email, the same capability
+  // boundary as the assignment-level /remind route below.
+  app.post("/api/training-program/learners/:id/resend-link", requireAuth, gateDelivery, emailLimit, async (req, res) => {
+    const scope = resolveClientScope(db, req, { analystOwnsClient });
+    if (!scope.ok) return res.status(403).json({ error: scope.error });
+    const learner = (db.data.learners || []).find(l => l.id === req.params.id && l.clientUserId === scope.clientUserId);
+    if (!learner) return res.status(404).json({ error: "Learner not found." });
+
+    let emailed = false, sendError = null;
+    if (emailConfigured()) {
+      const result = await sendEmail({ to: learner.email, subject: "Your ShieldAI training link", html: learnerLinkEmailHtml(learner), fromLocal: "notifications" });
+      emailed = result.ok;
+      sendError = result.ok ? null : result.error;
+    } else {
+      sendError = "Email sending is not configured.";
+    }
+    const outcome = emailed ? "emailed" : `email failed: ${sendError}`;
+    logClientAction(db, { clientUserId: scope.clientUserId, actorUserId: req.userId, actorRole: scope.role,
+      action: "training_link_resent", detail: `Resent training link to ${learner.name} (${outcome}).` });
+
+    res.json({ ok: true, emailed, sendError, learnerLink: `/train/${learner.token}` });
   });
 
   // === ASSIGNMENTS =============================================

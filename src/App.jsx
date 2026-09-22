@@ -2018,106 +2018,6 @@ function PrioritiesSection({ results, programId, onRegenerated }) {
     </div>
   );
 }
-// Loose but conservative name match — these are two different systems (this
-// section's narrative policies come from the AI program build; Policy
-// Library's are separately generated documents) with no shared id, only a
-// name in common. Normalizing punctuation/case catches "Password &
-// Authentication Policy" vs "password authentication policy" while still
-// requiring the names to be effectively identical — never a fuzzy/partial
-// match, since a wrong positive here would tell a client something is done
-// when it isn't.
-function normalizePolicyName(s) {
-  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function PoliciesSection({ results, programId, onRegenerated, onNavigate }) {
-  // Combine policies from both pipeline steps
-  const items = [
-    ...(results?.policiesCore?.policies || []),
-    ...(results?.policiesOps?.policies || []),
-  ];
-  const [expanded, setExpanded] = useState(null);
-  const [savedPolicies, setSavedPolicies] = useState([]);
-  useEffect(() => {
-    authFetch(`${API_BASE}/api/policies`).then(r => r.ok ? r.json() : []).then(list => {
-      setSavedPolicies(Array.isArray(list) ? list : []);
-    }).catch(() => {});
-  }, []);
-  const savedByName = new Map(savedPolicies.map(p => [normalizePolicyName(p.policyName), p]));
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
-        <SectionLabel text="Security Policies — Click to Expand"/>
-        <div style={{marginLeft:"auto"}}>
-          <RegenerateSectionButton programId={programId} sectionKey="policies"
-            label="🔄 Refresh Policies" onRegenerated={onRegenerated}/>
-        </div>
-      </div>
-      <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        {items.map((p,i)=>{
-          const saved = savedByName.get(normalizePolicyName(p.name));
-          return (
-          <Card key={p.id||i} style={{cursor:"pointer",padding:"14px 18px"}}
-            onClick={()=>setExpanded(expanded===i?null:i)}>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:18}}>📄</span>
-              <div style={{flex:1}}>
-                <div style={{color:C.text,fontWeight:600,fontSize:14}}>{safeText(p.name)}</div>
-                <div style={{color:C.textSec,fontSize:12,marginTop:2}}>{safeText(p.purpose)}</div>
-              </div>
-              <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                {saved ? (
-                  <Badge label="✓ Generated" color={C.green}/>
-                ) : (
-                  <span onClick={(e)=>{e.stopPropagation(); onNavigate?.("library");}}
-                    style={{fontSize:11,color:C.accentText,fontWeight:600,cursor:"pointer",
-                      textDecoration:"underline",textUnderlineOffset:2}}>
-                    Not yet generated →
-                  </span>
-                )}
-                <Badge label={p.reviewCycle||"Annual"}/>
-                <span style={{color:C.textMut,fontSize:16}}>{expanded===i?"▲":"▼"}</span>
-              </div>
-            </div>
-            {expanded===i && (
-              <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-                <div style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:C.textMut,marginBottom:6}}>SCOPE</div>
-                  <p style={{color:C.textSec,fontSize:13,margin:0}}>{safeText(p.scope)}</p>
-                </div>
-                <div style={{marginBottom:10,padding:"12px 14px",background:C.bg,
-                  borderLeft:`3px solid ${C.accent}`,borderRadius:4}}>
-                  <div style={{fontSize:11,color:C.accentText,marginBottom:6}}>POLICY TEXT</div>
-                  <p style={{color:C.text,fontSize:13,margin:0,lineHeight:1.75,fontStyle:"italic"}}>
-                    {safeText(p.policyText)}
-                  </p>
-                </div>
-                {p.procedures && (
-                  <div>
-                    <div style={{fontSize:11,color:C.textMut,marginBottom:6}}>PROCEDURES</div>
-                    {p.procedures.map((step,j)=>(
-                      <div key={j} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:6}}>
-                        <div style={{width:20,height:20,borderRadius:"50%",background:`${C.accent}22`,
-                          color:C.accentText,fontSize:10,fontWeight:700,display:"flex",
-                          alignItems:"center",justifyContent:"center",flexShrink:0}}>{j+1}</div>
-                        <span style={{color:C.textSec,fontSize:13}}>{safeText(step)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{marginTop:10,display:"flex",gap:8}}>
-                  <Badge label={`Owner: ${p.owner||"IT"}`} color={C.textSec}/>
-                  <Badge label={`Review: ${p.reviewCycle||"Annual"}`} color={C.textSec}/>
-                </div>
-              </div>
-            )}
-          </Card>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 function WorkflowsSection({ results, programId, onRegenerated }) {
   const items = results?.workflows?.workflows || [];
   const [active, setActive] = useState(0);
@@ -4608,7 +4508,7 @@ function notifTone(type) { return NOTIF_TONE[type] || NOTIF_TONE.system; }
 function sectionForLink(link) {
   if (!link) return null;
   const l = String(link).toLowerCase();
-  if (l.includes("polic")) return "policies";
+  if (l.includes("polic")) return "library";
   if (l.includes("complian")) return "compliance";
   if (l.includes("task") || l.includes("remediat")) return "remediation";
   if (l.includes("evidence")) return "evidence";
@@ -4913,6 +4813,22 @@ function TrainingProgramSection() {
     catch { flash("Copy failed — link: " + url, C.amberText); }
   }
 
+  // Emails the learner's existing link — same token, not rotated (see the
+  // route's own comment for why). For "a learner asks for their link again"
+  // without needing an active assignment to hang a reminder off of.
+  async function resendLink(l) {
+    setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/training-program/learners/${l.id}/resend-link`, { method: "POST", body: "{}" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not resend the link.");
+      if (d.emailed) flash("Training link emailed to the learner.");
+      else if (d.sendError) flash(`Couldn't send the email: ${d.sendError} — copy the link instead.`, C.amberText);
+      else flash("Email isn't configured on this server yet — copy the link and share it manually.", C.amberText);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
   // Summarizes an emailResults[] array (from assignment/quarter create or a
   // remind call) into a human-readable suffix for a flash message.
   function emailSummary(emailResults) {
@@ -5165,6 +5081,7 @@ function TrainingProgramSection() {
                       </div>
                       <span style={{fontSize:11,color:C.textSec}}>{l.completedCount}/{l.assignmentCount} done</span>
                       <button onClick={()=>copyLink(l)} style={miniBtn(C.accent,false)}>Copy link</button>
+                      <button onClick={()=>resendLink(l)} disabled={busy} style={miniBtn(C.accent,busy)}>Resend link</button>
                       <button onClick={()=>startEditLearner(l)} disabled={busy} style={miniBtn(C.textSec,busy)}>Edit</button>
                       <VersionHistoryPanel entityLabel="This learner" historyUrl={`/api/training-program/learners/${l.id}/history`}
                         restoreUrlFor={vid=>`/api/training-program/learners/${l.id}/restore/${vid}`} onRestored={loadAll}
@@ -9151,10 +9068,6 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   const hasTrainingView = can("trainingPlan");       // Starter+: view the recommendation preview
   const hasTrainingFull = can("trainingDelivery");   // Growth+ (or Starter w/ add-on): full generation
 
-  const policyCount =
-    (results?.policiesCore?.policies?.length || 0) +
-    (results?.policiesOps?.policies?.length || 0);
-
   // A client-access demo (prospect) can't open the analyst console, so we give
   // them a "Your vCISO" explainer showing what a human analyst does for them at
   // each stage. Investor demos and normal accounts don't need it.
@@ -9163,7 +9076,6 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   const nav = [
     { id:"overview",    icon:"🎯", label:"Overview",          badge:null },
     { id:"priorities",  icon:"📊", label:"Priorities",        badge:results?.priorities?.priorities?.length || null },
-    { id:"policies",    icon:"📄", label:"Policies",          badge:!hasPrograms?null:(policyCount || null) },
     { id:"workflows",   icon:"🔄", label:"Workflows",         badge:!hasWorkflows?null:results?.workflows?.workflows?.length },
     { id:"compliance",  icon:"✅", label:"Compliance",        badge:!hasCompliance?null:results?.compliance?.frameworks?.length },
     { id:"remediation", icon:"🛠️", label:"Remediation",       badge:null },
@@ -9187,7 +9099,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   // (see the sectionMap entries below for why). Every other tier's existing
   // per-section LockedFeature fallback is untouched.
   const FREE_LOCKED_NAV_IDS = new Set([
-    "policies", "workflows", "remediation", "evidence", "vendors", "calendar",
+    "workflows", "remediation", "evidence", "vendors", "calendar",
     "threats", "tools", "training", "trainingmgr", "reports", "library",
   ]);
   const navWithLock = nav.map(n => ({ ...n, locked: tier === "free" && FREE_LOCKED_NAV_IDS.has(n.id) }));
@@ -9201,7 +9113,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
   const NAV_GROUPS = [
     { label: null, ids: ["overview"] },
     { label: "Your Risk & Roadmap", ids: ["priorities", "remediation", "threats", "vendors", "tools"] },
-    { label: "Policies & Compliance", ids: ["policies", "workflows", "compliance", "library", "evidence", "calendar"] },
+    { label: "Policies & Compliance", ids: ["workflows", "compliance", "library", "evidence", "calendar"] },
     { label: "People & Training", ids: ["training", "trainingmgr"] },
     { label: "Reports", ids: ["report", "reports"] },
     { label: "Account", ids: ["vciso", "billing"] },
@@ -9214,9 +9126,6 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     priorities: <LockedFeature icon="📊" title="Prioritized Security Roadmap" capability="buildPrograms"
       blurb="A ranked, do-this-first roadmap built from your assessment — not just a score."
       points={["Top 5 priorities ranked by impact and effort","3 quick wins you can start today","Owner and estimated cost per item"]}/>,
-    policies: <LockedFeature icon="📄" title="Security Policies" capability="createPolicies"
-      blurb="Ready-to-use written policies, tailored to your business."
-      points={["Acceptable Use, Password & Authentication, Data Classification","Incident Response, Remote Work, Vendor Risk","Editable, exportable policy documents"]}/>,
     workflows: <LockedFeature icon="🔄" title="Incident Response Workflows" capability="workflowsAccess"
       blurb="Step-by-step playbooks for when something goes wrong."
       points={["Ransomware, phishing, and data-breach workflows","Clear escalation paths and ownership","Success criteria for each response"]}/>,
@@ -9265,7 +9174,6 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
     // equivalent (see generateFreePreview/riskEngine.js), so this renders
     // whenever the data exists, on any tier.
     priorities: results?.priorities?.priorities?.length ? <PrioritiesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/> : lockedSections.priorities,
-    policies:   !hasPrograms ? lockedSections.policies : <PoliciesSection results={results} programId={programId} onRegenerated={onSectionsRegenerated} onNavigate={setSection}/>,
     workflows:  !hasWorkflows ? lockedSections.workflows : <WorkflowsSection results={results} programId={programId} onRegenerated={onSectionsRegenerated}/>,
     // The live compliance engine, not the AI's prose. ComplianceSection rendered
     // `results.compliance.frameworks` — text generated during program creation —
