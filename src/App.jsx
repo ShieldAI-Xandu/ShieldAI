@@ -880,10 +880,13 @@ function setSessionExpiredHandler(fn) { _onSessionExpired = fn; }
 
 async function authFetch(url, options = {}) {
   const token = getAuthToken();
-  const headers = { ...(options.headers || {}) };
+  // `silent402`: a background/best-effort request the user didn't ask for must
+  // not pop the global upgrade modal when the tier lacks the feature.
+  const { silent402, ...fetchOptions } = options;
+  const headers = { ...(fetchOptions.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(url, { ...options, headers });
-  if (res.status === 402 && _onUpgradeRequired) {
+  const res = await fetch(url, { ...fetchOptions, headers });
+  if (res.status === 402 && _onUpgradeRequired && !silent402) {
     // Clone so the caller can still read the body if it wants to.
     try {
       const data = await res.clone().json();
@@ -2304,16 +2307,18 @@ function findingSevColor(s) { return FINDING_SEV_TONE[String(s || "INFO").toUppe
 // modal shows "Added to Remediation · <time>" on reopen without each card
 // having to fetch tasks itself. Best-effort: a tier without remediation
 // tasks (402) or any failure just leaves the map empty.
-const findingRefStore = { map: {}, loaded: false, inflight: null, listeners: new Set() };
+const findingRefStore = { map: {}, loaded: false, denied: false, inflight: null, listeners: new Set() };
 function findingRefKey(ref) { return ref?.sourceType && ref?.sourceId ? `${ref.sourceType}:${ref.sourceId}` : null; }
 function notifyFindingRefs() { findingRefStore.listeners.forEach(fn => fn({ ...findingRefStore.map })); }
 async function loadFindingRefs(force = false) {
   if (findingRefStore.inflight) return findingRefStore.inflight;
+  if (findingRefStore.denied) return;                    // tier has no remediation tasks; stop asking
   if (findingRefStore.loaded && !force) return;
   findingRefStore.inflight = (async () => {
     try {
-      const res = await authFetch(`${API_BASE}/api/tasks/finding-refs`);
-      if (res.ok) findingRefStore.map = await res.json();
+      const res = await authFetch(`${API_BASE}/api/tasks/finding-refs`, { silent402: true });
+      if (res.status === 402) findingRefStore.denied = true;
+      else if (res.ok) findingRefStore.map = await res.json();
     } catch { /* leave whatever we had */ }
     findingRefStore.loaded = true;
     findingRefStore.inflight = null;

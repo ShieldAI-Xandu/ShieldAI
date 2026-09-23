@@ -86,7 +86,10 @@ export const AGENT_LATEST_VERSIONS = {
 /** Latest shipped version for an OS, or null if the OS is unknown (in which
  *  case nothing can be called "outdated" — we don't guess). */
 export function latestVersionFor(os) {
-  return AGENT_LATEST_VERSIONS[String(os || "").toLowerCase()] || null;
+  // Own-property check: `os` is agent-supplied, and a bare index would resolve
+  // names like "constructor" or "__proto__" to inherited Object members.
+  const key = String(os || "").toLowerCase();
+  return Object.hasOwn(AGENT_LATEST_VERSIONS, key) ? AGENT_LATEST_VERSIONS[key] : null;
 }
 
 // Ensure all agent collections exist on the lowdb instance.
@@ -139,8 +142,8 @@ const RESOLVED_VULN_TTL_DAYS = 90;
 // spoof text, and clip it. React escapes it on render; this covers the rest.
 function cleanText(v, max, { keepNewlines = false } = {}) {
   let s = String(v ?? "");
-  s = s.replace(keepNewlines ? /[\u0000-\u0009\u000b-\u001f\u007f‪-‮⁦-⁩]/g
-                             : /[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, " ");
+  s = s.replace(keepNewlines ? /[\u0000-\u0009\u000b-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g
+                             : /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, " ");
   return s.replace(/ {2,}/g, " ").trim().slice(0, max);
 }
 
