@@ -9764,6 +9764,35 @@ function MastermindLogo({ size = 48, animated = false, nodeColors = [C.purpleTex
   );
 }
 
+// Floating launcher for Mastermind on the client dashboard — the same brain
+// mark from the marketing page's "Meet Mastermind" section (MastermindLogo
+// above), not the plain 🧠 emoji used elsewhere in the app, so the promise
+// made on the marketing page has a literal visual match once a client is
+// actually inside the product. Persistent label pill per product decision
+// (not a hover tooltip, not a dismissible one-time greeting).
+function MastermindFab({ unlocked, onClick }) {
+  return (
+    <button onClick={onClick} title={unlocked ? "Ask Mastermind" : "Starter plan feature"}
+      style={{position:"fixed",bottom:24,right:24,zIndex:60,display:"flex",alignItems:"center",gap:10,
+        padding:"8px 16px 8px 8px",borderRadius:999,cursor:"pointer",
+        background:C.card,border:`1px solid ${unlocked ? C.purple+"55" : C.border}`,
+        boxShadow:"0 6px 20px rgba(0,0,0,0.35)"}}>
+      <span style={{position:"relative",display:"flex",width:44,height:44,borderRadius:"50%",
+        alignItems:"center",justifyContent:"center",
+        background:unlocked ? `${C.purple}1E` : "rgba(255,255,255,0.04)"}}>
+        <MastermindLogo size={36} animated={unlocked}/>
+        {!unlocked && (
+          <span style={{position:"absolute",bottom:-2,right:-2,fontSize:13,lineHeight:1,
+            background:C.card,border:`1px solid ${C.border}`,borderRadius:"50%",padding:2}}>🔒</span>
+        )}
+      </span>
+      <span style={{fontSize:13,fontWeight:600,color:unlocked ? C.text : C.textSec,whiteSpace:"nowrap"}}>
+        How can I help you?
+      </span>
+    </button>
+  );
+}
+
 // Wordmark: "Shield" in the current ink color + "AI" in brand cyan
 function ShieldWordmark({ size = 18, ink = "#FFFFFF" }) {
   const brand = useBranding();
@@ -25418,6 +25447,14 @@ export default function ShieldAI() {
             onSectionsRegenerated={sections => setResults(r => ({ ...r, ...sections }))}/>
         </div>
       </div>
+      {!user.isAdmin && !user.isAnalyst && (
+        <MastermindFab
+          unlocked={can("mastermindChat")}
+          onClick={() => can("mastermindChat")
+            ? openMastermind({ phase })
+            : setUpgradePrompt({ error:"Mastermind is available on the Starter plan and above. Upgrade to Starter ($159/mo) to chat with your virtual-CISO assistant.", code:"UPGRADE_REQUIRED", capability:"mastermindChat", currentTier:user.tier, requiresTier:"starter", requiresTierName:tierDisplay("starter").name, requiresPrice:tierDisplay("starter").price })}
+        />
+      )}
       </CapabilityContext.Provider>
     );
   }
