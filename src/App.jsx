@@ -9773,7 +9773,12 @@ function MastermindLogo({ size = 48, animated = false, nodeColors = [C.purpleTex
 function MastermindFab({ unlocked, onClick }) {
   return (
     <button onClick={onClick} title={unlocked ? "Ask Mastermind" : "Starter plan feature"}
-      style={{position:"fixed",bottom:24,right:24,zIndex:60,display:"flex",alignItems:"center",gap:10,
+      // zIndex:40 — every full-screen modal overlay in this file uses 50+
+      // (see e.g. AddEndpointModal, AddIntegrationModal); staying below all
+      // of them means a modal always correctly covers this FAB rather than
+      // floating on top of one, should a future Dashboard tab ever mount
+      // one at the same time.
+      style={{position:"fixed",bottom:24,right:24,zIndex:40,display:"flex",alignItems:"center",gap:10,
         padding:"8px 16px 8px 8px",borderRadius:999,cursor:"pointer",
         background:C.card,border:`1px solid ${unlocked ? C.purple+"55" : C.border}`,
         boxShadow:"0 6px 20px rgba(0,0,0,0.35)"}}>
