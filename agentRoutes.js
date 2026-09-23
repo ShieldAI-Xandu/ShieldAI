@@ -69,10 +69,25 @@ const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 chars
 
-// The latest agent version ShieldAI ships. Surfaced to agents (so they can note
-// staleness) and used by the human-gated upgrade flow. Bump when you release a
-// new collector/runner.
-const AGENT_LATEST_VERSION = "1.3.0";
+// The latest agent version ShieldAI ships, PER OS — the three collectors are
+// released independently (a Windows-only change must not flag every Linux and
+// macOS agent as outdated). Surfaced to agents (so they can note staleness) and
+// used by the human-gated upgrade flow. Bump ONLY the OS whose collector/runner
+// (or installer) you actually released, alongside that collector's own version
+// constant: windows -> agent/windows/collect.ps1 ($AgentVersion),
+// linux -> agent/linux/collect.sh, macos -> agent/macOS/collect.sh (AGENT_VERSION).
+// 1.3.0 for linux/macos is a version-only alignment (no collector changes).
+export const AGENT_LATEST_VERSIONS = {
+  windows: "1.3.0",
+  linux:   "1.3.0",
+  macos:   "1.3.0",
+};
+
+/** Latest shipped version for an OS, or null if the OS is unknown (in which
+ *  case nothing can be called "outdated" — we don't guess). */
+export function latestVersionFor(os) {
+  return AGENT_LATEST_VERSIONS[String(os || "").toLowerCase()] || null;
+}
 
 // Ensure all agent collections exist on the lowdb instance.
 function ensureCollections(db) {
@@ -565,7 +580,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
         // optional server-suggested poll interval (minutes); null = keep current
         pollIntervalMinutes: req.agent.desiredPollMinutes || null,
         // latest agent version available, so the agent/installer can note staleness
-        latestAgentVersion: AGENT_LATEST_VERSION,
+        latestAgentVersion: latestVersionFor(req.agent.os),
       };
       if (req.agent.pendingCheckIn) {
         req.agent.pendingCheckIn = false;
@@ -655,7 +670,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", platform: "UNIX" });
       res.set({
         "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="shieldai-agent-${os}-v${AGENT_LATEST_VERSION}.zip"`,
+        "Content-Disposition": `attachment; filename="shieldai-agent-${os}-v${latestVersionFor(os)}.zip"`,
         "Content-Length": String(buf.length),
       });
       res.send(buf);
@@ -813,7 +828,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   // which agents are outdated and produce the exact command a human runs (or
   // sends to the client) to re-install the latest agent. No autonomous action.
 
-  // List endpoints whose agent version is behind AGENT_LATEST_VERSION.
+  // List endpoints whose agent version is behind the latest for THEIR OS.
   // Admin sees all; analyst sees assigned; client sees own.
   app.get("/api/endpoints/upgrades", requireAuth, (req, res) => {
     const allowed = req.isAdmin ? null
@@ -828,15 +843,17 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
           .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
         const ver = a.agentVersion || latestRep?.report?.agentVersion || "unknown";
         const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
+        const latest = latestVersionFor(a.os);
         return {
           id: a.id, hostname: a.hostname, os: a.os, agentVersion: ver,
-          latestVersion: AGENT_LATEST_VERSION,
-          outdated: ver !== AGENT_LATEST_VERSION,
+          latestVersion: latest,
+          // Unknown OS => no known "latest", so never flag it.
+          outdated: latest !== null && ver !== latest,
           owner: owner ? { id: owner.id, name: owner.companyName || owner.email } : null,
         };
       })
       .filter(r => r.outdated);
-    res.json({ latestVersion: AGENT_LATEST_VERSION, outdated: rows });
+    res.json({ latestVersions: AGENT_LATEST_VERSIONS, outdated: rows });
   });
 
   // Guided upgrade instructions for one endpoint — the exact command to run.
@@ -880,14 +897,14 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       clientUserId: agent.ownerUserId, actorUserId: req.userId,
       actorRole: req.isAdmin ? "admin" : isAssignedAnalyst ? "analyst" : "client_admin",
       action: "agent_upgrade_initiated",
-      detail: `Upgrade instructions issued for ${agent.hostname} (${agent.agentVersion || "unknown"} → ${AGENT_LATEST_VERSION}).`,
+      detail: `Upgrade instructions issued for ${agent.hostname} (${agent.agentVersion || "unknown"} → ${latestVersionFor(agent.os)}).`,
     });
     await db.write();
 
     res.json({
       hostname: agent.hostname, os, serverUrl,
       fromVersion: agent.agentVersion || "unknown",
-      toVersion: AGENT_LATEST_VERSION,
+      toVersion: latestVersionFor(agent.os),
       enrollmentToken: raw,           // shown once
       expiresInMinutes: 60,
       command,

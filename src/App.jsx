@@ -23443,7 +23443,12 @@ function MastermindConsole({ onClose }) {
             {!upgradesLoaded ? <Spinner/> : (
               <>
                 <div style={{color:C.textMut,fontSize:12,marginBottom:12}}>
-                  Latest version: <span style={{color:C.text,fontWeight:600}}>{upgrades?.latestVersion}</span>
+                  Latest version:{" "}
+                  {Object.entries(upgrades?.latestVersions || {}).map(([os, v], i) => (
+                    <span key={os}>{i > 0 && " · "}
+                      <span style={{color:C.textSec}}>{os==="macos"?"macOS":os.charAt(0).toUpperCase()+os.slice(1)}</span>{" "}
+                      <span style={{color:C.text,fontWeight:600}}>{v}</span></span>
+                  ))}
                   {" · "}{upgrades?.outdated?.length||0} outdated endpoint(s)
                 </div>
                 {(upgrades?.outdated||[]).length===0 ? (
