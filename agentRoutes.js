@@ -115,6 +115,19 @@ export function summarizeReport(report) {
 const FINDING_KINDS = ["av-detection", "log-anomaly", "exposed-file"];
 const FINDING_SEVERITIES = ["critical", "high", "medium", "low"];
 const MAX_FINDINGS_PER_REPORT = 100;
+const MAX_VULNS_PER_AGENT = 300;          // hard ceiling on stored records per agent
+const RESOLVED_VULN_TTL_DAYS = 90;
+
+// Agent-supplied text is untrusted (a file NAME on a user's desktop ends up in
+// a title, and titles later reach task lists and the Mastermind snapshot).
+// Strip control characters/bidi overrides so it can't smuggle line breaks or
+// spoof text, and clip it. React escapes it on render; this covers the rest.
+function cleanText(v, max, { keepNewlines = false } = {}) {
+  let s = String(v ?? "");
+  s = s.replace(keepNewlines ? /[\u0000-\u0009\u000b-\u001f\u007f‪-‮⁦-⁩]/g
+                             : /[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, " ");
+  return s.replace(/ {2,}/g, " ").trim().slice(0, max);
+}
 
 // Which check must NOT be "unknown" for absence of a kind to mean "fixed".
 const KIND_COVERAGE_CHECK = {
@@ -147,9 +160,9 @@ export function syncAgentFindings(db, agent, report) {
     const existing = db.data.agentVulnerabilities.find(v => v.dedupeKey === dedupeKey);
     const fields = {
       severity,
-      title: String(f.title || "Endpoint finding").slice(0, 200),
-      detail: String(f.detail || "").slice(0, 1000),
-      host: String(f.host || report.host?.hostname || agent.hostname || "").slice(0, 200),
+      title: cleanText(f.title || "Endpoint finding", 200) || "Endpoint finding",
+      detail: cleanText(f.detail, 1000, { keepNewlines: true }),
+      host: cleanText(f.host || report.host?.hostname || agent.hostname, 200),
       meta, lastSeenAt: now,
     };
     if (existing) {
@@ -168,6 +181,29 @@ export function syncAgentFindings(db, agent, report) {
     if (v.agentId !== agent.id || v.status !== "open" || seen.has(v.dedupeKey)) continue;
     if (!kindWasCovered(v.kind, checks)) continue;
     v.status = "resolved"; v.resolvedAt = now; resolved++;
+  }
+
+  // Bound growth: a buggy or compromised agent could otherwise mint endless
+  // distinct keys. Drop old resolved records first, then the oldest resolved
+  // beyond the per-agent ceiling. Open records are never dropped here.
+  const ttl = Date.now() - RESOLVED_VULN_TTL_DAYS * 86400000;
+  db.data.agentVulnerabilities = db.data.agentVulnerabilities.filter(v =>
+    !(v.agentId === agent.id && v.status === "resolved" && Date.parse(v.resolvedAt) < ttl));
+  const mine = db.data.agentVulnerabilities.filter(v => v.agentId === agent.id);
+  if (mine.length > MAX_VULNS_PER_AGENT) {
+    const drop = new Set(mine.filter(v => v.status === "resolved")
+      .sort((a, b) => Date.parse(a.resolvedAt) - Date.parse(b.resolvedAt))
+      .slice(0, mine.length - MAX_VULNS_PER_AGENT).map(v => v.id));
+    db.data.agentVulnerabilities = db.data.agentVulnerabilities.filter(v => !drop.has(v.id));
+  }
+  // Last resort: still over the ceiling means open records are piling up (an
+  // agent that keeps reporting new keys while claiming a source is "not
+  // covered", so nothing resolves). Evict the stalest by last-seen.
+  const still = db.data.agentVulnerabilities.filter(v => v.agentId === agent.id);
+  if (still.length > MAX_VULNS_PER_AGENT) {
+    const evict = new Set(still.sort((a, b) => Date.parse(a.lastSeenAt) - Date.parse(b.lastSeenAt))
+      .slice(0, still.length - MAX_VULNS_PER_AGENT).map(v => v.id));
+    db.data.agentVulnerabilities = db.data.agentVulnerabilities.filter(v => !evict.has(v.id));
   }
   return { opened, resolved };
 }
@@ -329,8 +365,13 @@ export function remediationHint(checkId) {
   return map[checkId] || {};
 }
 
-export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter }) {
+export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter, gate }) {
   ensureCollections(db);
+
+  // Endpoint vulnerabilities live under Threat Intel, so the client route
+  // carries the same `threatIntel` capability as /api/client/cve-exposure.
+  // Without `gate` (e.g. tests) it degrades to open, matching cveRoutes.js.
+  const threatIntelGate = gate ? gate.capability("threatIntel") : (req, res, next) => next();
 
   // ── middleware: authenticate an AGENT by its bearer token ───
   function requireAgent(req, res, next) {
@@ -884,7 +925,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     return { hasAgents: hasAgent, vulnerabilities: list };
   }
 
-  app.get("/api/client/vulnerabilities", requireAuth, (req, res) => {
+  app.get("/api/client/vulnerabilities", requireAuth, threatIntelGate, (req, res) => {
     res.json(listVulns(req.userId, req.query.status === "all"));
   });
 

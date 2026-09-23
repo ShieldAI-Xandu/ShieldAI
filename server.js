@@ -2513,7 +2513,7 @@ app.get("/api/admin/stats", requireAdmin, (req, res) => {
 //  MONITORING AGENT ROUTES (enrollment, ingestion, fleet, recommendations)
 // ─────────────────────────────────────────────────────────────
 registerDemoRoutes(app, db, { redeemLimiter: demoCodeLimiter });
-registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter });
+registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extractJson, logClientAction, analystClientIds, analystOwnsClient, aiLimiter, gate });
 registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
