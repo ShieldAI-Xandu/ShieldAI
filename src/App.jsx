@@ -11792,6 +11792,12 @@ function PolicyChecklistPreview() {
   );
 }
 
+// Shows a "PREVIEW TEST SITE" badge in the marketing header so investors and
+// previewers know this deployment is a test/preview, not the live product.
+// GO-LIVE: set to false (or delete the badge block in MarketingPage's nav)
+// when this build is served from the real ShieldAI website.
+const SHOW_PREVIEW_SITE_BADGE = true;
+
 function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenInvestor,
                         onOpenAbout, onOpenSupport, onOpenFaq,
                         openCodeEntry, onCodeEntryOpened }) {
@@ -11934,6 +11940,12 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           .mkt-cta-row { flex-direction:column; align-items:stretch; }
           .mkt-cta-row > button { width:100%; }
         }
+        /* Keep the preview badge on one line and visible on phones: drop the
+           tagline and tighten the badge rather than let the header overflow. */
+        @media (max-width: 520px) {
+          .mkt-tagline { display:none; }
+          .mkt-preview-badge { font-size:9.5px !important; padding:2px 8px !important; letter-spacing:0.8px !important; }
+        }
         .mkt-root button:focus-visible, .mkt-root a:focus-visible,
         .mkt-root input:focus-visible, .mkt-root select:focus-visible,
         .mkt-root textarea:focus-visible {
@@ -11948,7 +11960,16 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         background:`${navy}EE`,backdropFilter:"blur(10px)"}}>
         <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
           <ShieldLockup logoSize={26} textSize={18} ink={darkText}/>
-          <span style={{fontSize:11,color:darkTextSec,marginLeft:4}}>Virtual CISO</span>
+          <span className="mkt-tagline" style={{fontSize:11,color:darkTextSec,marginLeft:4}}>Virtual CISO</span>
+          {SHOW_PREVIEW_SITE_BADGE && (
+            <span role="status" className="mkt-preview-badge"
+              title="This is a preview / test site for evaluation. It is not the live ShieldAI service."
+              style={{fontSize:10.5,fontWeight:800,letterSpacing:1.2,textTransform:"uppercase",whiteSpace:"nowrap",
+                color:"#FBBF24",background:"#FBBF2420",border:"1px solid #FBBF2470",
+                borderRadius:20,padding:"3px 10px",marginLeft:6}}>
+              Preview Test Site
+            </span>
+          )}
           <div className="mkt-nav-links">
             <a href="#how" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>Pricing</a>
