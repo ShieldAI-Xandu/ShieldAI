@@ -11798,6 +11798,23 @@ function PolicyChecklistPreview() {
 // when this build is served from the real ShieldAI website.
 const SHOW_PREVIEW_SITE_BADGE = true;
 
+// One badge, used in the marketing header and in the logged-in app header
+// (real accounts only — callers skip it for demo sessions). `size="sm"` is the
+// tighter variant for the app's dense top bar.
+function PreviewSiteBadge({ size = "md", className }) {
+  if (!SHOW_PREVIEW_SITE_BADGE) return null;
+  const sm = size === "sm";
+  return (
+    <span role="status" className={className}
+      title="This is a preview / test site for evaluation. It is not the live ShieldAI service."
+      style={{fontSize:sm?9.5:10.5,fontWeight:800,letterSpacing:sm?0.8:1.2,textTransform:"uppercase",
+        whiteSpace:"nowrap",flexShrink:0,color:"#FBBF24",background:"#FBBF2420",border:"1px solid #FBBF2470",
+        borderRadius:20,padding:sm?"2px 8px":"3px 10px",marginLeft:6}}>
+      Preview Test Site
+    </span>
+  );
+}
+
 function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenInvestor,
                         onOpenAbout, onOpenSupport, onOpenFaq,
                         openCodeEntry, onCodeEntryOpened }) {
@@ -11961,15 +11978,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
         <div style={{maxWidth:1080,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",gap:12}}>
           <ShieldLockup logoSize={26} textSize={18} ink={darkText}/>
           <span className="mkt-tagline" style={{fontSize:11,color:darkTextSec,marginLeft:4}}>Virtual CISO</span>
-          {SHOW_PREVIEW_SITE_BADGE && (
-            <span role="status" className="mkt-preview-badge"
-              title="This is a preview / test site for evaluation. It is not the live ShieldAI service."
-              style={{fontSize:10.5,fontWeight:800,letterSpacing:1.2,textTransform:"uppercase",whiteSpace:"nowrap",
-                color:"#FBBF24",background:"#FBBF2420",border:"1px solid #FBBF2470",
-                borderRadius:20,padding:"3px 10px",marginLeft:6}}>
-              Preview Test Site
-            </span>
-          )}
+          <PreviewSiteBadge className="mkt-preview-badge"/>
           <div className="mkt-nav-links">
             <a href="#how" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>How it works</a>
             <a href="#pricing" style={{color:darkTextSec,fontSize:13,textDecoration:"none"}}>Pricing</a>
@@ -25448,6 +25457,7 @@ export default function ShieldAI() {
       <span onClick={() => setPhase("home")} style={{cursor:"pointer",display:"inline-flex",flexShrink:0}}>
         <ShieldLockup logoSize={22} textSize={15} ink={NAV.text} instanceKey="topbar"/>
       </span>
+      {!user.isDemo && <PreviewSiteBadge size="sm"/>}
       {/* minWidth:0 lets this flex item shrink below its content's natural
           width (the flex default is min-width:auto, which is exactly what
           was pushing the whole page into horizontal scroll on narrow
