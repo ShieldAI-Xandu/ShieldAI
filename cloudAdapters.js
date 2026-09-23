@@ -476,17 +476,30 @@ export function mapGcpPostureToFindings(facts) {
   // normal; a growing count is real, common over-privilege drift. Same
   // graduated-threshold style Azure's secure-score mapping above already
   // uses — a judgment call, stated plainly rather than hidden in a bare number.
-  const ownerBinding = facts.iamBindings.find(b => b.role === "roles/owner");
-  const ownerCount = ownerBinding?.members?.length ?? 0;
-  out.push(finding({
-    externalId: "gcp-project-owners",
-    title: ownerCount <= 1 ? `${ownerCount} project Owner` : `${ownerCount} principals hold project Owner`,
-    severity: ownerCount <= 1 ? "info" : ownerCount <= 3 ? "medium" : "high",
-    message: ownerCount <= 1
-      ? "At most one principal holds the primitive Owner role on this project — the expected baseline."
-      : `${ownerCount} principals hold roles/owner, GCP's most privileged role: ${(ownerBinding?.members || []).slice(0, 10).join(", ")}. Review whether each genuinely needs full project control, or a narrower predefined role would do.`,
-    raw: ownerBinding || null,
-  }));
+  // `null` facts.iamBindings means the getIamPolicy call itself failed (e.g.
+  // the service account's role doesn't extend to it) — reported honestly,
+  // same as buckets/firewalls below, never assumed to mean "no owners."
+  if (facts.iamBindings === null) {
+    out.push(finding({
+      externalId: "gcp-iam-unavailable",
+      title: "Could not check project IAM policy",
+      severity: "info",
+      message: "The Cloud Resource Manager getIamPolicy call failed for this project — the service account's Viewer role may not extend to it. Review project IAM bindings directly in the GCP console.",
+      raw: null,
+    }));
+  } else {
+    const ownerBinding = facts.iamBindings.find(b => b.role === "roles/owner");
+    const ownerCount = ownerBinding?.members?.length ?? 0;
+    out.push(finding({
+      externalId: "gcp-project-owners",
+      title: ownerCount <= 1 ? `${ownerCount} project Owner` : `${ownerCount} principals hold project Owner`,
+      severity: ownerCount <= 1 ? "info" : ownerCount <= 3 ? "medium" : "high",
+      message: ownerCount <= 1
+        ? "At most one principal holds the primitive Owner role on this project — the expected baseline."
+        : `${ownerCount} principals hold roles/owner, GCP's most privileged role: ${(ownerBinding?.members || []).slice(0, 10).join(", ")}. Review whether each genuinely needs full project control, or a narrower predefined role would do.`,
+      raw: ownerBinding || null,
+    }));
+  }
 
   // Audit logging — GCP's Admin Activity log is always on and can't be
   // disabled, but Data Access logs (who read/wrote what) are opt-in per
@@ -494,19 +507,30 @@ export function mapGcpPostureToFindings(facts) {
   // an empty array means no Data Access logging beyond the mandatory
   // Admin Activity baseline — a real, reportable gap, same spirit as AWS's
   // CloudTrail check and Azure's diagnostic-settings/Activity-Log-export check.
-  const dataAccessServices = facts.auditConfigs.filter(c =>
-    (c.auditLogConfigs || []).some(l => l.logType === "DATA_READ" || l.logType === "DATA_WRITE"));
-  out.push(finding({
-    externalId: "gcp-audit-data-access-logging",
-    title: dataAccessServices.length === 0
-      ? "No Data Access audit logging configured beyond the mandatory baseline"
-      : `Data Access audit logging configured for ${dataAccessServices.length} service(s)`,
-    severity: dataAccessServices.length === 0 ? "high" : "info",
-    message: dataAccessServices.length === 0
-      ? "Admin Activity logs are always on (GCP can't disable them), but Data Access logs — who actually read or wrote data — are opt-in and none are configured here."
-      : `Data Access logging is configured for: ${dataAccessServices.map(c => c.service).slice(0, 10).join(", ")}.`,
-    raw: facts.auditConfigs,
-  }));
+  // `null` means the same getIamPolicy call failed — same honest reporting.
+  if (facts.auditConfigs === null) {
+    out.push(finding({
+      externalId: "gcp-audit-unavailable",
+      title: "Could not check Data Access audit logging configuration",
+      severity: "info",
+      message: "The Cloud Resource Manager getIamPolicy call failed for this project — the service account's Viewer role may not extend to it. Review audit logging directly in the GCP console.",
+      raw: null,
+    }));
+  } else {
+    const dataAccessServices = facts.auditConfigs.filter(c =>
+      (c.auditLogConfigs || []).some(l => l.logType === "DATA_READ" || l.logType === "DATA_WRITE"));
+    out.push(finding({
+      externalId: "gcp-audit-data-access-logging",
+      title: dataAccessServices.length === 0
+        ? "No Data Access audit logging configured beyond the mandatory baseline"
+        : `Data Access audit logging configured for ${dataAccessServices.length} service(s)`,
+      severity: dataAccessServices.length === 0 ? "high" : "info",
+      message: dataAccessServices.length === 0
+        ? "Admin Activity logs are always on (GCP can't disable them), but Data Access logs — who actually read or wrote data — are opt-in and none are configured here."
+        : `Data Access logging is configured for: ${dataAccessServices.map(c => c.service).slice(0, 10).join(", ")}.`,
+      raw: facts.auditConfigs,
+    }));
+  }
 
   // Public storage exposure — publicAccessPrevention is GCS's own bucket-level
   // field for this, directly analogous to AWS's PublicAccessBlock and Azure's
@@ -557,7 +581,12 @@ export function mapGcpPostureToFindings(facts) {
         for (const p of SENSITIVE_PORTS) {
           const ports = rule.ports || [];
           const allAllowed = ports.length === 0; // GCP: no ports listed for a protocol = all ports
-          if (allAllowed || ports.some(pr => portInRange(...pr.split("-").map(Number), p.port))) {
+          // GCP ports entries are either a single port ("22") or a range
+          // ("20-30") — a single port has no "to" bound, so it means from===to.
+          if (allAllowed || ports.some(pr => {
+            const [from, to] = pr.split("-").map(Number);
+            return portInRange(from, to ?? from, p.port);
+          })) {
             wideOpen.push({ name: fw.name, port: p.name });
           }
         }
