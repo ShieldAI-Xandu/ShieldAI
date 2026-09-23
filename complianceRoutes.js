@@ -34,6 +34,7 @@ import { NOT_OFFERED } from "./frameworks.js";
 import { corroborate, RESOLUTION_OPTIONS } from "./agentEvidence.js";
 import { toEvidence, SECURITY_CHECKLIST } from "./securityChecklist.js";
 import { computePostureScore } from "./riskEngine.js";
+import { defaultDueDate } from "./taskRoutes.js";
 import {
   hasCapability, addonPriceLabel, nextTierForLimit, getTier, priceLabel,
 } from "./tiers.js";
@@ -929,7 +930,7 @@ Write remediation steps to close this gap. Requirements for your answer:
             status: "open",
             priority: "high",
             effort: null,
-            dueDate: null,
+            dueDate: defaultDueDate("high"),
             assigneeUserId: null,
             origin: "compliance-conflict",
             createdBy: req.userId,

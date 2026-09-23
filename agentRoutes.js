@@ -72,14 +72,15 @@ const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 c
 // The latest agent version ShieldAI ships. Surfaced to agents (so they can note
 // staleness) and used by the human-gated upgrade flow. Bump when you release a
 // new collector/runner.
-const AGENT_LATEST_VERSION = "1.2.0";
+const AGENT_LATEST_VERSION = "1.3.0";
 
 // Ensure all agent collections exist on the lowdb instance.
 function ensureCollections(db) {
   db.data.agents          ||= []; // { id, ownerUserId, hostname, os, tokenHash, status, createdAt, lastSeen, revokedAt }
   db.data.enrollTokens    ||= []; // { tokenHash, ownerUserId, createdAt, expiresAt, usedAt }
   db.data.agentReports    ||= []; // { id, agentId, ownerUserId, receivedAt, report }
-  db.data.agentEvents     ||= []; // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
+  db.data.agentEvents     ||= []; // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack, eventKey? }
+  db.data.agentVulnerabilities ||= []; // { id, agentId, ownerUserId, dedupeKey, kind, severity, title, detail, host, meta, firstSeenAt, lastSeenAt, status: open|resolved, resolvedAt }
   db.data.recommendations ||= []; // { id, ownerUserId, agentId?, integrationId?, findingId?, dedupeKey?, origin, title, detail, severity, status, history[] }
 }
 
@@ -99,6 +100,86 @@ export function summarizeReport(report) {
   }
   const posture = fails > 0 ? "at_risk" : warns > 0 ? "needs_attention" : "healthy";
   return { posture, worstSeverity: worst, failCount: fails, warnCount: warns, checkCount: checks.length };
+}
+
+// ── Vulnerabilities reported by the agent ─────────────────────
+// The collector's top-level `findings[]` lists everything that is a
+// vulnerability RIGHT NOW (Defender active threats, log anomalies, exposed
+// credential files). We upsert them by a stable per-agent key and resolve one
+// only when a later report from a findings-aware agent no longer contains it.
+// Resolution is coverage-aware: if the agent said it could NOT look at a
+// source this cycle (Security log unreadable, file scan cut short), findings of
+// that kind are left as they were rather than being marked fixed — absence of
+// evidence is not evidence of a fix. Older agents (no `findings` array) never
+// resolve anything. Data in, data out: this records observations only.
+const FINDING_KINDS = ["av-detection", "log-anomaly", "exposed-file"];
+const FINDING_SEVERITIES = ["critical", "high", "medium", "low"];
+const MAX_FINDINGS_PER_REPORT = 100;
+
+// Which check must NOT be "unknown" for absence of a kind to mean "fixed".
+const KIND_COVERAGE_CHECK = {
+  "av-detection": "av_threats",
+  "log-anomaly": "security_log_access",   // present (as unknown) only when the log was unreadable
+  "exposed-file": "exposed_files_scan",
+};
+function kindWasCovered(kind, checks) {
+  const c = checks.find(x => x.id === KIND_COVERAGE_CHECK[kind]);
+  if (kind === "av-detection") return !!c && c.status !== "unknown";   // need a positive answer
+  return !c || c.status !== "unknown";                                 // unknown = not covered
+}
+
+export function syncAgentFindings(db, agent, report) {
+  db.data.agentVulnerabilities ||= [];
+  if (!Array.isArray(report?.findings)) return { opened: 0, resolved: 0 };
+  const checks = Array.isArray(report.checks) ? report.checks : [];
+  const now = nowIso();
+  const seen = new Set();
+  let opened = 0, resolved = 0;
+
+  for (const f of report.findings.slice(0, MAX_FINDINGS_PER_REPORT)) {
+    if (!f || typeof f.key !== "string" || !f.key || !FINDING_KINDS.includes(f.kind)) continue;
+    const dedupeKey = `${agent.id}::${f.key.slice(0, 200)}`;
+    const severity = FINDING_SEVERITIES.includes(f.severity) ? f.severity : "medium";
+    let meta = null;
+    try { const s = JSON.stringify(f.meta ?? null); if (s.length <= 2000) meta = f.meta ?? null; } catch { /* drop */ }
+    seen.add(dedupeKey);
+
+    const existing = db.data.agentVulnerabilities.find(v => v.dedupeKey === dedupeKey);
+    const fields = {
+      severity,
+      title: String(f.title || "Endpoint finding").slice(0, 200),
+      detail: String(f.detail || "").slice(0, 1000),
+      host: String(f.host || report.host?.hostname || agent.hostname || "").slice(0, 200),
+      meta, lastSeenAt: now,
+    };
+    if (existing) {
+      if (existing.status === "resolved") { existing.status = "open"; existing.resolvedAt = null; opened++; }
+      Object.assign(existing, fields);
+    } else {
+      db.data.agentVulnerabilities.push({
+        id: randomUUID(), agentId: agent.id, ownerUserId: agent.ownerUserId, dedupeKey,
+        kind: f.kind, ...fields, firstSeenAt: now, status: "open", resolvedAt: null,
+      });
+      opened++;
+    }
+  }
+
+  for (const v of db.data.agentVulnerabilities) {
+    if (v.agentId !== agent.id || v.status !== "open" || seen.has(v.dedupeKey)) continue;
+    if (!kindWasCovered(v.kind, checks)) continue;
+    v.status = "resolved"; v.resolvedAt = now; resolved++;
+  }
+  return { opened, resolved };
+}
+
+// Keep agentEvents bounded: 90 days and at most 2000 per agent.
+function pruneAgentEvents(db, agentId) {
+  const cutoff = Date.now() - 90 * 86400000;
+  const mine = db.data.agentEvents.filter(e => e.agentId === agentId);
+  const stale = new Set(mine.filter(e => Date.parse(e.ts) < cutoff).map(e => e.id));
+  const fresh = mine.filter(e => !stale.has(e.id)).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+  for (const e of fresh.slice(2000)) stale.add(e.id);
+  if (stale.size) db.data.agentEvents = db.data.agentEvents.filter(e => !stale.has(e.id));
 }
 
 // Public view of an agent (never leaks the token hash).
@@ -238,6 +319,7 @@ export function remediationHint(checkId) {
     guest_account:  { title: "Disable the Guest account", detail: "Disable the built-in Guest account — it's a common low-friction entry point." },
     smb1:           { title: "Disable legacy SMBv1", detail: "Disable the SMBv1 protocol unless a specific legacy device requires it (e.g. via Windows Features)." },
     rdp_exposure:   { title: "Restrict RDP exposure", detail: "Require Network Level Authentication for RDP, and restrict access to a VPN or allow-listed IPs; disable RDP entirely if not needed." },
+    exposed_files_scan: { title: "Secure exposed credential files", detail: "Move private keys and password lists into a password manager or secrets vault, restrict who can read them, and rotate any credential that may have been shared." },
   };
   // Dynamic per-product AV checks (av_product_<name>) share one hint, since
   // the specific product name is already in the check's own title/detail.
@@ -344,8 +426,18 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       db.data.agentReports.push(stored);
 
       // Fan out security events for analyst/admin visibility & action.
+      // Events carrying an `eventKey` (agent >= 1.3.0) are stored once: the
+      // collector re-reports recent history every cycle, and without this each
+      // cycle would insert the same detections again.
       const events = Array.isArray(report.events) ? report.events : [];
+      const knownKeys = new Set(db.data.agentEvents
+        .filter(x => x.agentId === req.agent.id && x.eventKey).map(x => x.eventKey));
       for (const e of events.slice(0, 200)) {
+        const eventKey = e.eventKey ? String(e.eventKey).slice(0, 200) : null;
+        if (eventKey) {
+          if (knownKeys.has(eventKey)) continue;
+          knownKeys.add(eventKey);
+        }
         db.data.agentEvents.push({
           id: randomUUID(),
           agentId: req.agent.id,
@@ -357,8 +449,11 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
           message: String(e.message || "").slice(0, 1000),
           raw: e.raw ?? null,
           ack: false,
+          ...(eventKey ? { eventKey } : {}),
         });
       }
+      pruneAgentEvents(db, req.agent.id);
+      syncAgentFindings(db, req.agent, report);
 
       // Update agent liveness + denormalized host metadata.
       req.agent.lastSeen = nowIso();
@@ -635,6 +730,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     db.data.agents = (db.data.agents || []).filter(a => a.id !== agent.id);
     db.data.agentReports = (db.data.agentReports || []).filter(r => r.agentId !== agent.id);
     db.data.agentEvents = (db.data.agentEvents || []).filter(e => e.agentId !== agent.id);
+    db.data.agentVulnerabilities = (db.data.agentVulnerabilities || []).filter(v => v.agentId !== agent.id);
     if (logClientAction) logClientAction(db, {
       clientUserId: agent.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
       action: "endpoint_removed", detail: `Removed endpoint ${agent.hostname}.`,
@@ -763,6 +859,42 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
         "The endpoint will report on the latest version within ~1 minute.",
       ],
     });
+  });
+
+  // Vulnerabilities the monitoring agents currently report for me (Threat Intel
+  // "Vulnerabilities" card). Read-only; my own agents only. `?status=all`
+  // also returns resolved ones.
+  function publicVuln(v) {
+    return {
+      id: v.id, agentId: v.agentId, kind: v.kind, severity: v.severity, title: v.title,
+      detail: v.detail, host: v.host, meta: v.meta || null, status: v.status,
+      firstSeenAt: v.firstSeenAt, lastSeenAt: v.lastSeenAt, resolvedAt: v.resolvedAt || null,
+      // The value a remediation task's findingRef.sourceId uses (endpoint-vuln).
+      findingKey: v.dedupeKey,
+    };
+  }
+  const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+  function listVulns(ownerUserId, all) {
+    const hasAgent = (db.data.agents || []).some(a => a.ownerUserId === ownerUserId && a.status !== "revoked");
+    const list = (db.data.agentVulnerabilities || [])
+      .filter(v => v.ownerUserId === ownerUserId && (all || v.status === "open"))
+      .sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9) ||
+        Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt))
+      .map(publicVuln);
+    return { hasAgents: hasAgent, vulnerabilities: list };
+  }
+
+  app.get("/api/client/vulnerabilities", requireAuth, (req, res) => {
+    res.json(listVulns(req.userId, req.query.status === "all"));
+  });
+
+  // Analyst/admin view of one client's vulnerabilities — analysts only for
+  // clients assigned to them (same check as every other analyst route).
+  app.get("/api/analyst/clients/:id/vulnerabilities", requireAnalyst, (req, res) => {
+    if (!canSeeClient(req, req.params.id)) {
+      return res.status(403).json({ error: "This client is not assigned to you." });
+    }
+    res.json(listVulns(req.params.id, req.query.status === "all"));
   });
 
   // All endpoints across all clients, with owner + posture summary.

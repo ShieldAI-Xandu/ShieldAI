@@ -8,6 +8,17 @@
   It does not scan for malware itself — it reports what Defender (or another
   registered AV) has already found and its current protection state.
 
+  v1.3.0 adds three read-only sources, all metadata-only:
+    * Defender threat status (Get-MpThreat) with real severity/active state
+    * Windows Security / Defender event-log summaries (counts + IDs, never
+      message bodies)
+    * a bounded scan of user folders for exposed credential-type files
+      (file NAMES, size, dates and permissions only — file CONTENTS are never
+      opened, read or transmitted)
+  Anything that is currently a vulnerability is emitted in the top-level
+  `findings` array; the server resolves a finding when a later report no
+  longer contains it.
+
   Output: a single JSON document (the ShieldAI agent report schema v1) written
   to -OutFile, or to stdout if -OutFile is omitted.
 
@@ -21,7 +32,7 @@
 [CmdletBinding()]
 param(
   [string]$OutFile = "",
-  [string]$AgentVersion = "1.2.0"
+  [string]$AgentVersion = "1.3.0"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -29,6 +40,22 @@ $ErrorActionPreference = "SilentlyContinue"
 # ── helpers ───────────────────────────────────────────────────
 $checks    = New-Object System.Collections.ArrayList
 $events    = New-Object System.Collections.ArrayList
+$findings  = New-Object System.Collections.ArrayList
+
+# A finding is something that is a vulnerability RIGHT NOW. `Key` must be
+# stable across runs (the server dedupes/resolves by it).
+function Add-Finding {
+  param(
+    [string]$Key,
+    [ValidateSet("av-detection","log-anomaly","exposed-file")][string]$Kind,
+    [ValidateSet("low","medium","high","critical")][string]$Severity,
+    [string]$Title, [string]$Detail = "", $Meta = $null
+  )
+  [void]$findings.Add([ordered]@{
+    key = $Key; kind = $Kind; severity = $Severity; title = $Title; detail = $Detail;
+    host = $env:COMPUTERNAME; meta = $Meta
+  })
+}
 $nowUtc    = (Get-Date).ToUniversalTime().ToString("o")
 
 function Add-Check {
@@ -45,9 +72,13 @@ function Add-Check {
 }
 
 function Add-Event {
-  param([string]$Source, [string]$Severity, [string]$Type, [string]$Message, $Raw = $null)
+  param([string]$Source, [string]$Severity, [string]$Type, [string]$Message, $Raw = $null,
+        [string]$EventKey = "", [string]$Ts = "")
+  # EventKey is a stable identity for the underlying occurrence so the server
+  # can drop a re-reported one instead of storing it again every cycle.
+  if (-not $Ts) { $Ts = (Get-Date).ToUniversalTime().ToString("o") }
   [void]$events.Add([ordered]@{
-    ts = (Get-Date).ToUniversalTime().ToString("o");
+    ts = $Ts; eventKey = $EventKey;
     source = $Source; severity = $Severity; type = $Type; message = $Message; raw = $Raw
   })
 }
@@ -231,13 +262,46 @@ Try-Run {
 # Active/quarantined threats → events
 Try-Run {
   $threats = Get-MpThreatDetection | Sort-Object InitialDetectionTime -Descending | Select-Object -First 25
+
+  # Get-MpThreat carries what Get-MpThreatDetection doesn't: Defender's own
+  # severity rating and whether the threat is still active (unremediated).
+  # SeverityID: 1 low, 2 moderate, 4 high, 5 severe. Anything else (or a
+  # missing lookup) is reported as "medium" rather than guessed higher.
+  $mpThreat = @{}
+  foreach ($m in @(Get-MpThreat)) { if ($m.ThreatID) { $mpThreat["$($m.ThreatID)"] = $m } }
+  $sevOf = { param($id) switch ([int]$id) { 5 {"critical"} 4 {"high"} 2 {"medium"} 1 {"low"} default {"medium"} } }
+  # CleaningActionID: what Defender did about it.
+  $actionOf = { param($id) switch ([int]$id) {
+    1 {"cleaned"} 2 {"quarantined"} 3 {"removed"} 4 {"allowed"} 5 {"user-defined"} 6 {"no action"} 7 {"blocked"} default {"unknown"} } }
+
   foreach ($t in $threats) {
-    $name = $t.ThreatName; if (-not $name) { $name = "Unknown threat" }
-    Add-Event -Source "defender" -Severity "high" -Type "malware_detected" `
-      -Message "Defender detection: $name" -Raw ([ordered]@{
-        threatId = $t.ThreatID; detectedAt = "$($t.InitialDetectionTime)";
-        action = "$($t.CleaningActionID)"; resources = @($t.Resources)
+    $name = $t.ThreatName
+    $mp = $mpThreat["$($t.ThreatID)"]
+    if (-not $name -and $mp) { $name = $mp.ThreatName }
+    if (-not $name) { $name = "Unknown threat" }
+    $sev = if ($mp) { & $sevOf $mp.SeverityID } else { "medium" }
+    $isActive = [bool]($mp -and $mp.IsActive)
+    $detectedIso = ""
+    try { $detectedIso = ([datetime]$t.InitialDetectionTime).ToUniversalTime().ToString("o") } catch { }
+    Add-Event -Source "defender" -Severity $sev -Type "malware_detected" `
+      -Message "Defender detection: $name" `
+      -EventKey "defender:$($t.ThreatID):$detectedIso" -Ts $detectedIso -Raw ([ordered]@{
+        threatId = $t.ThreatID; threatName = $name; detectedAt = "$($t.InitialDetectionTime)";
+        action = (& $actionOf $t.CleaningActionID); active = $isActive;
+        resources = @($t.Resources)
       })
+  }
+
+  # Only threats Defender still considers ACTIVE are vulnerabilities; ones it
+  # has already cleaned/quarantined stay in the event history only.
+  foreach ($m in $mpThreat.Values) {
+    if ($m.IsActive) {
+      $n = $m.ThreatName; if (-not $n) { $n = "Unknown threat" }
+      Add-Finding -Key "av:$($m.ThreatID)" -Kind "av-detection" -Severity (& $sevOf $m.SeverityID) `
+        -Title "Active malware threat: $n" `
+        -Detail "Microsoft Defender reports this threat as still active (not yet remediated)." `
+        -Meta ([ordered]@{ threatId = $m.ThreatID; threatName = $n })
+    }
   }
   if ($threats -and $threats.Count -gt 0) {
     Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
@@ -750,6 +814,246 @@ if (Test-Path $firefoxExe) {
     -Observed "$version" -Detail "Installed browser version compared against the supported baseline." -CisControl "7"
 }
 
+# ── 9. Windows event-log summaries (metadata only) ───────────
+# Reads the Security and Defender logs read-only and reports COUNTS and event
+# IDs. Message bodies are never copied. Reading the Security log needs an
+# elevated context (the scheduled task runs as SYSTEM); if access is denied we
+# say so with an "unknown" check rather than implying the log was clean.
+function Get-EventsSafe {
+  param([hashtable]$Filter, [int]$Max = 2000)
+  # Returns @{ ok = $true/$false; events = @(...) }. "No matching events" is a
+  # valid, clean result — anything else (access denied, log missing) is not.
+  try {
+    $ev = Get-WinEvent -FilterHashtable $Filter -MaxEvents $Max -ErrorAction Stop
+    return @{ ok = $true; events = @($ev) }
+  } catch {
+    if ("$($_.FullyQualifiedErrorId)" -like "NoMatchingEventsFound*") { return @{ ok = $true; events = @() } }
+    return @{ ok = $false; events = @() }
+  }
+}
+
+$since24h = (Get-Date).AddHours(-24)
+$since7d  = (Get-Date).AddDays(-7)
+$dayKey   = (Get-Date).ToUniversalTime().ToString("yyyyMMdd")
+
+# 4625 — failed logons (last 24h), aggregated. Never per-event.
+$failed = Get-EventsSafe -Filter @{ LogName = "Security"; Id = 4625; StartTime = $since24h } -Max 5000
+if (-not $failed.ok) {
+  Add-Check -Id "security_log_access" -Category "Detect" -Title "Security event log readable" `
+    -Status "unknown" -Severity "low" -Observed "Access denied or log unavailable" `
+    -Detail "The agent could not read the Windows Security log, so failed-logon, account-change and log-clearing checks were skipped. Run the agent elevated (SYSTEM) to enable them." -CisControl "8"
+} else {
+  $nFailed = $failed.events.Count
+  # Distinct target accounts: property 5 of 4625 is TargetUserName. Count only.
+  $acctCount = 0
+  try { $acctCount = @($failed.events | ForEach-Object { $_.Properties[5].Value } | Sort-Object -Unique).Count } catch { }
+  if ($nFailed -gt 0) {
+    Add-Event -Source "windows-security" -Severity "low" -Type "failed_logons" `
+      -Message "$nFailed failed logon attempt(s) in the last 24h across $acctCount account(s)" `
+      -EventKey "winsec:4625:$dayKey" -Raw ([ordered]@{ eventId = 4625; count = $nFailed; distinctAccounts = $acctCount; windowHours = 24 })
+  }
+  # Thresholds: a few failures a day is ordinary typo noise. 50+ within 24h
+  # suggests guessing; 200+ suggests a sustained brute-force/spray.
+  if ($nFailed -ge 50) {
+    $sev = if ($nFailed -ge 200) { "high" } else { "medium" }
+    Add-Finding -Key "log:failed_logons" -Kind "log-anomaly" -Severity $sev `
+      -Title "Repeated failed sign-in attempts on $($env:COMPUTERNAME)" `
+      -Detail "$nFailed failed logons in the last 24 hours across $acctCount account(s) (Windows Security event 4625). This can indicate password guessing or a misconfigured service account." `
+      -Meta ([ordered]@{ eventId = 4625; count = $nFailed; distinctAccounts = $acctCount; windowHours = 24 })
+  }
+
+  # 1102 — audit log cleared (last 7d). Attackers clear logs to hide activity.
+  $cleared = Get-EventsSafe -Filter @{ LogName = "Security"; Id = 1102; StartTime = $since7d } -Max 20
+  if ($cleared.ok -and $cleared.events.Count -gt 0) {
+    $latest = ($cleared.events | Sort-Object TimeCreated -Descending | Select-Object -First 1).TimeCreated
+    Add-Event -Source "windows-security" -Severity "high" -Type "audit_log_cleared" `
+      -Message "The Security audit log was cleared ($($cleared.events.Count) time(s) in the last 7 days)" `
+      -EventKey "winsec:1102:$($latest.ToUniversalTime().ToString('o'))" -Ts $latest.ToUniversalTime().ToString("o") `
+      -Raw ([ordered]@{ eventId = 1102; count = $cleared.events.Count; windowDays = 7 })
+    Add-Finding -Key "log:audit_cleared" -Kind "log-anomaly" -Severity "high" `
+      -Title "Security audit log was cleared on $($env:COMPUTERNAME)" `
+      -Detail "The Windows Security log was cleared in the last 7 days (event 1102). Confirm this was an authorised action; log clearing is a common step in hiding intrusion activity." `
+      -Meta ([ordered]@{ eventId = 1102; count = $cleared.events.Count; windowDays = 7 })
+  }
+
+  # 4720 — local/domain user account created (last 7d): count only.
+  $created = Get-EventsSafe -Filter @{ LogName = "Security"; Id = 4720; StartTime = $since7d } -Max 200
+  if ($created.ok -and $created.events.Count -gt 0) {
+    Add-Event -Source "windows-security" -Severity "low" -Type "account_created" `
+      -Message "$($created.events.Count) user account(s) created in the last 7 days" `
+      -EventKey "winsec:4720:$dayKey" -Raw ([ordered]@{ eventId = 4720; count = $created.events.Count; windowDays = 7 })
+  }
+
+  # 4732 — member added to a local group. Only the built-in Administrators
+  # group (SID S-1-5-32-544) matters here; Properties[4] is the group SID.
+  $grp = Get-EventsSafe -Filter @{ LogName = "Security"; Id = 4732; StartTime = $since7d } -Max 200
+  if ($grp.ok -and $grp.events.Count -gt 0) {
+    $adminAdds = 0
+    foreach ($e in $grp.events) { try { if ("$($e.Properties[4].Value)" -eq "S-1-5-32-544") { $adminAdds++ } } catch { } }
+    if ($adminAdds -gt 0) {
+      Add-Event -Source "windows-security" -Severity "medium" -Type "admin_group_change" `
+        -Message "$adminAdds member(s) added to the local Administrators group in the last 7 days" `
+        -EventKey "winsec:4732:$dayKey" -Raw ([ordered]@{ eventId = 4732; count = $adminAdds; windowDays = 7 })
+      Add-Finding -Key "log:admin_added" -Kind "log-anomaly" -Severity "medium" `
+        -Title "Accounts added to local Administrators on $($env:COMPUTERNAME)" `
+        -Detail "$adminAdds account(s) were added to the local Administrators group in the last 7 days (event 4732). Verify each was expected." `
+        -Meta ([ordered]@{ eventId = 4732; count = $adminAdds; windowDays = 7 })
+    }
+  }
+}
+
+# Defender operational log: 5001 = real-time protection was disabled.
+$rtOff = Get-EventsSafe -Filter @{ LogName = "Microsoft-Windows-Windows Defender/Operational"; Id = 5001; StartTime = $since7d } -Max 20
+if ($rtOff.ok -and $rtOff.events.Count -gt 0) {
+  $latest = ($rtOff.events | Sort-Object TimeCreated -Descending | Select-Object -First 1).TimeCreated
+  Add-Event -Source "defender" -Severity "medium" -Type "realtime_protection_disabled" `
+    -Message "Defender real-time protection was turned off ($($rtOff.events.Count) time(s) in the last 7 days)" `
+    -EventKey "defender:5001:$($latest.ToUniversalTime().ToString('o'))" -Ts $latest.ToUniversalTime().ToString("o") `
+    -Raw ([ordered]@{ eventId = 5001; count = $rtOff.events.Count; windowDays = 7 })
+}
+
+# ── 10. Exposed credential-type files (names + permissions only) ──
+# Looks in each local user's Desktop / Documents / Downloads for files whose
+# NAME or extension indicates a private key, credential export or secrets
+# file. It NEVER opens, reads or hashes file contents — only the path, size,
+# modified date and who can read it. Bounded by depth, file count and time so
+# it cannot run away on a large profile. Unreadable folders are skipped.
+$scanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$scanMaxFiles  = 25000
+$scanMaxSecs   = 60
+$scanMaxDepth  = 4
+$scanFilesSeen = 0
+$scanTruncated = $false
+$skipDirs = @('node_modules', '.git', 'AppData', 'Windows', 'Program Files', 'Program Files (x86)', '$Recycle.Bin')
+
+# Name-based rules, most specific first. severity is the BASE; broad read
+# access (Everyone / Users / Authenticated Users) raises it one level.
+$fileRules = @(
+  @{ Cat = "private-key";           Sev = "high";   Label = "private key file";
+     Re = '(?i)^(id_(rsa|dsa|ecdsa|ed25519)|.+\.(key|ppk|p12|pfx))$' },
+  # A .pem can be a public certificate, and contents are never read, so it is
+  # reported at lower severity with "may be" wording rather than as a key.
+  @{ Cat = "pem-file";              Sev = "medium"; Label = "PEM file (may be a private key)";
+     Re = '(?i)^.+\.pem$' },
+  # Deliberately narrow: the name must BE a password/credential list (optionally
+  # with a short suffix like "list"/"backup"/"2"), not merely start with the
+  # word — so "Password_Policy.doc" is not flagged. Word documents are excluded.
+  @{ Cat = "plaintext-credentials"; Sev = "high";   Label = "file that appears to hold plaintext passwords";
+     Re = '(?i)^(passwords?|credentials?|secrets?|logins?)([ _\-]?(list|backup|export|old|new|copy|\d+))?\.(txt|csv|xlsx?|json|md)$' },
+  # Templates (.env.example etc.) hold placeholders, not secrets.
+  @{ Cat = "env-file";              Sev = "medium"; Label = "environment file (may contain secrets)";
+     Re = '(?i)^\.env(\.(?!example$|sample$|template$|dist$).+)?$' },
+  @{ Cat = "cloud-credentials";     Sev = "medium"; Label = "stored cloud/source-control credentials";
+     Re = '(?i)^(\.git-credentials|\.netrc|\.pgpass)$' }
+)
+$bumpSev = @{ low = "medium"; medium = "high"; high = "critical"; critical = "critical" }
+
+function Test-BroadRead {
+  param([string]$Path)
+  try {
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    foreach ($ace in $acl.Access) {
+      if ($ace.AccessControlType -ne "Allow") { continue }
+      $who = "$($ace.IdentityReference)"
+      if ($who -match '(?i)^(Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users)$') {
+        if ("$($ace.FileSystemRights)" -match 'Read|FullControl|Modify') { return $true }
+      }
+    }
+  } catch { }
+  return $false
+}
+
+$exposed = New-Object System.Collections.ArrayList
+$userRoots = @()
+try {
+  $userRoots = @(Get-ChildItem "$env:SystemDrive\Users" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users|desktop\.ini)$' })
+} catch { }
+
+foreach ($u in $userRoots) {
+  # Well-known dotfiles that live in the profile root itself.
+  foreach ($dot in @(".git-credentials", ".netrc", ".pgpass", ".aws\credentials")) {
+    $p = Join-Path $u.FullName $dot
+    if (Test-Path -LiteralPath $p -PathType Leaf) {
+      $fi = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+      [void]$exposed.Add(@{ Path = $p; Cat = "cloud-credentials"; Sev = "medium";
+                            Label = "stored cloud/source-control credentials";
+                            Size = $(if ($fi) { $fi.Length } else { $null });
+                            Modified = $(if ($fi) { $fi.LastWriteTimeUtc.ToString("o") } else { $null }) })
+    }
+  }
+
+  foreach ($sub in @("Desktop", "Documents", "Downloads")) {
+    $root = Join-Path $u.FullName $sub
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+    $stack = New-Object System.Collections.Stack
+    $stack.Push(@($root, 0))
+    while ($stack.Count -gt 0) {
+      if ($scanFilesSeen -ge $scanMaxFiles -or $scanStopwatch.Elapsed.TotalSeconds -ge $scanMaxSecs) { $scanTruncated = $true; break }
+      $item = $stack.Pop(); $dir = $item[0]; $depth = $item[1]
+      $di = $null
+      try { $di = New-Object System.IO.DirectoryInfo($dir) } catch { continue }
+      $files = @()
+      try { $files = @($di.EnumerateFiles()) } catch { }   # access denied → skip this dir
+      foreach ($f in $files) {
+        $scanFilesSeen++
+        foreach ($rule in $fileRules) {
+          if ($f.Name -match $rule.Re) {
+            [void]$exposed.Add(@{ Path = $f.FullName; Cat = $rule.Cat; Sev = $rule.Sev; Label = $rule.Label;
+                                  Size = $f.Length; Modified = $f.LastWriteTimeUtc.ToString("o") })
+            break
+          }
+        }
+      }
+      if ($depth -lt $scanMaxDepth) {
+        try {
+          foreach ($d in $di.EnumerateDirectories()) {
+            if ($skipDirs -contains $d.Name) { continue }
+            # Don't follow junctions/symlinks — avoids loops and leaving the profile.
+            if ($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+            $stack.Push(@($d.FullName, ($depth + 1)))
+          }
+        } catch { }
+      }
+    }
+  }
+}
+
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$reportedFiles = 0
+foreach ($x in $exposed) {
+  if ($reportedFiles -ge 50) { break }   # cap payload; the count below says if more exist
+  $broad = Test-BroadRead -Path $x.Path
+  $sev = $x.Sev; if ($broad) { $sev = $bumpSev[$sev] }
+  $id = ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($x.Path.ToLowerInvariant()))) -replace "-", "").Substring(0, 16).ToLower()
+  $name = Split-Path $x.Path -Leaf
+  $where = Split-Path $x.Path -Parent
+  $why = if ($broad) { " It is readable by broad groups (e.g. Everyone/Users), which makes exposure worse." } else { "" }
+  Add-Finding -Key "file:$id" -Kind "exposed-file" -Severity $sev `
+    -Title "Exposed $($x.Label): $name" `
+    -Detail "Found in $where. Move it to a password manager or secrets vault, restrict access, and rotate the credential if it may have been shared.$why" `
+    -Meta ([ordered]@{ category = $x.Cat; path = $x.Path; sizeBytes = $x.Size; modifiedUtc = $x.Modified; broadlyReadable = $broad })
+  $reportedFiles++
+}
+
+if ($scanTruncated) {
+  Add-Check -Id "exposed_files_scan" -Category "Detect" -Title "Exposed credential file scan" `
+    -Status "unknown" -Severity "low" -Observed "Scan stopped early ($scanFilesSeen files checked)" `
+    -Detail "The scan hit its time/file limit before covering every folder, so this list may be incomplete." -CisControl "3"
+} elseif ($userRoots.Count -eq 0) {
+  Add-Check -Id "exposed_files_scan" -Category "Detect" -Title "Exposed credential file scan" `
+    -Status "unknown" -Severity "low" -Observed "No user profiles readable" `
+    -Detail "The agent could not read any user profile folders." -CisControl "3"
+} elseif ($exposed.Count -gt 0) {
+  Add-Check -Id "exposed_files_scan" -Category "Protect" -Title "Exposed credential file scan" `
+    -Status "warn" -Severity "medium" -Observed "$($exposed.Count) file(s) flagged" `
+    -Detail "Files that look like private keys or stored credentials were found in user folders (names and permissions only; contents were not read)." -CisControl "3"
+} else {
+  Add-Check -Id "exposed_files_scan" -Category "Protect" -Title "Exposed credential file scan" `
+    -Status "pass" -Severity "info" -Observed "None found ($scanFilesSeen files checked)" `
+    -Detail "No private-key or plaintext-credential file names found in user Desktop/Documents/Downloads." -CisControl "3"
+}
+
 # ── assemble report ───────────────────────────────────────────
 $report = [ordered]@{
   agentVersion = $AgentVersion
@@ -757,6 +1061,7 @@ $report = [ordered]@{
   host         = $hostInfo
   checks       = $checks
   events       = $events
+  findings     = $findings
   inventory    = $inventory
 }
 

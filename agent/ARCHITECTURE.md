@@ -76,6 +76,14 @@ and macOS):
   disk encryption, patch state) and forwards that telemetry. Rolling our own
   scanner would give clients false confidence; surfacing the real tools' output
   is both honest and more useful.
+- **The one file-level check (Windows, agent 1.3.0+) is metadata-only.** It looks
+  in each local user's Desktop/Documents/Downloads for files whose *name* marks
+  them as a private key, plaintext-credential list, `.env` file or stored cloud
+  credential, and reports path, size, modified date and whether broad groups
+  (Everyone/Users) can read them. It **never opens, reads or hashes file
+  contents** — this is a "left-out-in-the-open" check, not a malware scan. It is
+  bounded by depth, file count and time, and says so (an `unknown` check) if it
+  was cut short.
 - It is **not a remote-control or remediation tool** — not in v1, and not by
   design later either. Per the roles table above, the agent and the AI never
   execute actions. "Actions" always means a **human** (client admin or
@@ -142,7 +150,16 @@ and macOS):
       "ts": "", "source": "defender", "severity": "high",
       "type": "malware_detected",
       "message": "Defender quarantined Trojan:Win32/...",
-      "raw": { }                         // tool-native detail
+      "raw": { },                        // tool-native detail
+      "eventKey": "defender:<id>:<ts>"   // 1.3.0+: stable identity; server stores it once
+    }
+  ],
+  "findings": [                          // 1.3.0+: what is a vulnerability RIGHT NOW
+    {
+      "key": "av:<threatId> | file:<hash> | log:failed_logons",  // stable per agent
+      "kind": "av-detection | log-anomaly | exposed-file",
+      "severity": "critical|high|medium|low", "title": "", "detail": "",
+      "host": "", "meta": { }            // metadata only (ids, counts, paths) — never contents
     }
   ],
   "inventory": {                         // for compliance evidence
@@ -168,7 +185,14 @@ and macOS):
   `Get-MpThreat`), firewall (`Get-NetFirewallProfile`), BitLocker
   (`Get-BitLockerVolume`), pending updates, local admins, OS build, screen-lock;
   Security Center AV enumeration + a service/process fallback for EDR that
-  skips Security Center registration; VPN client/tunnel detection
+  skips Security Center registration; Defender detection history
+  (`Get-MpThreatDetection`) joined with `Get-MpThreat` for real severity and
+  active/remediated state; Windows event-log summaries via `Get-WinEvent`
+  (Security 4625 failed-logon counts, 1102 log cleared, 4720 account created,
+  4732 additions to Administrators; Defender 5001 real-time protection off) —
+  counts and IDs only, never message bodies, and the Security log needs an
+  elevated context (an `unknown` check is emitted if it can't be read);
+  the metadata-only exposed-credential-file check described above; VPN client/tunnel detection
   (`Get-Service`/`Get-Process`/`Get-NetAdapter`); password-manager and
   Safe-Browsing/SmartScreen state read from each browser's own JSON
   Preferences file (Chrome/Edge) or `prefs.js` (Firefox), with the
@@ -241,6 +265,8 @@ explicit per-action client permission) using their own tools.
 
 ## Security & privacy principles
 - **Least data:** collect posture/config, not file contents or user documents.
+  (The exposed-credential-file check reports file *names, sizes, dates and
+  permissions* only; event-log collection reports counts and IDs only.)
 - **Read-only on the endpoint, always** — the agent makes no changes to client
   systems, and there is **no inbound command channel** to the agent by design,
   so nothing upstream can ever instruct it to act.

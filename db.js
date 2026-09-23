@@ -44,6 +44,7 @@ function freshDefaults() {
     enrollTokens: [],  // { tokenHash, ownerUserId, createdAt, expiresAt, usedAt }
     agentReports: [],  // { id, agentId, ownerUserId, receivedAt, report }
     agentEvents: [],   // { id, agentId, ownerUserId, ts, source, severity, type, message, raw, ack }
+    agentVulnerabilities: [], // { id, agentId, ownerUserId, dedupeKey, kind, severity, title, detail, host, firstSeenAt, lastSeenAt, status: open|resolved, resolvedAt }
     recommendations: [], // { id, ownerUserId, agentId?, integrationId?, findingId?, dedupeKey?, origin, title, detail, severity, status, history[] }
     subscriptions: [], // { id, userId, tier, status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd, updatedAt }
     transactions: [],  // { id, userId, stripeInvoiceId, amountCents, currency, status, description, createdAt }

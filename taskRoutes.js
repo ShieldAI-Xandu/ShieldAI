@@ -53,7 +53,35 @@ export const TASK_PRIORITIES = ["critical", "high", "medium", "low"];
 // finding tasks from each other; never drives scoring.
 export const FINDING_SOURCE_TYPES = [
   "cve", "attack-surface", "darkweb", "email-security", "vendor-review",
+  "endpoint-vuln",
 ];
+
+// Default remediation window by priority. Every task gets a due date; the
+// client can change it afterwards (PATCH /api/tasks/:id { dueDate }).
+export const DEFAULT_DUE_DAYS = { critical: 14, high: 30, medium: 60, low: 90 };
+
+/** ISO timestamp `DEFAULT_DUE_DAYS[priority]` days after `from` (default: now). */
+export function defaultDueDate(priority, from = new Date()) {
+  const days = DEFAULT_DUE_DAYS[priority] ?? DEFAULT_DUE_DAYS.medium;
+  return new Date(new Date(from).getTime() + days * 86400000).toISOString();
+}
+
+/**
+ * One-time, idempotent backfill: open tasks created before default due dates
+ * existed get createdAt + the priority's window. Returns how many changed.
+ * Caller is responsible for `await db.write()` when the count is > 0.
+ */
+export function backfillTaskDueDates(db) {
+  db.data.tasks ||= [];
+  let n = 0;
+  for (const t of db.data.tasks) {
+    if (t.dueDate || ["done", "cancelled"].includes(t.status)) continue;
+    t.dueDate = defaultDueDate(t.priority, t.createdAt || new Date());
+    pushHistory(t, "system", null, "due_date", "default applied");
+    n++;
+  }
+  return n;
+}
 
 // ── Control helpers ───────────────────────────────────────────
 export function getControl(controlId) {
@@ -199,7 +227,15 @@ export function registerTaskRoutes(app, {
 }) {
   ensure(db);
 
-  const userById = (id) => (db.data.users || []).find(u => u.id === id) || null;
+  // Default due dates for tasks that predate them. Only tasks with no date are
+  // touched, so it's safe to run on every boot.
+  (async () => {
+    try {
+      if (backfillTaskDueDates(db) > 0) await db.write();
+    } catch (e) { console.error("[tasks] due-date backfill failed:", e.message); }
+  })();
+
+  const userById =(id) => (db.data.users || []).find(u => u.id === id) || null;
 
   // Prioritized gaps + remediation tasks are the `remediationTasks` capability
   // (Growth+), matching the Dashboard's Remediation tab. Staff (admin/analyst)
@@ -287,6 +323,111 @@ export function registerTaskRoutes(app, {
     });
   });
 
+  // ── Live priorities ──
+  // Recomputed on every call from the current assessment (same engine and
+  // ranking as /api/tasks/gaps) plus the endpoint vulnerabilities the agent
+  // currently reports as open. Nothing is cached: when a control is fixed or a
+  // vulnerability disappears from the agent's next report it drops off the
+  // list, which is what "priorities change as your program improves" means.
+  // Deliberately NOT tier-gated (Priorities is shown on every tier); the
+  // "Add to Remediation" action is gated by POST /api/tasks as usual.
+  app.get("/api/client/priorities", requireAuth, (req, res) => {
+    const targetId = req.query.clientId || req.userId;
+    const actor = userById(req.userId);
+    if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
+
+    const liveTasks = ensure(db).filter(t =>
+      t.ownerUserId === targetId && !["done", "cancelled"].includes(t.status));
+    const taskInfo = (t) => t && { id: t.id, createdAt: t.createdAt, status: t.status, dueDate: t.dueDate || null };
+
+    const items = [];
+
+    const assessment = latestAssessmentFor(db, targetId);
+    let posture = null;
+    if (assessment) {
+      const p = computePostureScore(assessment.data);
+      posture = { score: p.postureScore, level: p.postureLevel };
+      const checklist = checklistOf(assessment);
+      for (const control of SCORING_CHECKLIST) {
+        const currentLabel = checklist[control.id] || null;
+        const currentScore = scoreOfLabel(control, currentLabel);
+        const best = bestOption(control);
+        if (!best || (currentScore !== null && currentScore >= best.score)) continue;
+        const sim = simulateControlChange(db, targetId, control.id, best.label);
+        const gain = sim ? sim.delta : 0;
+        if (gain <= 0) continue;
+        items.push({
+          id: `gap:${control.id}`,
+          source: "gap",
+          title: `Improve: ${control.question}`,
+          description: currentLabel
+            ? `Currently "${currentLabel}". Moving to "${best.label}" is projected to raise your posture score by ${gain}.`
+            : `Not yet answered. Moving to "${best.label}" is projected to raise your posture score by ${gain}.`,
+          // Tiering is by real projected posture gain, not a guess.
+          priority: gain >= 4 ? "high" : gain >= 2 ? "medium" : "low",
+          category: control.nistFunction || "General",
+          projectedGain: gain,
+          controlId: control.id,
+          targetLabel: best.label,
+          findingRef: null,
+          task: taskInfo(liveTasks.find(t => t.controlId === control.id)),
+        });
+      }
+    }
+
+    for (const v of (db.data.agentVulnerabilities || [])) {
+      if (v.ownerUserId !== targetId || v.status !== "open") continue;
+      const sourceId = v.dedupeKey || v.id;
+      items.push({
+        id: `vuln:${v.id}`,
+        source: "vulnerability",
+        title: v.title,
+        description: `${v.detail || ""}${v.host ? ` (host: ${v.host})` : ""}`.trim(),
+        priority: TASK_PRIORITIES.includes(v.severity) ? v.severity : "medium",
+        category: "Endpoint",
+        projectedGain: null,
+        controlId: null,
+        targetLabel: null,
+        findingRef: { sourceType: "endpoint-vuln", sourceId, facts: { kind: v.kind, host: v.host || null, firstSeenAt: v.firstSeenAt } },
+        task: taskInfo(liveTasks.find(t => t.findingRef?.sourceType === "endpoint-vuln" && t.findingRef.sourceId === sourceId)),
+      });
+    }
+
+    const order = { critical: 0, high: 1, medium: 2, low: 3 };
+    items.sort((a, b) =>
+      order[a.priority] - order[b.priority] ||
+      (a.source === b.source ? 0 : a.source === "vulnerability" ? -1 : 1) ||
+      (b.projectedGain ?? 0) - (a.projectedGain ?? 0));
+    const ranked = items.slice(0, 15).map((it, i) => ({ ...it, rank: i + 1 }));
+
+    res.json({ posture, priorities: ranked, generatedAt: nowIso(),
+      note: assessment ? null : "No assessment yet — priorities appear once one is completed." });
+  });
+
+  // ── Which findings already have a task? ──
+  // Lets Threat Intel / Priorities show "Added to Remediation · <time>" on
+  // reopen instead of offering the button again. Includes finished tasks so
+  // the state stays truthful ("Completed ..."). Latest task per finding wins.
+  app.get("/api/tasks/finding-refs", requireAuth, tasksGate, (req, res) => {
+    const targetId = req.query.clientId || req.userId;
+    const actor = userById(req.userId);
+    if (!canAccess(actor, targetId)) return res.status(403).json({ error: "Not permitted." });
+
+    const map = {};
+    for (const t of ensure(db)) {
+      if (t.ownerUserId !== targetId || !t.findingRef || t.status === "cancelled") continue;
+      const key = `${t.findingRef.sourceType}:${t.findingRef.sourceId}`;
+      const prev = map[key];
+      const isOpen = t.status !== "done";
+      // Prefer an open task over a finished one, then the newest.
+      if (prev && (prev._open && !isOpen || (prev._open === isOpen && prev.createdAt >= t.createdAt))) continue;
+      map[key] = { taskId: t.id, createdAt: t.createdAt, status: t.status, dueDate: t.dueDate || null,
+                   completedAt: t.completedAt || null, _open: isOpen };
+    }
+    for (const v of Object.values(map)) delete v._open;
+    res.json(map);
+  });
+
   // ── Simulate a specific change ──
   app.post("/api/tasks/simulate", requireAuth, tasksGate, (req, res) => {
     const { controlId, targetLabel, clientId } = req.body || {};
@@ -368,6 +509,14 @@ export function registerTaskRoutes(app, {
       if (!title) {
         return res.status(400).json({ error: "title is required for a finding-based task." });
       }
+      // Idempotent: one live task per finding. A second click (or reopening
+      // the modal on a stale page) returns the existing task, not a duplicate.
+      const dup = ensure(db).find(t =>
+        t.ownerUserId === owner && t.findingRef &&
+        t.findingRef.sourceType === cleanFindingRef.sourceType &&
+        t.findingRef.sourceId === cleanFindingRef.sourceId &&
+        !["done", "cancelled"].includes(t.status));
+      if (dup) return res.status(200).json({ ...publicTask(db, dup), deduped: true });
     } else {
       control = getControl(controlId);
       if (!control) return res.status(400).json({ error: "Unknown controlId." });
@@ -405,7 +554,7 @@ export function registerTaskRoutes(app, {
       status: "open",
       priority,
       effort: effort || null,
-      dueDate: dueDate || null,
+      dueDate: dueDate || defaultDueDate(priority),
       assigneeUserId: assigneeUserId || null,
       createdBy: req.userId,
       createdAt: nowIso(),

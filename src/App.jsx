@@ -1955,14 +1955,115 @@ function OverviewSection({ assessment, results, programId, onRegenerated, onOpen
         border:`1px dashed ${C.accent}33`,borderRadius:10,textAlign:"center"}}>
         <span style={{color:C.textSec,fontSize:11}}>
           Your posture score, trend, breakdown, compliance, training, and analyst activity are always
-          current. Use "Refresh Summary" above to update the written summary and top threats to match, or
-          "Refresh Roadmap" on the Priorities tab to update quick wins. Where something hasn't been set up
+          current, and so is the "Current Priorities" list on the Priorities tab. Use "Refresh Summary" above
+          to update the written summary and top threats to match, or "Refresh Roadmap" on the Priorities tab
+          to update the written roadmap and quick wins. Where something hasn't been set up
           or scored yet, it says so instead of showing a placeholder number.
         </span>
       </div>
     </div>
   );
 }
+// Live, recomputed priorities (GET /api/client/priorities): real posture gaps
+// ranked by projected score gain, plus open endpoint vulnerabilities from the
+// monitoring agent. They change as the program improves, and each one can be
+// added to remediation (a human click — nothing is auto-created).
+const LIVE_PRIO_LABEL = { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", low: "LOW" };
+function LivePriorities() {
+  const [data, setData] = useState(null);     // { priorities, posture, note } | null
+  const [loadError, setLoadError] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/client/priorities`);
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not load priorities.");
+      setData(d); setLoadError(null);
+    } catch (e) { setLoadError(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function addToRemediation(p) {
+    setBusyId(p.id); setErr(null);
+    try {
+      const body = {
+        title: p.title.slice(0, 160), detail: p.description || "", priority: p.priority,
+        ...(p.findingRef ? { findingRef: p.findingRef } : { controlId: p.controlId, targetLabel: p.targetLabel }),
+      };
+      const res = await authFetch(`${API_BASE}/api/tasks`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const d = await res.json();
+      if (res.status === 402) return showUpgradePrompt(d);
+      if (!res.ok) throw new Error(d.error || "Could not add to remediation.");
+      if (p.findingRef) setFindingRefEntry(findingRefKey(p.findingRef), d);
+      setData(prev => prev && ({ ...prev, priorities: prev.priorities.map(x => x.id === p.id
+        ? { ...x, task: { id: d.id, createdAt: d.createdAt, status: d.status, dueDate: d.dueDate } } : x) }));
+    } catch (e) { setErr(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  if (loadError) {
+    return <div style={{color:C.textMut,fontSize:12,marginBottom:16}}>Live priorities are unavailable right now ({loadError}).</div>;
+  }
+  if (!data) return <div style={{color:C.textMut,fontSize:12,marginBottom:16}}>Loading current priorities…</div>;
+  const list = data.priorities || [];
+
+  return (
+    <div style={{marginBottom:26}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:4}}>
+        <SectionLabel text="Current Priorities"/>
+        <span style={{fontSize:11,color:C.textMut}}>
+          Recalculated every time you open this — fixing something removes it from the list.
+        </span>
+      </div>
+      {err && <div style={{color:C.redText,fontSize:12,margin:"6px 0"}}>{err}</div>}
+      {list.length === 0 ? (
+        <Card><div style={{color:C.textSec,fontSize:13}}>
+          {data.note || "Nothing outstanding right now — no open posture gaps or endpoint vulnerabilities."}
+        </div></Card>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:10}}>
+          {list.map(p => (
+            <Card key={p.id} style={{padding:"14px 18px"}}>
+              <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                <div style={{minWidth:38,height:38,borderRadius:8,background:`${C.accent}15`,
+                  border:`1px solid ${C.accent}33`,display:"flex",alignItems:"center",
+                  justifyContent:"center",color:C.accentText,fontSize:11,fontWeight:700,flexShrink:0}}>#{p.rank}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:4,marginBottom:6}}>
+                    <span style={{color:C.text,fontWeight:600,fontSize:14,marginRight:6}}>{safeText(p.title)}</span>
+                    <Badge label={LIVE_PRIO_LABEL[p.priority] || p.priority.toUpperCase()} color={TASK_PRIO_TONE[p.priority]}/>
+                    <Badge label={p.source === "vulnerability" ? "Endpoint vulnerability" : p.category}/>
+                    {p.projectedGain != null && <Badge label={`+${p.projectedGain} posture`} color={C.greenText}/>}
+                  </div>
+                  {p.description && (
+                    <p style={{color:C.textSec,fontSize:13,margin:"0 0 10px",lineHeight:1.6}}>{safeText(p.description)}</p>
+                  )}
+                  {p.task ? (
+                    <span style={{fontSize:12.5,color:C.greenText,fontWeight:600}}>
+                      ✓ Added to Remediation · {fmtStamp(p.task.createdAt)}
+                      {p.task.dueDate && <span style={{color:C.textMut,fontWeight:500}}> · due {fmtDay(p.task.dueDate)}</span>}
+                    </span>
+                  ) : (
+                    <button onClick={() => addToRemediation(p)} disabled={busyId === p.id}
+                      style={{padding:"6px 14px",borderRadius:7,border:"none",cursor:busyId===p.id?"default":"pointer",
+                        background:C.accent,color:"#04121F",fontSize:12,fontWeight:700,opacity:busyId===p.id?0.6:1}}>
+                      {busyId === p.id ? "Adding…" : "Add to Remediation"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PrioritiesSection({ results, programId, onRegenerated }) {
   const items = results?.priorities?.priorities || [];
   const [filter, setFilter] = useState("All");
@@ -1971,8 +2072,11 @@ function PrioritiesSection({ results, programId, onRegenerated }) {
 
   return (
     <div>
+      {/* Live ranking only for a real, signed-in program; the free-tier
+          preview (programId null) has no server-side program to rank. */}
+      {programId && <LivePriorities/>}
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:0}}>
-        <SectionLabel text="Prioritized Security Roadmap"/>
+        <SectionLabel text="Strategic Roadmap (AI-written, as of last refresh)"/>
         <div style={{marginLeft:"auto"}}>
           <RegenerateSectionButton programId={programId} sectionKey="priorities"
             label="🔄 Refresh Roadmap" onRegenerated={onRegenerated}/>
@@ -2185,9 +2289,9 @@ function ThreatIntelLockedCard({ title, blurb }) {
 //    canRemediate,       default true; false for Evidence gaps (see below)
 //    taskTitle, taskDetail, taskPriority, findingRef,  what Add to Remediation
 //                         sends to POST /api/tasks when canRemediate
-//    existingTaskId,     if already remediated/tracked — swaps the button
-//                         for a "already tracked" state instead of offering
-//                         to create a duplicate
+//    (already-added state is looked up from findingRef via the shared
+//     findingRefStore — swaps the button for "Added to Remediation · <time>"
+//     instead of offering to create a duplicate)
 //    mastermindQuestion, the natural-language question seeded into Ask
 //                         Mastermind, carrying the real facts inline
 //  }
@@ -2195,15 +2299,67 @@ function ThreatIntelLockedCard({ title, blurb }) {
 const FINDING_SEV_TONE = { CRITICAL: C.redText, HIGH: C.redText, MEDIUM: C.amberText, LOW: C.greenText, INFO: C.textSec };
 function findingSevColor(s) { return FINDING_SEV_TONE[String(s || "INFO").toUpperCase()] || C.textSec; }
 
+// Which findings already have a remediation task, keyed "sourceType:sourceId"
+// (from GET /api/tasks/finding-refs). Shared module-level so every card's
+// modal shows "Added to Remediation · <time>" on reopen without each card
+// having to fetch tasks itself. Best-effort: a tier without remediation
+// tasks (402) or any failure just leaves the map empty.
+const findingRefStore = { map: {}, loaded: false, inflight: null, listeners: new Set() };
+function findingRefKey(ref) { return ref?.sourceType && ref?.sourceId ? `${ref.sourceType}:${ref.sourceId}` : null; }
+function notifyFindingRefs() { findingRefStore.listeners.forEach(fn => fn({ ...findingRefStore.map })); }
+async function loadFindingRefs(force = false) {
+  if (findingRefStore.inflight) return findingRefStore.inflight;
+  if (findingRefStore.loaded && !force) return;
+  findingRefStore.inflight = (async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/finding-refs`);
+      if (res.ok) findingRefStore.map = await res.json();
+    } catch { /* leave whatever we had */ }
+    findingRefStore.loaded = true;
+    findingRefStore.inflight = null;
+    notifyFindingRefs();
+  })();
+  return findingRefStore.inflight;
+}
+function setFindingRefEntry(key, task) {
+  if (!key || !task) return;
+  findingRefStore.map = { ...findingRefStore.map, [key]: {
+    taskId: task.id, createdAt: task.createdAt, status: task.status,
+    dueDate: task.dueDate || null, completedAt: task.completedAt || null } };
+  notifyFindingRefs();
+}
+function useFindingRefs(enabled = true) {
+  const [map, setMap] = useState(findingRefStore.map);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    findingRefStore.listeners.add(setMap);
+    setMap({ ...findingRefStore.map });
+    loadFindingRefs(true);   // refetch on every open so a task made elsewhere shows up
+    return () => { findingRefStore.listeners.delete(setMap); };
+  }, [enabled]);
+  return map;
+}
+function fmtStamp(iso) {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+}
+function fmtDay(iso) {
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString(undefined, { dateStyle: "medium" }) : "";
+}
+
 function FindingDetailModal({ finding, onClose, onTaskCreated }) {
   const [impact, setImpact] = useState(null);   // { impact, source } | null
   const [impactLoading, setImpactLoading] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskError, setTaskError] = useState(null);
-  const [taskId, setTaskId] = useState(finding?.existingTaskId || null);
+  const refKey = findingRefKey(finding?.findingRef);
+  const refs = useFindingRefs(!!finding && !!refKey);
+  // existingTask: { taskId, createdAt, status, dueDate, completedAt } | null
+  const existingTask = (refKey && refs[refKey]) || null;
 
   useEffect(() => {
-    setImpact(null); setTaskError(null); setTaskId(finding?.existingTaskId || null);
+    setImpact(null); setTaskError(null);
     if (finding?.impactFetcher) {
       setImpactLoading(true);
       finding.impactFetcher()
@@ -2231,7 +2387,7 @@ function FindingDetailModal({ finding, onClose, onTaskCreated }) {
       const data = await res.json();
       if (res.status === 402) { onClose(); return showUpgradePrompt(data); }
       if (!res.ok) throw new Error(data.error || "Could not create a remediation task.");
-      setTaskId(data.id);
+      setFindingRefEntry(refKey, data);
       onTaskCreated?.(data);
     } catch (e) { setTaskError(e.message); }
     finally { setTaskBusy(false); }
@@ -2306,8 +2462,15 @@ function FindingDetailModal({ finding, onClose, onTaskCreated }) {
 
       <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",marginTop:8}}>
         {finding.canRemediate !== false ? (
-          taskId ? (
-            <span style={{padding:"9px 16px",fontSize:12.5,color:C.greenText,fontWeight:600}}>✓ Added to Remediation</span>
+          existingTask ? (
+            <span style={{padding:"9px 16px",fontSize:12.5,color:C.greenText,fontWeight:600,textAlign:"right"}}>
+              {existingTask.status === "done"
+                ? `✓ Remediated${existingTask.completedAt ? ` · ${fmtStamp(existingTask.completedAt)}` : ""}`
+                : `✓ Added to Remediation${existingTask.createdAt ? ` · ${fmtStamp(existingTask.createdAt)}` : ""}`}
+              {existingTask.status !== "done" && existingTask.dueDate && (
+                <span style={{display:"block",fontSize:11,color:C.textMut,fontWeight:500}}>Due {fmtDay(existingTask.dueDate)}</span>
+              )}
+            </span>
           ) : (
             <button onClick={addToRemediation} disabled={taskBusy}
               style={{padding:"9px 18px",borderRadius:8,border:"none",cursor:taskBusy?"default":"pointer",
@@ -2973,7 +3136,15 @@ const TASK_PRIO_TONE = {
 const FINDING_SOURCE_LABEL = {
   cve: "CVE", "attack-surface": "Attack Surface", darkweb: "Dark Web",
   "email-security": "Email Security", "vendor-review": "Vendor Risk",
+  "endpoint-vuln": "Endpoint Vulnerability",
 };
+// YYYY-MM-DD in the viewer's local timezone, for <input type="date">.
+function toLocalYmd(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return "";
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 // Small dependency-free SVG line chart for posture over time.
 function PostureTrend({ history }) {
@@ -3136,6 +3307,24 @@ function RemediationSection() {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "Could not update task.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  // Clients may move a task's due date (defaults are 14/30/60/90 days by
+  // priority). Stored as end-of-day local time so it never renders a day early.
+  async function setDueDate(task, ymd) {
+    if (!ymd) return;
+    setBusyId(task.id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/tasks/${task.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dueDate: new Date(`${ymd}T23:59:59`).toISOString() }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not update the due date.");
+      flash(`Due date set to ${new Date(d.dueDate).toLocaleDateString()}`);
       await loadAll();
     } catch (e) { setError(e.message); }
     finally { setBusyId(null); }
@@ -3332,11 +3521,14 @@ function RemediationSection() {
                           has no checklist control and therefore no NIST function —
                           label it by its source instead of leaving this blank. */}
                       <span>{t.findingRef ? FINDING_SOURCE_LABEL[t.findingRef.sourceType] || "Finding" : safeText(t.nistFunction)}</span>
-                      {t.dueDate && (
-                        <span style={{color:overdue?C.redText:C.textMut}}>
-                          {overdue ? "⚠ overdue " : "due "}{new Date(t.dueDate).toLocaleDateString()}
-                        </span>
-                      )}
+                      <label style={{display:"inline-flex",alignItems:"center",gap:5,color:overdue?C.redText:C.textMut}}>
+                        {overdue ? "⚠ overdue · due" : "due"}
+                        <input type="date" value={toLocalYmd(t.dueDate)} disabled={busy}
+                          onChange={e=>setDueDate(t, e.target.value)}
+                          title="Change the due date"
+                          style={{background:C.surface,color:C.text,border:`1px solid ${overdue?C.red:C.border}`,
+                            borderRadius:6,padding:"2px 6px",fontSize:11,colorScheme:"dark"}}/>
+                      </label>
                       {t.externalRef && (
                         <span style={{color:C.accentText}}>
                           {t.externalRef.externalUrl
@@ -4464,7 +4656,7 @@ function PentestReferralSection() {
                 <p style={{margin:"10px 0 0",color:C.text,fontSize:13,lineHeight:1.6}}>{r.scopeNotes}</p>
                 {r.status === "delivered" && r.recommendationIds?.length > 0 && (
                   <p style={{margin:"8px 0 0",color:C.greenText,fontSize:12}}>
-                    {r.recommendationIds.length} finding{r.recommendationIds.length===1?"":"s"} added to your recommendations — see Priorities or Remediation.
+                    {r.recommendationIds.length} finding{r.recommendationIds.length===1?"":"s"} added to your recommendations — see the Findings tab under Remediation.
                   </p>
                 )}
                 {r.status === "requested" && (
@@ -6242,6 +6434,115 @@ function EmailSecurityCard() {
   );
 }
 
+// Vulnerabilities reported by the client's own monitoring agents: Defender's
+// still-active threats, Windows event-log anomalies, and exposed credential
+// files. Real agent observations only — an empty list says so honestly and
+// never shows placeholder data. The agent is read-only; the only action here
+// is the human-clicked "Add to Remediation" in the detail modal.
+const ENDPOINT_VULN_KIND = {
+  "av-detection": { label: "Malware detection", advice: "Open your antivirus console on the affected device, confirm the threat is fully removed, and run a full scan. If it keeps returning, isolate the device and investigate how it got in." },
+  "log-anomaly": { label: "Suspicious log activity", advice: "Confirm with the device's owner whether this activity was expected. If not, change the affected passwords, review recent sign-ins, and check for unfamiliar accounts or admin rights." },
+  "exposed-file": { label: "Exposed credential file", advice: "Move the credential into a password manager or secrets vault and delete the file, restrict who can read it, and rotate the key or password if it may have been shared or copied." },
+};
+function EndpointVulnerabilitiesCard() {
+  const { can } = useCapabilities();
+  const hasAccess = can("threatIntel");
+  const [data, setData] = useState(null);      // { hasAgents, vulnerabilities[] }
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const refs = useFindingRefs(hasAccess);
+
+  useEffect(() => {
+    if (!hasAccess) return;
+    let live = true;
+    (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/api/client/vulnerabilities`);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "Could not load endpoint vulnerabilities.");
+        if (live) setData(d);
+      } catch (e) { if (live) setError(e.message); }
+      finally { if (live) setLoading(false); }
+    })();
+    return () => { live = false; };
+  }, [hasAccess]);
+
+  if (!hasAccess) return null;
+
+  function openDetail(v) {
+    const kind = ENDPOINT_VULN_KIND[v.kind] || { label: "Endpoint finding", advice: "" };
+    setDetail({
+      id: `endpoint-vuln:${v.findingKey}`,
+      sourceType: "endpoint-vuln",
+      title: v.title,
+      severity: v.severity,
+      badges: <>
+        <Badge label={kind.label} color={C.textSec}/>
+        {v.host && <span style={{fontSize:11,color:C.textSec}}>on {safeText(v.host)}</span>}
+        <span style={{fontSize:11,color:C.textMut}}>first seen {fmtStamp(v.firstSeenAt)}</span>
+      </>,
+      detailText: v.detail,
+      items: v.kind === "exposed-file" && v.meta?.path
+        ? [{ label: v.meta.path, meta: [v.meta.sizeBytes != null ? `${v.meta.sizeBytes} bytes` : null,
+            v.meta.broadlyReadable ? "readable by broad groups" : null].filter(Boolean).join(" · ") }]
+        : undefined,
+      recommendation: kind.advice,
+      taskTitle: v.title,
+      taskDetail: `${v.detail}${v.host ? ` (host: ${v.host})` : ""}\n\n${kind.advice}`.trim(),
+      taskPriority: v.severity,
+      findingRef: { sourceType: "endpoint-vuln", sourceId: v.findingKey,
+        facts: { kind: v.kind, host: v.host || null, firstSeenAt: v.firstSeenAt } },
+    });
+  }
+
+  const list = data?.vulnerabilities || [];
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <SectionLabel text="Vulnerabilities"/>
+        <span style={{fontSize:10,color:C.textMut,letterSpacing:1,fontWeight:600}}>FROM YOUR MONITORING AGENTS · READ-ONLY</span>
+      </div>
+      {error && (
+        <div style={{marginBottom:12,padding:"9px 12px",background:`${C.red}15`,
+          border:`1px solid ${C.red}33`,borderRadius:7,color:C.redText,fontSize:12.5}}>{error}</div>
+      )}
+      {loading ? <Spinner/> : !data?.hasAgents ? (
+        <div style={{padding:"14px 12px",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:8,color:C.textSec,fontSize:12.5,lineHeight:1.6}}>
+          No monitoring agent is reporting yet. Once one is installed, malware detections from your
+          antivirus, suspicious Windows security-log activity, and exposed key/password files show up here.
+        </div>
+      ) : list.length === 0 ? (
+        <div style={{padding:"6px 12px",display:"inline-block",background:`${C.green}12`,
+          border:`1px solid ${C.green}33`,borderRadius:8,color:C.greenText,fontSize:12,fontWeight:600}}>
+          No vulnerabilities reported by your agents right now.
+        </div>
+      ) : list.map(v => {
+        const t = refs[`endpoint-vuln:${v.findingKey}`];
+        return (
+          <div key={v.id} onClick={() => openDetail(v)}
+            style={{marginBottom:8,padding:"10px 12px",cursor:"pointer",
+              background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+              <span style={{color:C.text,fontSize:12.5,fontWeight:700}}>{safeText(v.title)}</span>
+              <Badge label={v.severity.toUpperCase()} color={findingSevColor(v.severity)}/>
+              <Badge label={(ENDPOINT_VULN_KIND[v.kind] || {}).label || "Finding"} color={C.textSec}/>
+              {t && t.status !== "done" && <span style={{fontSize:11,color:C.greenText,fontWeight:600}}>✓ In remediation</span>}
+              {v.host && <span style={{marginLeft:"auto",fontSize:11,color:C.textSec}}>{safeText(v.host)}</span>}
+            </div>
+            <div style={{color:C.textSec,fontSize:12,lineHeight:1.5}}>{safeText(v.detail)}</div>
+            <div style={{fontSize:10.5,color:C.textMut,marginTop:6}}>
+              Last seen {fmtStamp(v.lastSeenAt)} · click for details &amp; remediation →
+            </div>
+          </div>
+        );
+      })}
+      <FindingDetailModal finding={detail} onClose={() => setDetail(null)}/>
+    </Card>
+  );
+}
+
 function ThreatIntelSection({ results, programId, onRegenerated }) {
   const tl = results?.threatIntel?.threatLandscape;
   // generatedBy lives on the outer threatIntel object (the AI's raw JSON
@@ -6267,6 +6568,7 @@ function ThreatIntelSection({ results, programId, onRegenerated }) {
           <SectionLabel text="Threat Intelligence"/>
         </div>
         <CveExposureCard/>
+        <EndpointVulnerabilitiesCard/>
         <DomainMonitoringCard onChange={onDomainsChanged}/>
         <EmailSecurityCard key={domainVersion}/>
         <DarkWebExposureCard key={domainVersion}/>
@@ -6291,6 +6593,7 @@ function ThreatIntelSection({ results, programId, onRegenerated }) {
       {/* Live, NVD-backed CVE exposure — real data, replaces the old
           model-generated "recentCVEs" card that used to render here. */}
       <CveExposureCard/>
+      <EndpointVulnerabilitiesCard/>
       <DomainMonitoringCard onChange={onDomainsChanged}/>
       <EmailSecurityCard key={domainVersion}/>
       <DarkWebExposureCard key={domainVersion}/>
