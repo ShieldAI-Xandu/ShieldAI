@@ -3138,6 +3138,30 @@ const FINDING_SOURCE_LABEL = {
   "email-security": "Email Security", "vendor-review": "Vendor Risk",
   "endpoint-vuln": "Endpoint Vulnerability",
 };
+// A native date field fires onChange for EVERY segment edit (typing "1" in the
+// month already yields a complete, valid date), so saving straight from
+// onChange would PATCH on each keystroke. Keep the edit local and commit once:
+// after a short pause, on blur, or on Enter. Never disabled while saving —
+// disabling steals focus mid-typing.
+function DueDateInput({ value, overdue, onCommit }) {
+  const current = toLocalYmd(value);
+  const [draft, setDraft] = useState(current);
+  const timer = useRef(null);
+  useEffect(() => { setDraft(current); }, [current]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const commit = (v) => { clearTimeout(timer.current); if (v && v !== current) onCommit(v); };
+  return (
+    <input type="date" value={draft} title="Change the due date"
+      onChange={e => {
+        const v = e.target.value; setDraft(v); clearTimeout(timer.current);
+        if (v) timer.current = setTimeout(() => commit(v), 900);
+      }}
+      onBlur={() => commit(draft)}
+      onKeyDown={e => { if (e.key === "Enter") commit(draft); }}
+      style={{background:C.surface,color:C.text,border:`1px solid ${overdue?C.red:C.border}`,
+        borderRadius:6,padding:"2px 6px",fontSize:11,colorScheme:"dark"}}/>
+  );
+}
 // YYYY-MM-DD in the viewer's local timezone, for <input type="date">.
 function toLocalYmd(iso) {
   const d = iso ? new Date(iso) : null;
@@ -3523,11 +3547,7 @@ function RemediationSection() {
                       <span>{t.findingRef ? FINDING_SOURCE_LABEL[t.findingRef.sourceType] || "Finding" : safeText(t.nistFunction)}</span>
                       <label style={{display:"inline-flex",alignItems:"center",gap:5,color:overdue?C.redText:C.textMut}}>
                         {overdue ? "⚠ overdue · due" : "due"}
-                        <input type="date" value={toLocalYmd(t.dueDate)} disabled={busy}
-                          onChange={e=>setDueDate(t, e.target.value)}
-                          title="Change the due date"
-                          style={{background:C.surface,color:C.text,border:`1px solid ${overdue?C.red:C.border}`,
-                            borderRadius:6,padding:"2px 6px",fontSize:11,colorScheme:"dark"}}/>
+                        <DueDateInput value={t.dueDate} overdue={overdue} onCommit={ymd=>setDueDate(t, ymd)}/>
                       </label>
                       {t.externalRef && (
                         <span style={{color:C.accentText}}>
