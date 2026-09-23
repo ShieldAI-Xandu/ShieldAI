@@ -69,7 +69,7 @@ import { registerSupportRoutes } from "./supportRoutes.js";
 import { registerStaffChatRoutes } from "./staffChatRoutes.js";
 import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
-import { registerCustomFrameworkRoutes } from "./customFrameworks.js";
+import { registerCustomFrameworkRoutes, buildCustomFrameworkBlock } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
 import { applyPolicyEdit, applyPolicyDelete, restorePolicyVersion } from "./policyWriteOps.js";
 import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
@@ -1286,9 +1286,17 @@ Limit topThreats to exactly 3, focused on the weakest NIST areas identified. Kee
             `Draw the gap analysis "control" values from this authoritative control list (use the real control names):\n` +
             buildCISPromptBlock(ig);
         }
+        // Any admin-registered custom framework the client selected — assessed
+        // against its own real, entered controls, same as CIS above. A
+        // selection already consumes a paid framework slot today
+        // (frameworkEntitlements.js counts every selectedFrameworks entry the
+        // same way regardless of built-in vs. custom); this closes the other
+        // half of that trade — a slot that's paid for now actually produces
+        // an assessment instead of silently matching nothing.
+        const customBlock = buildCustomFrameworkBlock(db, selected);
 
         const userContent =
-          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}\n\n` +
+          `Business context:\n${ctx}\n\n${frameworkInstruction}${cisBlock}${customBlock}\n\n` +
           `Generate the "compliance" section. Return ONLY valid JSON matching the schema in your instructions. Limit gaps to 3 per framework.`;
 
         let parsed = null;

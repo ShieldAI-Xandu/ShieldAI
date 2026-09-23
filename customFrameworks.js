@@ -79,19 +79,12 @@ export async function deleteFramework(db, id) {
   return db.data.customFrameworks.length < before;
 }
 
-// Build a prompt block describing any selected custom frameworks + their real
-// controls, so the compliance step assesses against them (parallel to the CIS
-// block). Returns "" if none of the selected frameworks are custom.
 /**
- * The prompt block describing a client's selected CUSTOM frameworks.
- *
- * NOT CURRENTLY CALLED. Nothing imports this function — custom frameworks are
- * registered by an admin and tracked through complianceTracking.js, but they
- * never reach the gap-analysis prompt. Wiring that up is a product decision
- * (custom frameworks would also start consuming paid framework slots — see
- * frameworkEntitlements.js), not a fix, so this stays uncalled for now. It's
- * kept correct rather than deleted because the registration and tracking
- * halves of the feature are live and someone will reconnect this.
+ * The prompt block describing a client's selected CUSTOM frameworks, so the
+ * compliance gap-analysis step assesses against their real, entered controls
+ * (parallel to the CIS Controls block server.js builds for that framework).
+ * Called from server.js's "compliance" program step. Returns "" if none of
+ * the selected frameworks are custom.
  *
  * `selectedFrameworks` has two historical shapes: an array of { id, name }
  * objects (what the pickers write today) and an array of plain name strings

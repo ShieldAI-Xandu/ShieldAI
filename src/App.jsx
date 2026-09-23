@@ -3023,17 +3023,25 @@ function RemediationSection() {
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [toast, setToast] = useState(null);
-  const [tab, setTab] = useState("gaps");       // gaps | tasks
+  const [tab, setTab] = useState("gaps");       // gaps | tasks | findings
   const [trackers, setTrackers] = useState([]); // task-tracker connections, if any
+  // Recommendations sourced from directory/cloud connectors and delivered
+  // pentest referrals — same db.data.recommendations collection the
+  // Endpoints screen already shows for agent-tied findings (agentId set),
+  // read here unfiltered so connector/referral findings (agentId: null)
+  // reach the client somewhere that isn't buried in the agent-only Endpoints
+  // page. See GET /api/admin/recommendations in agentRoutes.js.
+  const [findings, setFindings] = useState([]);
 
   async function loadAll() {
     setLoading(true); setError(null);
     try {
-      const [gRes, tRes, hRes, trRes] = await Promise.all([
+      const [gRes, tRes, hRes, trRes, fRes] = await Promise.all([
         authFetch(`${API_BASE}/api/tasks/gaps`),
         authFetch(`${API_BASE}/api/tasks`),
         authFetch(`${API_BASE}/api/tasks/posture-history`),
         authFetch(`${API_BASE}/api/tasktracker`),
+        authFetch(`${API_BASE}/api/admin/recommendations`),
       ]);
       const g = await gRes.json();
       const t = await tRes.json();
@@ -3044,10 +3052,35 @@ function RemediationSection() {
       setHistory(Array.isArray(h) ? h : []);
       // Tier-gated and easy to have none — never blocks the rest of the screen.
       setTrackers(trRes.ok ? await trRes.json() : []);
+      setFindings(fRes.ok ? await fRes.json() : []);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
   useEffect(() => { loadAll(); }, []);
+
+  async function decideFinding(id, decision) {
+    setBusyId("finding:" + id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/recommendations/${id}/decision`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not record that decision.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
+  async function markFindingDone(id) {
+    setBusyId("finding:" + id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/recommendations/${id}/complete`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "Could not mark that finding done.");
+      await loadAll();
+    } catch (e) { setError(e.message); }
+    finally { setBusyId(null); }
+  }
 
   // First ready-to-use tracker connection, if any — "ready" meaning setup
   // (project/workspace/board+lists) is actually finished, not just connected.
@@ -3147,6 +3180,8 @@ function RemediationSection() {
   const openGaps = (gaps?.gaps || []).filter(g => !g.hasOpenTask);
   const activeTasks = tasks.filter(t => !["done", "cancelled"].includes(t.status));
   const doneTasks = tasks.filter(t => t.status === "done");
+  const openFindings = findings.filter(f => ["suggested","proposed","permitted","client_performing"].includes(f.status));
+  const closedFindings = findings.filter(f => ["completed","declined"].includes(f.status));
 
   return (
     <div>
@@ -3209,7 +3244,7 @@ function RemediationSection() {
 
           {/* Tabs */}
           <div style={{display:"flex",gap:8,marginBottom:14}}>
-            {[["gaps",`Prioritized Gaps (${openGaps.length})`],["tasks",`Tasks (${activeTasks.length})`]].map(([id,label]) => (
+            {[["gaps",`Prioritized Gaps (${openGaps.length})`],["tasks",`Tasks (${activeTasks.length})`],["findings",`Findings (${openFindings.length})`]].map(([id,label]) => (
               <button key={id} onClick={()=>setTab(id)}
                 style={{padding:"7px 16px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",
                   border:`1px solid ${tab===id?C.accent:C.border}`,
@@ -3360,6 +3395,40 @@ function RemediationSection() {
               )}
             </>
           )}
+
+          {/* FINDINGS — recommendations from directory/cloud connectors and
+              delivered pentest referrals, plus your own agent-tied ones. */}
+          {tab === "findings" && (
+            <>
+              {findings.length === 0 ? (
+                <Card><div style={{color:C.textSec,fontSize:13}}>
+                  No findings yet. These arrive from a connected directory or cloud provider,
+                  a monitoring agent, or a delivered penetration-test referral.
+                </div></Card>
+              ) : (
+                <div style={{fontSize:12,color:C.textSec,marginBottom:10}}>
+                  Every finding here was reviewed by a human before reaching you — ShieldAI's AI never
+                  acts on your systems, it only drafts advice for your analyst to forward.
+                </div>
+              )}
+              <RecommendationDecisionCards recs={openFindings} onDecide={decideFinding} onMarkDone={markFindingDone}/>
+              {closedFindings.length > 0 && (
+                <>
+                  <div style={{fontSize:10,color:C.textMut,letterSpacing:1.5,fontWeight:600,margin:"16px 0 8px"}}>
+                    RESOLVED ({closedFindings.length})
+                  </div>
+                  {closedFindings.map(f => (
+                    <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+                      background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:6}}>
+                      <span style={{color:f.status==="completed"?C.greenText:C.textMut}}>{f.status==="completed"?"✓":"—"}</span>
+                      <span style={{color:C.textSec,fontSize:12.5,flex:1}}>{safeText(f.title)}</span>
+                      <span style={{fontSize:11,color:C.textMut}}>{f.status==="completed"?"Completed":"Declined"}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
         </>
       )}
     </div>
@@ -3371,6 +3440,83 @@ function miniBtn(color, busy) {
     background:`${color}12`, color, fontSize:12, fontWeight:600,
     cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
   };
+}
+
+// Recommendation cards awaiting a client decision, plus ones already being
+// worked. Shared between EndpointsScreen (agent-tied findings) and
+// RemediationSection's Findings tab (connector/pentest-referral-tied
+// findings) — both read the same db.data.recommendations collection via
+// GET /api/admin/recommendations, just agentId is null for the latter.
+function RecommendationDecisionCards({ recs, onDecide, onMarkDone }) {
+  const openRecs = recs.filter(r => ["suggested","proposed"].includes(r.status));
+  const activeRecs = recs.filter(r => ["permitted","client_performing"].includes(r.status));
+  return (
+    <>
+      {openRecs.length > 0 && (
+        <>
+          <SectionLabel text={`Recommendations Awaiting Your Decision (${openRecs.length})`}/>
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:22}}>
+            {openRecs.map(r=>{
+              const sm = SEV_META[r.severity] || SEV_META.medium;
+              return (
+                <Card key={r.id} style={{padding:"14px 16px"}}>
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
+                    <Badge label={sm.label} color={sm.color}/>
+                    <div style={{flex:1}}>
+                      <div style={{color:C.text,fontSize:14,fontWeight:600}}>{safeText(r.title)}</div>
+                      {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:4,lineHeight:1.5}}>{safeText(r.detail)}</div>}
+                      {r.origin==="ai" && <div style={{color:C.textMut,fontSize:11,marginTop:4}}>Drafted by Mastermind AI · reviewed by your analyst</div>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <button onClick={()=>onDecide(r.id,"self")}
+                      style={{padding:"7px 14px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
+                        borderRadius:7,color:C.accentText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                      I'll handle it
+                    </button>
+                    <button onClick={()=>onDecide(r.id,"permit")}
+                      style={{padding:"7px 14px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                        borderRadius:7,color:C.greenText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                      Permit analyst to perform
+                    </button>
+                    <button onClick={()=>onDecide(r.id,"decline")}
+                      style={{padding:"7px 14px",background:"none",border:`1px solid ${C.border}`,
+                        borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+                      Decline
+                    </button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {activeRecs.length > 0 && (
+        <>
+          <SectionLabel text="In Progress"/>
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:22}}>
+            {activeRecs.map(r=>(
+              <Card key={r.id} style={{padding:"12px 16px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <Badge label={r.status==="permitted"?"Analyst performing":"You're handling"}
+                    color={r.status==="permitted"?C.green:C.accent}/>
+                  <span style={{flex:1,color:C.text,fontSize:13.5,fontWeight:600}}>{safeText(r.title)}</span>
+                  {r.status==="client_performing" && (
+                    <button onClick={()=>onMarkDone(r.id)}
+                      style={{padding:"6px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
+                        borderRadius:6,color:C.greenText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                      Mark done
+                    </button>
+                  )}
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -13893,6 +14039,14 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
   const [fwGrantBusy, setFwGrantBusy] = useState(false);
   const [fwCancel, setFwCancel] = useState(null);        // { id, userId, name }
   const [fwAddonErr, setFwAddonErr] = useState(null);
+  // Dedicated invoicing worklist (GET /api/admin/billing/framework-addons) —
+  // every framework add-on that's live but not yet invoiced, oldest-owed
+  // first, across ALL clients. Previously the only UI for this was the
+  // per-account billing card above, one client at a time; nothing let an
+  // admin see the whole owed-money queue in one place.
+  const [invoiceWorklist, setInvoiceWorklist] = useState(null);
+  const [invoiceWorklistLoaded, setInvoiceWorklistLoaded] = useState(false);
+  const [invoiceWorklistLoading, setInvoiceWorklistLoading] = useState(false);
 
   // assignments state
   const [assignments, setAssignments] = useState(null);
@@ -13977,7 +14131,18 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
       setBillingLoaded(true);
     } catch (e) { setError(e.message); } finally { setBillingLoading(false); }
   }
-  useEffect(() => { if (listTab === "billing" && !billingLoaded) loadBilling();
+  async function loadInvoiceWorklist() {
+    setInvoiceWorklistLoading(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/billing/framework-addons`);
+      if (res.ok) setInvoiceWorklist(await res.json());
+      setInvoiceWorklistLoaded(true);
+    } catch { /* surfaced via the empty-state below */ }
+    finally { setInvoiceWorklistLoading(false); }
+  }
+  useEffect(() => {
+    if (listTab === "billing" && !billingLoaded) loadBilling();
+    if (listTab === "billing" && !invoiceWorklistLoaded) loadInvoiceWorklist();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listTab]);
 
@@ -14002,6 +14167,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
   async function refreshAfterAddonChange(userId) {
     if (userId) await loadAcctBilling(userId);
     if (billingLoaded) { setBillingLoaded(false); loadBilling(); }
+    if (invoiceWorklistLoaded) { setInvoiceWorklistLoaded(false); loadInvoiceWorklist(); }
   }
 
   async function patchFrameworkAddon(userId, id, patch) {
@@ -15171,6 +15337,74 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
                     <div style={{color:C.textMut,fontSize:11,marginTop:2}}>of {billing.rows.length} accounts</div>
                   </Card>
                 </div>
+
+                {/* Framework add-on invoicing worklist — every live add-on
+                    not yet invoiced, oldest-owed first, across all clients.
+                    Stripe is deliberately deferred (billingRoutes.js returns
+                    503), so without this queue the money these represent is
+                    simply lost — the only prior UI was per-account, one
+                    client at a time. */}
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <SectionLabel text="Framework Add-on Invoicing"/>
+                  <button onClick={loadInvoiceWorklist}
+                    style={{padding:"5px 12px",background:C.surface,border:`1px solid ${C.border}`,
+                      borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>↻ Refresh</button>
+                </div>
+                {invoiceWorklistLoading && !invoiceWorklist ? <Spinner/> : !invoiceWorklist ? (
+                  <Card style={{marginBottom:22,textAlign:"center",padding:"24px"}}>
+                    <div style={{color:C.textSec,fontSize:13}}>Could not load the invoicing worklist.</div>
+                  </Card>
+                ) : (
+                  <>
+                    <div style={{display:"flex",gap:16,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+                      <span style={{color:C.textSec,fontSize:12.5}}>
+                        <b style={{color:C.amberText}}>{invoiceWorklist.pendingCount}</b> owed and not yet invoiced
+                      </span>
+                      <span style={{color:C.textSec,fontSize:12.5}}>
+                        <b style={{color:C.amberText}}>{money(invoiceWorklist.pendingCents)}/mo</b> pending — not counted in Est. MRR above
+                      </span>
+                    </div>
+                    {invoiceWorklist.rows.length === 0 ? (
+                      <Card style={{marginBottom:22}}>
+                        <div style={{color:C.greenText,fontSize:13,fontWeight:600}}>✓ Nothing owed and uninvoiced right now.</div>
+                      </Card>
+                    ) : (
+                      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+                        {invoiceWorklist.rows.map(e=>(
+                          <div key={e.id} style={{display:"flex",gap:10,padding:"10px 14px",background:C.surface,
+                            borderRadius:8,alignItems:"center",flexWrap:"wrap"}}>
+                            <div style={{flex:1,minWidth:160,cursor:"pointer"}} onClick={()=>openUser(e.userId)}>
+                              <div style={{color:C.text,fontSize:13,fontWeight:600}}>{e.companyName || e.email}</div>
+                              <div style={{color:C.textMut,fontSize:11,marginTop:2}}>{safeText(e.frameworkName || "Unassigned slot")}</div>
+                            </div>
+                            <Badge label={e.tier} color={e.tier==="managed"||e.tier==="guided"?C.purple:e.tier==="growth"?C.accent:C.textMut}/>
+                            <span style={{color:e.ageDays>30?C.redText:C.textMut,fontSize:11,minWidth:70,textAlign:"right"}}>
+                              {e.ageDays}d owed
+                            </span>
+                            <span style={{color:C.text,fontSize:13,fontWeight:600,minWidth:60,textAlign:"right"}}>
+                              {money(e.priceCents)}/mo
+                            </span>
+                            <span style={{color:C.textMut,fontSize:11}}>{e.billing?.invoiceState?.replace("_"," ")}</span>
+                            {/* Same invoiceState-gated pair as the per-account
+                                billing card: not_invoiced -> invoiced -> paid.
+                                A row leaves this worklist once paid moves its
+                                status off pending_billing (server-side). */}
+                            {e.billing?.invoiceState === "not_invoiced" && (
+                              <button onClick={()=>patchFrameworkAddon(e.userId,e.id,{invoiceState:"invoiced"})}
+                                style={miniAdminBtn(C.accent)}>Mark invoiced</button>
+                            )}
+                            {e.billing?.invoiceState === "invoiced" && (
+                              <button onClick={()=>patchFrameworkAddon(e.userId,e.id,{invoiceState:"paid"})}
+                                style={miniAdminBtn(C.green)}>Mark paid</button>
+                            )}
+                            <button onClick={()=>patchFrameworkAddon(e.userId,e.id,{status:"comped"})}
+                              style={miniAdminBtn(C.purple)}>Comp instead</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
 
                 {/* Per-client rollup */}
                 <SectionLabel text="Per-Client Billing"/>
@@ -20450,9 +20684,6 @@ function EndpointsScreen({ onBack }) {
     );
   }
 
-  const openRecs = recs.filter(r => ["suggested","proposed"].includes(r.status));
-  const activeRecs = recs.filter(r => ["permitted","client_performing"].includes(r.status));
-
   return (
     <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
       {showAdd && <AddEndpointModal onClose={()=>{ setShowAdd(false); load(); }}/>}
@@ -20472,71 +20703,7 @@ function EndpointsScreen({ onBack }) {
 
       {error && <div style={{marginBottom:16,color:C.redText,fontSize:13}}>{error}</div>}
 
-      {/* Recommendations needing a decision */}
-      {openRecs.length > 0 && (
-        <>
-          <SectionLabel text={`Recommendations Awaiting Your Decision (${openRecs.length})`}/>
-          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:22}}>
-            {openRecs.map(r=>{
-              const sm = SEV_META[r.severity] || SEV_META.medium;
-              return (
-                <Card key={r.id} style={{padding:"14px 16px"}}>
-                  <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
-                    <Badge label={sm.label} color={sm.color}/>
-                    <div style={{flex:1}}>
-                      <div style={{color:C.text,fontSize:14,fontWeight:600}}>{safeText(r.title)}</div>
-                      {r.detail && <div style={{color:C.textSec,fontSize:12.5,marginTop:4,lineHeight:1.5}}>{safeText(r.detail)}</div>}
-                      {r.origin==="ai" && <div style={{color:C.textMut,fontSize:11,marginTop:4}}>Drafted by Mastermind AI · reviewed by your analyst</div>}
-                    </div>
-                  </div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                    <button onClick={()=>decide(r.id,"self")}
-                      style={{padding:"7px 14px",background:`${C.accent}18`,border:`1px solid ${C.accent}55`,
-                        borderRadius:7,color:C.accentText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                      I'll handle it
-                    </button>
-                    <button onClick={()=>decide(r.id,"permit")}
-                      style={{padding:"7px 14px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
-                        borderRadius:7,color:C.greenText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                      Permit analyst to perform
-                    </button>
-                    <button onClick={()=>decide(r.id,"decline")}
-                      style={{padding:"7px 14px",background:"none",border:`1px solid ${C.border}`,
-                        borderRadius:7,color:C.textSec,fontSize:12,cursor:"pointer"}}>
-                      Decline
-                    </button>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {/* In-progress recommendations */}
-      {activeRecs.length > 0 && (
-        <>
-          <SectionLabel text="In Progress"/>
-          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:22}}>
-            {activeRecs.map(r=>(
-              <Card key={r.id} style={{padding:"12px 16px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <Badge label={r.status==="permitted"?"Analyst performing":"You're handling"}
-                    color={r.status==="permitted"?C.green:C.accent}/>
-                  <span style={{flex:1,color:C.text,fontSize:13.5,fontWeight:600}}>{safeText(r.title)}</span>
-                  {r.status==="client_performing" && (
-                    <button onClick={()=>markDone(r.id)}
-                      style={{padding:"6px 12px",background:`${C.green}18`,border:`1px solid ${C.green}55`,
-                        borderRadius:6,color:C.greenText,fontSize:12,fontWeight:600,cursor:"pointer"}}>
-                      Mark done
-                    </button>
-                  )}
-                </div>
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
+      <RecommendationDecisionCards recs={recs} onDecide={decide} onMarkDone={markDone}/>
 
       <SectionLabel text={`Monitored Endpoints (${endpoints.length})`}/>
       {loading ? <Spinner/> : endpoints.length === 0 ? (
