@@ -17,7 +17,7 @@
 # string escaping; if absent, a built-in escaper is used.
 
 set -u
-AGENT_VERSION="1.2.0"
+AGENT_VERSION="1.3.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do

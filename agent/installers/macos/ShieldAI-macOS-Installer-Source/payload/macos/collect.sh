@@ -20,7 +20,7 @@
 # Pure bash + built-in macOS utilities. Uses `plutil`/`python3` only if present.
 
 set -u
-AGENT_VERSION="1.2.0"
+AGENT_VERSION="1.3.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
