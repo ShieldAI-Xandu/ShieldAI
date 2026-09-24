@@ -8,6 +8,20 @@ businesses, sold direct — not through MSPs. Founder/CEO: Derrick Brooks, Xandu
 - Repo: github.com/ShieldAI-Xandu/ShieldAI (branch: `main`)
 - Local dev: Windows, `E:\ShieldAI`
 
+## Brand name
+The product/company name is **ShieldAI vCISO**. On screen it is drawn as "ShieldAI"
+with a small muted "vCISO" subscript: `ShieldWordmark` (logo lockups) and `<BrandName/>`
+(inline in JSX text) in `src/App.jsx`. Where a subscript is impossible (strings, email
+subjects, tab title, calendar names, report footers, AI prompts) use the plain form
+`BRAND_PLAIN` = "ShieldAI vCISO" (`src/App.jsx`, and `brand.js` on the server). There is no
+separate "Virtual CISO" tagline next to the logo any more.
+**Never rename identifiers** — these are not brand text: URLs and email addresses, env var
+names, `package.json` name, localStorage keys (`shieldai_*`), CSS keyframes (`shieldai-*`),
+the component name `ShieldAI`, installer/artifact filenames (`ShieldAI-Agent-*`), the
+`ShieldAI_` download-filename prefix, the scheduled task / service / launchd names,
+`C:\ProgramData\ShieldAI`, ICS `PRODID`, and the Inno Setup `AppId`. The preview badge
+(`SHOW_PREVIEW_SITE_BADGE`) is a separate go-live switch.
+
 ## Stack
 - Frontend: React 19 + Vite, single large `src/App.jsx`
 - Backend: Express / Node ESM
