@@ -77,9 +77,12 @@ while fixing something else:
 - **`unbackedClaims()` CI guard** — any control-mapped framework without an `assess()` or
   documented `scoredBy` fails CI on purpose. This is intentional integrity enforcement,
   not a bug. Extend this pattern to new frameworks rather than routing around it.
-- **Stripe billing is intentionally deferred.** `billingRoutes.js` returns 503 on purpose.
-  Dev/admin tier-switchers bypass billing for demos — expected behavior, not a security
-  hole to patch without discussion first.
+- **Stripe billing is built but OFF, on purpose.** `BILLING_ENABLED` (unset by default) is the master
+  switch; while it is off every money-moving route in `billingRoutes.js` returns 503 and the webhook
+  is inactive. Do not switch it on, add live keys, or change Railway variables without the founder.
+  A live key additionally needs `BILLING_ALLOW_LIVE=true`. Dev/admin tier-switchers still bypass
+  billing for demos — expected behavior, not a security hole to patch without discussion first.
+  Setup, env vars and the go-live checklist are in `BILLING_SETUP.md`; tests: `node --test billing.test.mjs`.
 
 ## Key files
 - `tiers.js`, `tierGate.js` — pricing tiers, `FEATURE_CATALOG`, `featureAccess()`, `ADDONS`
@@ -87,7 +90,7 @@ while fixing something else:
 - `complianceBridge.js`, `frameworks.js` — framework lens/bridge system (12 frameworks)
 - `riskEngine.js`
 - `agentRoutes.js` — monitoring agent endpoints; the read-only boundary lives here
-- `billingRoutes.js` — intentionally stubbed (503)
+- `billingRoutes.js` + `stripeConfig.js` — Stripe billing/invoicing, built but OFF behind `BILLING_ENABLED`
 - `reportRoutes.js`, `trainingProgramRoutes.js`, `evidenceRoutes.js`
 - `server.js` — dotenv load order matters here; has broken before
 - `src/App.jsx` — large single-file frontend
