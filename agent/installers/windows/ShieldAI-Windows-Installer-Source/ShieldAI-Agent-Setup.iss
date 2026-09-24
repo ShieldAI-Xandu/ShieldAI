@@ -21,7 +21,7 @@
 ;  BUILD INSTRUCTIONS: see README-BUILD-INSTALLER.md in this same folder.
 ; ============================================================================
 
-#define MyAppName "ShieldAI Agent"
+#define MyAppName "ShieldAI vCISO Agent"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Xandu Limited LLC"
 #define MyDefaultServerUrl "https://shieldai-production-627e.up.railway.app"
@@ -81,9 +81,9 @@ end;
 procedure InitializeWizard;
 begin
   TokenPage := CreateInputQueryPage(wpWelcome,
-    'Connect This Computer to ShieldAI',
+    'Connect This Computer to ShieldAI vCISO',
     'Paste the one-time enrollment token for this endpoint',
-    'In your ShieldAI dashboard, go to Endpoints -> Add Endpoint, then click ' +
+    'In your ShieldAI vCISO dashboard, go to Endpoints -> Add Endpoint, then click ' +
     'Copy next to the enrollment token it generates. Paste it below. ' +
     'The token is single-use and expires about 60 minutes after it''s created, ' +
     'so generate it right before running this installer.');
@@ -98,7 +98,7 @@ begin
     if Trim(TokenPage.Values[0]) = '' then
     begin
       MsgBox('Please paste the enrollment token before continuing. ' +
-             'You can find it on the Endpoints page of your ShieldAI dashboard.',
+             'You can find it on the Endpoints page of your ShieldAI vCISO dashboard.',
              mbError, MB_OK);
       Result := False;
     end;
@@ -108,7 +108,7 @@ end;
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install.ps1"" -ServerUrl ""{code:GetServerURL}"" -EnrollmentToken ""{code:GetToken}"" -IntervalMinutes 60"; \
-  StatusMsg: "Enrolling this computer with ShieldAI and starting the agent..."; \
+  StatusMsg: "Enrolling this computer with ShieldAI vCISO and starting the agent..."; \
   Flags: runhidden waituntilterminated
 
 [UninstallRun]

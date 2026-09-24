@@ -38,7 +38,7 @@ fi
 ask_token() {
   launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" osascript <<'APPLESCRIPT'
 try
-  set theResponse to display dialog "Paste the enrollment token for this Mac. You'll find it on your ShieldAI dashboard under Endpoints -> Add Endpoint." default answer "" with title "ShieldAI Agent Setup" buttons {"Cancel", "Continue"} default button "Continue"
+  set theResponse to display dialog "Paste the enrollment token for this Mac. You'll find it on your ShieldAI vCISO dashboard under Endpoints -> Add Endpoint." default answer "" with title "ShieldAI vCISO Agent Setup" buttons {"Cancel", "Continue"} default button "Continue"
   if button returned of theResponse is "Cancel" then
     return "CANCELLED"
   end if
@@ -74,7 +74,7 @@ fi
 log "Token received, running install.sh..."
 if bash "$INSTALL_SCRIPT" --server-url "$SERVER_URL" --enrollment-token "$TOKEN" --interval-minutes 60 >> "$LOG" 2>&1; then
   log "install.sh completed successfully."
-  notify_user 'display notification "This Mac is now connected to ShieldAI." with title "ShieldAI Agent"'
+  notify_user 'display notification "This Mac is now connected to ShieldAI vCISO." with title "ShieldAI vCISO Agent"'
 else
   log "install.sh FAILED — see $LOG for details."
   notify_user 'display alert "ShieldAI Agent" message "Setup did not finish successfully. Check /var/log/shieldai-agent-install.log, or contact your ShieldAI contact." as critical'

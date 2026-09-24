@@ -82,7 +82,7 @@ chmod 644 "$PLIST"
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load -w "$PLIST"
 
-echo "ShieldAI Agent installed."
+echo "ShieldAI vCISO Agent installed."
 echo "  Scripts:  $INSTALL_DIR"
 echo "  Data:     $DATA_DIR"
 echo "  Schedule: every $INTERVAL minute(s) via launchd ($LABEL)"

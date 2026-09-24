@@ -73,7 +73,7 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
 # 4. Kick off an immediate first run so it enrolls now
 Start-ScheduledTask -TaskName $taskName
 
-Write-Host "ShieldAI Agent installed."
+Write-Host "ShieldAI vCISO Agent installed."
 Write-Host "  Scripts:  $InstallDir"
 Write-Host "  Data:     $DataDir"
 Write-Host "  Schedule: every $IntervalMinutes minute(s) as SYSTEM"

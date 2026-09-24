@@ -56,7 +56,7 @@ chmod 600 "$DATA_DIR/config.json"
 # 3. systemd service (oneshot) + timer (every N minutes)
 cat > /etc/systemd/system/shieldai-agent.service <<EOF
 [Unit]
-Description=ShieldAI posture collection agent (read-only)
+Description=ShieldAI vCISO posture collection agent (read-only)
 After=network-online.target
 Wants=network-online.target
 
@@ -69,7 +69,7 @@ EOF
 
 cat > /etc/systemd/system/shieldai-agent.timer <<EOF
 [Unit]
-Description=Run ShieldAI agent every $INTERVAL minute(s)
+Description=Run ShieldAI vCISO agent every $INTERVAL minute(s)
 
 [Timer]
 OnBootSec=1min
@@ -87,7 +87,7 @@ systemctl enable --now shieldai-agent.timer
 # 4. Kick off an immediate first run (enrolls + first report now)
 systemctl start shieldai-agent.service || true
 
-echo "ShieldAI Agent installed."
+echo "ShieldAI vCISO Agent installed."
 echo "  Scripts:  $INSTALL_DIR"
 echo "  Data:     $DATA_DIR"
 echo "  Schedule: every $INTERVAL minute(s) via systemd timer"

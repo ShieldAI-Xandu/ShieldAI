@@ -437,7 +437,7 @@ REPORT+="\"checks\":[${CHECKS_JSON}],\"events\":[${EVENTS_JSON}],\"inventory\":$
 
 if [ -n "$OUTFILE" ]; then
   printf '%s' "$REPORT" > "$OUTFILE"
-  echo "ShieldAI report written to $OUTFILE"
+  echo "ShieldAI vCISO report written to $OUTFILE"
 else
   printf '%s\n' "$REPORT"
 fi

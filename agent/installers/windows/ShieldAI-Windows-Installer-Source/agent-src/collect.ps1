@@ -1077,7 +1077,7 @@ $json = $report | ConvertTo-Json -Depth 8
 
 if ($OutFile -ne "") {
   $json | Out-File -FilePath $OutFile -Encoding utf8
-  Write-Host "ShieldAI report written to $OutFile ($($checks.Count) checks, $($events.Count) events)."
+  Write-Host "ShieldAI vCISO report written to $OutFile ($($checks.Count) checks, $($events.Count) events)."
 } else {
   Write-Output $json
 }
