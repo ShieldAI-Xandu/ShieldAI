@@ -180,7 +180,7 @@ export async function sendEmail({ to, subject, html, text, fromName, fromLocal, 
   if (!to || !subject || (!html && !text)) {
     return { ok: false, error: "to, subject, and html or text are required." };
   }
-  const from = `${fromName || "ShieldAI"} <${fromLocal || "notifications"}@${FROM_DOMAIN}>`;
+  const from = `${fromName || "ShieldAI vCISO"} <${fromLocal || "notifications"}@${FROM_DOMAIN}>`;
   try {
     const result = await sendImpl({ to, from, subject, html, text, replyTo });
     health.lastSuccessAt = new Date().toISOString();

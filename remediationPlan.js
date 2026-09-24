@@ -217,7 +217,7 @@ export async function buildRemediationPlanData(db, clientId, { callClaudeText } 
       fx.aiGenerated = false;
       continue;
     }
-    const prompt = `You are ShieldAI Mastermind advising a virtual CISO.
+    const prompt = `You are ShieldAI vCISO Mastermind advising a virtual CISO.
 
 CLIENT: ${company.name || client.companyName || "the client"}${
       company.industry ? ` · ${company.industry}` : ""
@@ -248,7 +248,7 @@ Write remediation steps to close this gap. Requirements for your answer:
     try {
       const text = await callClaudeText({
         system:
-          "You are ShieldAI Mastermind, a precise virtual-CISO advisor. You state only what the provided facts support. You never invent details about a client.",
+          "You are ShieldAI vCISO Mastermind, a precise virtual-CISO advisor. You state only what the provided facts support. You never invent details about a client.",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 700,
       });

@@ -79,7 +79,7 @@ export const FRAMEWORKS = [
     fullName: "NIST Cybersecurity Framework",
     depth: DEPTH.CONTROL_MAPPED,
     always: true,          // the scoring baseline; can't be deselected
-    desc: "The scoring baseline. Every posture score ShieldAI produces is computed against the five functions.",
+    desc: "The scoring baseline. Every posture score ShieldAI vCISO produces is computed against the five functions.",
     audience: "All businesses — the foundation the rest map onto.",
     url: "https://www.nist.gov/cyberframework",
     // Deliberately no `assess()` — see CLAUDE.md's "Known do not fix items."
@@ -264,7 +264,7 @@ export const NOT_OFFERED = [
     // Recorded so this doesn't get re-litigated in six months. This is not
     // caution — it is what the licence says.
     detail:
-      "HITRUST's CSF licence prohibits commercial use and creation of derivative works without express written consent, and defines 'derivative work' to include any software that is based on or incorporates any part of the CSF, in any form in which it may be recast or adapted. A control-mapped implementation is precisely that. Separately, the licence restricts who may be a licensee: security service providers, consultants, and vendors are excluded — which describes ShieldAI. A commercial GRC vendor (SimpleRisk) reached the same conclusion and does not implement HITRUST for this reason.",
+      "HITRUST's CSF licence prohibits commercial use and creation of derivative works without express written consent, and defines 'derivative work' to include any software that is based on or incorporates any part of the CSF, in any form in which it may be recast or adapted. A control-mapped implementation is precisely that. Separately, the licence restricts who may be a licensee: security service providers, consultants, and vendors are excluded — which describes ShieldAI vCISO. A commercial GRC vendor (SimpleRisk) reached the same conclusion and does not implement HITRUST for this reason.",
     alternative:
       "For healthcare clients, our control-mapped HIPAA Security Rule assessment covers the underlying regulatory obligation. HITRUST certification itself requires a HITRUST-authorised assessor.",
     reviewedOn: "2026-07",

@@ -208,7 +208,7 @@ export function registerSupportRoutes(app, { db, requireAuth, analystClientIds, 
     }));
     if (!history.length || history[0].role !== "user") return false;
 
-    const system = `You are Mastermind, ShieldAI's AI security advisor, answering inside a client's support chat.
+    const system = `You are Mastermind, ShieldAI vCISO's AI security advisor, answering inside a client's support chat.
 Be concise, direct, and helpful — you're the first line of support, not a human, and must never imply otherwise.
 If the client asks to speak with a person, or the issue is something you genuinely can't resolve (billing disputes, account changes, anything needing human judgment), call request_human_support with a short reason.
 You have no ability to change account settings, billing, or any client data from this chat — for anything beyond answering a question, request a human instead of guessing.`;
@@ -470,7 +470,7 @@ You have no ability to change account settings, billing, or any client data from
       claimedAt: at,
       messages: [{
         id: randomUUID(), authorRole: "staff", authorId: req.userId,
-        authorLabel: actor?.companyName || actor?.email || "ShieldAI staff",
+        authorLabel: actor?.companyName || actor?.email || "ShieldAI vCISO staff",
         body: message.slice(0, 2000), at,
       }],
     };
@@ -526,7 +526,7 @@ You have no ability to change account settings, billing, or any client data from
     ticket.escalatedNote = note || null;
     ticket.messages.push({
       id: randomUUID(), authorRole: "staff", authorId: req.userId,
-      authorLabel: actor?.companyName || actor?.email || "ShieldAI staff",
+      authorLabel: actor?.companyName || actor?.email || "ShieldAI vCISO staff",
       body: note ? `⬆ Escalated to admin: ${note}` : "⬆ Escalated to admin.",
       at,
     });
@@ -575,7 +575,7 @@ You have no ability to change account settings, billing, or any client data from
     }
     ticket.messages.push({
       id: randomUUID(), authorRole: "staff", authorId: req.userId,
-      authorLabel: actor?.companyName || actor?.email || "ShieldAI support",
+      authorLabel: actor?.companyName || actor?.email || "ShieldAI vCISO support",
       body: `${actor?.companyName || actor?.email || "A team member"} joined the conversation.`,
       at,
     });
@@ -597,7 +597,7 @@ You have no ability to change account settings, billing, or any client data from
     const at = nowIso();
     ticket.messages.push({
       id: randomUUID(), authorRole: "staff", authorId: req.userId,
-      authorLabel: actor?.companyName || actor?.email || "ShieldAI support",
+      authorLabel: actor?.companyName || actor?.email || "ShieldAI vCISO support",
       body: message.slice(0, 2000), at,
     });
     ticket.updatedAt = at;

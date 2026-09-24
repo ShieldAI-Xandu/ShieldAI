@@ -463,12 +463,12 @@ export async function requestPasswordReset(email) {
 
   const result = await sendEmail({
     to: user.email,
-    subject: "Reset your ShieldAI password",
+    subject: "Reset your ShieldAI vCISO password",
     fromLocal: "security",
-    html: `<p>Someone requested a password reset for your ShieldAI account (${escapeHtml(user.email)}).</p>
+    html: `<p>Someone requested a password reset for your ShieldAI vCISO account (${escapeHtml(user.email)}).</p>
 <p><a href="${link}">Click here to choose a new password</a>. This link expires in 1 hour and works once.</p>
 <p>If you didn't request this, you can safely ignore this email — your password hasn't been changed.</p>`,
-    text: `Reset your ShieldAI password: ${link}\n\nThis link expires in 1 hour and works once. If you didn't request this, ignore this email — your password hasn't been changed.`,
+    text: `Reset your ShieldAI vCISO password: ${link}\n\nThis link expires in 1 hour and works once. If you didn't request this, ignore this email — your password hasn't been changed.`,
   });
   if (!result.ok) {
     // Never surface delivery failure to the caller — same reasoning as the

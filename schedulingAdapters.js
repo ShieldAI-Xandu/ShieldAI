@@ -16,7 +16,7 @@ export async function createZoomMeeting(accessToken, { topic, startTime, duratio
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      topic: String(topic || "ShieldAI call").slice(0, 200),
+      topic: String(topic || "ShieldAI vCISO call").slice(0, 200),
       type: 2, // scheduled meeting
       start_time: startTime, // ISO 8601, UTC
       duration: durationMinutes || 30,
@@ -35,7 +35,7 @@ export async function createGoogleMeetEvent(accessToken, { topic, startTime, dur
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      summary: String(topic || "ShieldAI call").slice(0, 200),
+      summary: String(topic || "ShieldAI vCISO call").slice(0, 200),
       start: { dateTime: start.toISOString() },
       end: { dateTime: end.toISOString() },
       conferenceData: { createRequest: { requestId: `shieldai-${Date.now()}`, conferenceSolutionKey: { type: "hangoutsMeet" } } },

@@ -578,7 +578,7 @@ async function main() {
   let analyst = db.data.users.find(u => u.email === DEMO_ANALYST_EMAIL);
   if (!analyst) {
     analyst = {
-      id: randomUUID(), email: DEMO_ANALYST_EMAIL, companyName: "ShieldAI Demo Analyst",
+      id: randomUUID(), email: DEMO_ANALYST_EMAIL, companyName: "ShieldAI vCISO Demo Analyst",
       passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
       isAdmin: false, isAnalyst: true, isDemo: true, tier: "managed",
       createdAt: new Date().toISOString(),
@@ -1117,7 +1117,7 @@ async function main() {
     primaryColor: "#1E3A5F",
     accentColor: "#D4A017",
     supportEmail: "support@meridianriskadvisors.example",
-    footerNote: "Powered by ShieldAI",
+    footerNote: "Powered by ShieldAI vCISO",
   });
   if (brandPatch.ok) {
     db.data.branding.push({ ownerUserId: analyst.id, createdAt: daysAgo(60), updatedAt: daysAgo(60), ...brandPatch.patch });
@@ -1264,13 +1264,13 @@ async function main() {
 
     db.data.clientMessages.push(
       { id: randomUUID(), clientUserId: cUser.id, fromRole: "staff", authorId: analyst.id,
-        authorLabel: "ShieldAI Demo Analyst",
+        authorLabel: "ShieldAI vCISO Demo Analyst",
         body: "Hi — I reviewed your latest endpoint report. A couple of items need attention when you have a minute.",
         at: daysAgo(9) },
       { id: randomUUID(), clientUserId: cUser.id, fromRole: "client", authorId: cUser.id,
         authorLabel: co.company.name, body: "Thanks for flagging it — can you send over what specifically needs fixing?", at: daysAgo(9) },
       { id: randomUUID(), clientUserId: cUser.id, fromRole: "staff", authorId: analyst.id,
-        authorLabel: "ShieldAI Demo Analyst",
+        authorLabel: "ShieldAI vCISO Demo Analyst",
         body: STAFF_FOLLOWUP_NOTE[co.company.name], at: daysAgo(8) },
       { id: randomUUID(), clientUserId: cUser.id, fromRole: "client", authorId: cUser.id,
         authorLabel: co.company.name, body: "Got it, we'll take care of that this week.", at: daysAgo(7) },

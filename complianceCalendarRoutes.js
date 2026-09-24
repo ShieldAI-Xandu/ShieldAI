@@ -500,7 +500,7 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
 
     const owner = (db.data.users || []).find(u => u.id === f.ownerUserId);
     const items = buildCalendarItems(db, f.ownerUserId);
-    const ics = buildIcsFeed(items, { companyName: owner?.companyName || "ShieldAI Client" });
+    const ics = buildIcsFeed(items, { companyName: owner?.companyName || "ShieldAI vCISO Client" });
     res.set("Content-Type", "text/calendar; charset=utf-8");
     res.send(ics);
   });

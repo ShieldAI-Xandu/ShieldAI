@@ -22,7 +22,7 @@ export const HELP_MANUAL = [
       {
         id: "run-assessment",
         title: "Run your security assessment",
-        intro: "The assessment is how ShieldAI learns about your business so everything else — your score, policies, compliance tracking — is tailored to you instead of generic.",
+        intro: "The assessment is how ShieldAI vCISO learns about your business so everything else — your score, policies, compliance tracking — is tailored to you instead of generic.",
         steps: [
           "From Home, click \"New Assessment.\" A conversational AI chat asks about your industry, employee count, the kinds of data you handle, your current tools/IT staff, compliance needs, and any past incidents — usually 7-9 questions.",
           "Next, choose your posture \"lens\": NIST Cybersecurity Framework, CIS Controls v8.1, or both. This only changes how your score is grouped and labeled, not the questions you'll answer.",
@@ -79,7 +79,7 @@ export const HELP_MANUAL = [
         intro: "The Policy Library is where you get real, usable policy documents — separate from the read-only previews in Your Security Program.",
         steps: [
           "Open Policy Library, pick a policy type from the catalog, and answer a few company-specific questions.",
-          "ShieldAI drafts the policy. Review it, then it's automatically saved to \"My Policies.\"",
+          "ShieldAI vCISO drafts the policy. Review it, then it's automatically saved to \"My Policies.\"",
           "Download it as a Word document (Growth and above) to edit further or file for an auditor.",
         ],
       },
@@ -110,7 +110,7 @@ export const HELP_MANUAL = [
         intro: "The agent gives you real, measured visibility into a computer or server's security posture — not just your own self-reported answers.",
         steps: [
           "Click the \"🖥️ Endpoints\" button in the top bar, then \"Add Endpoint.\"",
-          "Pick the operating system (Windows, macOS, or Linux). ShieldAI mints a one-time enrollment token (valid 60 minutes) and downloads one installer file with the server address and token already built in.",
+          "Pick the operating system (Windows, macOS, or Linux). ShieldAI vCISO mints a one-time enrollment token (valid 60 minutes) and downloads one installer file with the server address and token already built in.",
           "Windows: run `powershell -ExecutionPolicy Bypass -File .\\ShieldAI-Install.ps1` as Administrator. macOS/Linux: run `sudo bash ShieldAI-Install-<os>.sh`.",
           "Within a few minutes the endpoint appears in your fleet list with an Online/Offline status and a posture summary.",
         ],
@@ -124,12 +124,12 @@ export const HELP_MANUAL = [
           "Security Events: a feed of anything notable the agent observed, tagged by severity.",
           "Posture Checks: a pass/fail/warn list per control, with the specific CIS control it maps to where applicable.",
           "Inventory: disk encryption, firewall status, pending patches, installed security tools, and local-admin account count.",
-          "\"Request check-in\" flags the agent to send a fresh report on its next scheduled poll, instead of waiting for its normal cadence (about every 60 minutes by default) — useful right after you've made a change and want ShieldAI to see it sooner. The button shows \"Check-in requested\" until that next report arrives.",
+          "\"Request check-in\" flags the agent to send a fresh report on its next scheduled poll, instead of waiting for its normal cadence (about every 60 minutes by default) — useful right after you've made a change and want ShieldAI vCISO to see it sooner. The button shows \"Check-in requested\" until that next report arrives.",
           "\"Remove endpoint\" deletes the agent and its history if you retire a machine.",
         ],
         notes: [
-          "If what the agent measures disagrees with an answer you gave on your assessment, ShieldAI flags it as a discrepancy for you to resolve in the Compliance tab's Conflict Queue — it never silently overrides your answer.",
-          "\"Request check-in\" doesn't reach out to the machine — the agent is strictly read-only and only ever contacts ShieldAI on its own schedule, never the other way around. This just flags that the next time it does, it should send a full report right away instead of waiting for anything else. It's usually a few minutes to under an hour, not instant.",
+          "If what the agent measures disagrees with an answer you gave on your assessment, ShieldAI vCISO flags it as a discrepancy for you to resolve in the Compliance tab's Conflict Queue — it never silently overrides your answer.",
+          "\"Request check-in\" doesn't reach out to the machine — the agent is strictly read-only and only ever contacts ShieldAI vCISO on its own schedule, never the other way around. This just flags that the next time it does, it should send a full report right away instead of waiting for anything else. It's usually a few minutes to under an hour, not instant.",
         ],
       },
     ],
@@ -144,11 +144,11 @@ export const HELP_MANUAL = [
       {
         id: "connect-webhook-tool",
         title: "Connect a scanner, EDR, or SIEM",
-        intro: "Feed real findings from your existing security tools into ShieldAI instead of re-entering them by hand. ShieldAI only receives what your tool sends — it never connects out to your tool or changes anything there.",
+        intro: "Feed real findings from your existing security tools into ShieldAI vCISO instead of re-entering them by hand. ShieldAI vCISO only receives what your tool sends — it never connects out to your tool or changes anything there.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Add Integration.\"",
           "Name the connection and pick your tool: Nessus/Tenable, Qualys, Rapid7 InsightVM, Microsoft Defender, CrowdStrike, Wazuh, Splunk, or Generic/Custom for anything else.",
-          "ShieldAI shows a webhook URL and a bearer token — shown once, so copy both now. Point your tool's outbound webhook, forwarding script, or SOAR workflow at that URL with the token as a Bearer Authorization header.",
+          "ShieldAI vCISO shows a webhook URL and a bearer token — shown once, so copy both now. Point your tool's outbound webhook, forwarding script, or SOAR workflow at that URL with the token as a Bearer Authorization header.",
           "Findings appear on the connection's detail page as they come in. Anything medium severity or above is automatically drafted into a recommendation for your analyst to review before it ever reaches you.",
         ],
         notes: [
@@ -159,7 +159,7 @@ export const HELP_MANUAL = [
       {
         id: "connect-directory",
         title: "Connect Microsoft 365, Google Workspace, Okta, or Zoom",
-        intro: "Directory connections pull security-posture facts you'd otherwise have to check manually — MFA coverage, privileged/admin accounts, stale accounts, meeting security settings, and policy gaps — straight from the tools you already run. Read-only, always: ShieldAI can see this data but can never change anything in your account.",
+        intro: "Directory connections pull security-posture facts you'd otherwise have to check manually — MFA coverage, privileged/admin accounts, stale accounts, meeting security settings, and policy gaps — straight from the tools you already run. Read-only, always: ShieldAI vCISO can see this data but can never change anything in your account.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Directory.\"",
           "Pick your provider. Microsoft 365, Google Workspace, and Zoom use a normal sign-in-and-approve screen — you'll need admin access in that account for the consent screen to succeed. Okta instead asks for your Okta domain and a read-only API token, which your Okta admin generates from Security → API → Tokens in the Okta console.",
@@ -174,7 +174,7 @@ export const HELP_MANUAL = [
       {
         id: "connect-cloud",
         title: "Connect AWS or Azure",
-        intro: "Cloud connections pull infrastructure security-posture facts — IAM/MFA hygiene, publicly exposed storage, network rules open to the internet, and whether audit logging is on — straight from your AWS account or Azure subscription. Read-only, always: ShieldAI can see this data but can never change anything in your cloud account.",
+        intro: "Cloud connections pull infrastructure security-posture facts — IAM/MFA hygiene, publicly exposed storage, network rules open to the internet, and whether audit logging is on — straight from your AWS account or Azure subscription. Read-only, always: ShieldAI vCISO can see this data but can never change anything in your cloud account.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Cloud.\"",
           "Pick AWS or Azure. Both ask for a credential you paste in, not a sign-in-and-approve screen — for AWS, an Access Key ID and Secret Access Key from an IAM user with AWS's own \"SecurityAudit\" policy attached; for Azure, a Tenant ID, Client ID, Client Secret, and Subscription ID from an app registration granted the built-in \"Reader\" role.",
@@ -190,22 +190,22 @@ export const HELP_MANUAL = [
       {
         id: "connect-slack",
         title: "Get Slack or Microsoft Teams notifications",
-        intro: "Connect Slack or Teams to get pinged in a channel of your choosing whenever there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off. ShieldAI only ever posts messages; it never reads your channel history or anything else in your workspace.",
+        intro: "Connect Slack or Teams to get pinged in a channel of your choosing whenever there's new security work — a recommendation is ready, a task is completed, a phishing simulation goes out, or a policy needs sign-off. ShieldAI vCISO only ever posts messages; it never reads your channel history or anything else in your workspace.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Chat Tool,\" and pick Slack or Microsoft Teams.",
-          "Slack: you'll be sent to Slack to approve ShieldAI posting to your workspace, then land back here automatically. Open the connection and click \"Choose a channel\" to pick where ShieldAI should post — only channels the ShieldAI Slack app has been invited to will show up, so invite it to a channel first if you don't see the one you want.",
-          "Teams: in the channel you want alerts in, add a webhook (⋯ → Workflows → \"Post to a channel when a webhook request is received,\" or on older setups Connectors → Incoming Webhook), copy the URL it gives you, and paste it into ShieldAI. The channel is already fixed by that URL, so there's no separate channel picker.",
+          "Slack: you'll be sent to Slack to approve ShieldAI vCISO posting to your workspace, then land back here automatically. Open the connection and click \"Choose a channel\" to pick where ShieldAI vCISO should post — only channels the ShieldAI vCISO Slack app has been invited to will show up, so invite it to a channel first if you don't see the one you want.",
+          "Teams: in the channel you want alerts in, add a webhook (⋯ → Workflows → \"Post to a channel when a webhook request is received,\" or on older setups Connectors → Incoming Webhook), copy the URL it gives you, and paste it into ShieldAI vCISO. The channel is already fixed by that URL, so there's no separate channel picker.",
           "Turn on the specific events you want to hear about under \"Notify on.\" Slack needs a channel picked first — Teams doesn't, since the webhook URL already points at one.",
         ],
         notes: [
-          "A new recommendation posted to Slack comes with action buttons — \"I'll handle it,\" \"Mark done,\" or \"Decline\" — so you can respond right from Slack instead of opening ShieldAI. In Teams, those same buttons open your browser to apply the action instead, since a bare Teams webhook can't receive button clicks the way Slack can — you'll land back in ShieldAI already signed in, and it applies immediately. Other notifications (task completed, phishing sent, policy assigned) are informational only, with no buttons, on either platform.",
-          "If several recommendations get drafted at once, notifications still only go out at the moment each one is actually proposed to you by your analyst — nothing reaches Slack or Teams before a human has reviewed it, same as everywhere else in ShieldAI.",
+          "A new recommendation posted to Slack comes with action buttons — \"I'll handle it,\" \"Mark done,\" or \"Decline\" — so you can respond right from Slack instead of opening ShieldAI vCISO. In Teams, those same buttons open your browser to apply the action instead, since a bare Teams webhook can't receive button clicks the way Slack can — you'll land back in ShieldAI vCISO already signed in, and it applies immediately. Other notifications (task completed, phishing sent, policy assigned) are informational only, with no buttons, on either platform.",
+          "If several recommendations get drafted at once, notifications still only go out at the moment each one is actually proposed to you by your analyst — nothing reaches Slack or Teams before a human has reviewed it, same as everywhere else in ShieldAI vCISO.",
         ],
       },
       {
         id: "connect-task-tracker",
         title: "Sync remediation tasks to Jira, Asana, or Trello",
-        intro: "Turn a ShieldAI remediation task into a real ticket in the tracker your team already works from, and check its status without leaving ShieldAI.",
+        intro: "Turn a ShieldAI vCISO remediation task into a real ticket in the tracker your team already works from, and check its status without leaving ShieldAI vCISO.",
         steps: [
           "Click \"🔌 Integrations\" in the top bar, then \"+ Connect Task Tracker,\" and pick Jira, Asana, or Trello.",
           "Jira and Asana send you to sign in and approve; Trello asks you to paste an API key and token from your Trello account instead (trello.com/power-ups/admin) — no sign-in redirect for Trello.",
@@ -213,8 +213,8 @@ export const HELP_MANUAL = [
           "On any remediation task, click \"Sync to [tracker]\" to create the ticket, or \"Sync status\" once it's already synced to pull its current state back.",
         ],
         notes: [
-          "Syncing a task only ever creates that one ticket — ShieldAI never reads or changes anything else in your tracker. Status is pulled on demand, not automatically, so click \"Sync status\" for a fresh check.",
-          "Pulling a tracker's status never marks the ShieldAI task complete by itself — you still click \"Complete & Re-score\" in ShieldAI to actually finish it and update your posture score. The tracker's status shows alongside the task as information, not a substitute for that.",
+          "Syncing a task only ever creates that one ticket — ShieldAI vCISO never reads or changes anything else in your tracker. Status is pulled on demand, not automatically, so click \"Sync status\" for a fresh check.",
+          "Pulling a tracker's status never marks the ShieldAI vCISO task complete by itself — you still click \"Complete & Re-score\" in ShieldAI vCISO to actually finish it and update your posture score. The tracker's status shows alongside the task as information, not a substitute for that.",
         ],
       },
       {
@@ -224,9 +224,9 @@ export const HELP_MANUAL = [
         steps: [
           "Open the Support Center and find \"Schedule a call.\"",
           "The first time, connect Zoom or Google Meet — a normal sign-in-and-approve screen for your own personal account, separate from any directory connection you may have set up.",
-          "Pick a topic, date/time, and duration, then click \"Schedule.\" ShieldAI creates the meeting and shows you the join link immediately.",
+          "Pick a topic, date/time, and duration, then click \"Schedule.\" ShieldAI vCISO creates the meeting and shows you the join link immediately.",
         ],
-        notes: ["This is the one place ShieldAI ever creates something in a connected account rather than just reading from it — and it only ever creates the exact meeting you asked for, nothing else. No calendar access, no recurring connection beyond that one request."],
+        notes: ["This is the one place ShieldAI vCISO ever creates something in a connected account rather than just reading from it — and it only ever creates the exact meeting you asked for, nothing else. No calendar access, no recurring connection beyond that one request."],
       },
     ],
   },
@@ -326,7 +326,7 @@ export const HELP_MANUAL = [
           "Click \"Refresh\" to re-check after installing new software or enrolling a new endpoint.",
         ],
         notes: [
-          "Matches depend on your monitored software (from an agent or your assessment) — the more of your stack ShieldAI can see, the more complete this is.",
+          "Matches depend on your monitored software (from an agent or your assessment) — the more of your stack ShieldAI vCISO can see, the more complete this is.",
           "This is a Growth-plan feature. On Starter and Free, the card shows an upgrade prompt instead of live data.",
         ],
       },
@@ -337,7 +337,7 @@ export const HELP_MANUAL = [
         steps: [
           "In the Threat Intel screen's domain card, add your company domain (you can register more than one, useful for multiple brands or regional sites). Domain registration and DNS verification are available on every plan, including Free.",
           "Publish the DNS TXT record shown for your domain, then click \"Check DNS record\" to verify.",
-          "After DNS verification, the domain shows \"Monitoring setup in progress\" while ShieldAI staff completes enrollment with the breach-monitoring source — this is not instant. Once that's done, status changes to fully monitored and shows breach status level, breached-account count, and named breaches. Viewing the actual breach results is a Growth-plan feature — Starter and Free can still register and verify a domain so results are ready the moment they upgrade.",
+          "After DNS verification, the domain shows \"Monitoring setup in progress\" while ShieldAI vCISO staff completes enrollment with the breach-monitoring source — this is not instant. Once that's done, status changes to fully monitored and shows breach status level, breached-account count, and named breaches. Viewing the actual breach results is a Growth-plan feature — Starter and Free can still register and verify a domain so results are ready the moment they upgrade.",
         ],
         notes: ["Any demo or simulated breach data is always clearly labeled \"SIMULATED — DEMO ONLY.\" A \"Not monitored\" or \"Not checked\" status is a coverage gap, not a clean bill of health."],
       },
@@ -362,7 +362,7 @@ export const HELP_MANUAL = [
         intro: "Track every vendor or service provider that touches your business or your data — payment processors, your MSP, cloud hosting, payroll, and similar.",
         steps: [
           "In Vendor Risk, click \"+ Add vendor\" and fill in name, category, criticality (critical/high/medium/low), data access level, contact details, contract start date, whether they have a current security certification on file, and whether a DPA/BAA is in place.",
-          "ShieldAI automatically sets a reassessment due date based on criticality: critical vendors every 6 months, high/medium every 12 months, low every 24 months. You can override the cadence per vendor.",
+          "ShieldAI vCISO automatically sets a reassessment due date based on criticality: critical vendors every 6 months, high/medium every 12 months, low every 24 months. You can override the cadence per vendor.",
           "The vendor table's Review Status column shows Overdue, Due soon, Current, or Not scheduled, color-coded. Click \"Reassess\" (with an optional note) to reset the clock once you've reviewed a vendor.",
         ],
       },
@@ -373,7 +373,7 @@ export const HELP_MANUAL = [
         steps: [
           "At the bottom of Vendor Risk, paste the text of the questionnaire your customer sent you.",
           "Click \"Draft responses.\" Every answer is grounded in your own real program data — your actual generated policies, your actual computed posture score, your actual vendor count.",
-          "Anything ShieldAI can't verify from your real data is flagged \"Needs your input\" rather than guessed — fill those in yourself before sending the response back.",
+          "Anything ShieldAI vCISO can't verify from your real data is flagged \"Needs your input\" rather than guessed — fill those in yourself before sending the response back.",
           "Past drafts are saved under \"View past responses\" and can be deleted once no longer needed.",
         ],
       },
@@ -486,9 +486,9 @@ export const HELP_MANUAL = [
       {
         id: "message-analyst",
         title: "Message your analyst",
-        intro: "Click \"💬 Chat\" in the top bar for threaded messaging with your assigned ShieldAI analyst.",
+        intro: "Click \"💬 Chat\" in the top bar for threaded messaging with your assigned ShieldAI vCISO analyst.",
         steps: [
-          "Type your message and send — your analyst (or, if none is assigned yet, the ShieldAI team) is notified.",
+          "Type your message and send — your analyst (or, if none is assigned yet, the ShieldAI vCISO team) is notified.",
           "The thread stays open for follow-up; check back for replies or wait for a notification.",
         ],
         notes: ["This direct in-app thread is a Guided-plan feature. On Starter and Growth, use the Support Center instead (see below) — or the public Support form for account or product questions."],
@@ -499,7 +499,7 @@ export const HELP_MANUAL = [
         intro: "Click \"🎫 Support\" in the top bar for an instant Mastermind answer or to open a ticketed support request — no assigned analyst required.",
         steps: [
           "\"Chat with Mastermind\" jumps straight into the same Mastermind assistant used elsewhere in the app, grounded in your own account.",
-          "\"Submit a support request\" opens a ticket: pick a topic, describe what you need, and send. Whichever analyst is assigned to you (or, if none yet, the ShieldAI team) is notified and can reply from their own console.",
+          "\"Submit a support request\" opens a ticket: pick a topic, describe what you need, and send. Whichever analyst is assigned to you (or, if none yet, the ShieldAI vCISO team) is notified and can reply from their own console.",
           "Your past requests are listed below the form, tagged Open or Resolved. Click one to see the full reply thread and add a follow-up — replying to a resolved request reopens it automatically.",
         ],
         notes: ["The Support Center is a Starter-plan feature. Free tier sees an upgrade prompt instead and should use the public Support form."],
@@ -522,11 +522,11 @@ export const HELP_MANUAL = [
           "Click \"Manage Billing\" to open the Stripe customer portal (update payment method, view invoices).",
           "To upgrade, pick a higher tier in the plan comparison grid and click \"Upgrade\" — this goes through Stripe Checkout. Managed vCISO isn't self-serve; click \"Contact Sales\" instead.",
           "To add the Training Delivery add-on ($40/mo, Starter only — Growth and above already include it), click \"Add\" next to it.",
-          "Downgrades aren't self-serve today — contact your ShieldAI admin to change to a lower tier.",
+          "Downgrades aren't self-serve today — contact your ShieldAI vCISO admin to change to a lower tier.",
         ],
         notes: [
           "Anywhere in the app that a feature is locked for your tier, an upgrade prompt pops up automatically telling you exactly what plan or add-on unlocks it and for how much.",
-          "If self-serve checkout, upgrades, or the billing portal aren't available yet for your account, you'll see a message to contact your ShieldAI admin instead — that's expected while billing is being finalized for your account, not an error.",
+          "If self-serve checkout, upgrades, or the billing portal aren't available yet for your account, you'll see a message to contact your ShieldAI vCISO admin instead — that's expected while billing is being finalized for your account, not an error.",
         ],
       },
     ],

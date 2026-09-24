@@ -67,7 +67,7 @@ export const SOC2_META = {
     type2: "Type II — controls operated effectively over a period (typically 3–12 months). What most customers actually want.",
   },
   criticalNote:
-    "There is no such thing as being 'SOC 2 certified' or 'SOC 2 compliant.' A licensed CPA firm issues an attestation report about your controls. ShieldAI prepares you for that examination; it does not perform or replace it.",
+    "There is no such thing as being 'SOC 2 certified' or 'SOC 2 compliant.' A licensed CPA firm issues an attestation report about your controls. ShieldAI vCISO prepares you for that examination; it does not perform or replace it.",
 };
 
 // ── Common Criteria: Security (CC1–CC9) ───────────────────────

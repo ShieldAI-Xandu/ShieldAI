@@ -110,7 +110,7 @@ export function buildIcsFeed(items, { companyName } = {}) {
     "PRODID:-//ShieldAI//Compliance Calendar//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${escapeIcsText(`ShieldAI Compliance — ${companyName || "Client"}`)}`,
+    `X-WR-CALNAME:${escapeIcsText(`ShieldAI vCISO Compliance — ${companyName || "Client"}`)}`,
     // Two different refresh-interval hints since calendar apps don't agree
     // on which one they honor (Apple leans REFRESH-INTERVAL, Google/Outlook
     // historically lean X-PUBLISHED-TTL) — both are no-ops where unsupported.

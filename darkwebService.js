@@ -216,7 +216,7 @@ export async function domainExposure(domain) {
     }
     if (res.status === 403) {
       return { source: "hibp", domain: d, monitored: false, statusLevel: "Not monitored",
-        reason: "This domain isn't verified in the ShieldAI Have I Been Pwned domain dashboard (or is out of subscription scope). Verify domain control to enable monitoring.",
+        reason: "This domain isn't verified in the ShieldAI vCISO Have I Been Pwned domain dashboard (or is out of subscription scope). Verify domain control to enable monitoring.",
         configured: true, needsVerification: true };
     }
     if (res.status === 401) {

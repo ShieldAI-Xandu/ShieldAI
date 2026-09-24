@@ -557,7 +557,7 @@ export function registerTrainingProgramRoutes(app, {
 
     let emailed = false, sendError = null;
     if (emailConfigured()) {
-      const result = await sendEmail({ to: learner.email, subject: "Your ShieldAI training link", html: learnerLinkEmailHtml(learner), fromLocal: "notifications" });
+      const result = await sendEmail({ to: learner.email, subject: "Your ShieldAI vCISO training link", html: learnerLinkEmailHtml(learner), fromLocal: "notifications" });
       emailed = result.ok;
       sendError = result.ok ? null : result.error;
     } else {

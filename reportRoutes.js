@@ -29,6 +29,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { randomUUID } from "crypto";
+import { BRAND_PLAIN } from "./brand.js";
 import fs from "fs/promises";
 import JSZip from "jszip";
 import { computePostureScore } from "./riskEngine.js";
@@ -414,10 +415,10 @@ function docHeader(kicker, subtitle) {
       <td style="vertical-align:middle;padding:0 0 10pt;">
         <span style="display:inline-block;vertical-align:middle;">${brandLogoSvg(30)}</span>
         <span style="display:inline-block;vertical-align:middle;margin-left:8px;font-weight:800;font-size:16pt;letter-spacing:-0.3px;">
-          <span style="color:${BRAND.ink}">Shield</span><span style="color:${BRAND.cyan}">AI</span></span>
+          <span style="color:${BRAND.ink}">Shield</span><span style="color:${BRAND.cyan}">AI</span><sub style="font-size:42%;font-weight:600;letter-spacing:0.02em;color:${BRAND.muted};">vCISO</sub></span>
       </td>
-      <td style="vertical-align:middle;text-align:right;padding:0 0 10pt;color:${BRAND.muted};font-size:8.5pt;letter-spacing:0.5px;text-transform:uppercase;">
-        Virtual CISO Platform
+      <td style="vertical-align:middle;text-align:right;padding:0 0 10pt;color:${BRAND.muted};font-size:8.5pt;">
+        &nbsp;
       </td>
     </tr>
     <tr><td colspan="2" style="border-bottom:2.5pt solid ${BRAND.cyan};font-size:0;line-height:0;">&nbsp;</td></tr>
@@ -432,7 +433,7 @@ function docFooter(disclaimer) {
   <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:26pt 0 0;">
     <tr><td style="border-top:1pt solid ${BRAND.rule};font-size:0;line-height:0;">&nbsp;</td></tr>
     <tr><td style="padding:8pt 0 0;color:${BRAND.muted};font-size:8pt;line-height:1.5;">
-      <strong style="color:${BRAND.ink}">CONFIDENTIAL</strong> &middot; Prepared by ShieldAI &middot; &copy; ${year} ShieldAI.<br/>
+      <strong style="color:${BRAND.ink}">CONFIDENTIAL</strong> &middot; Prepared by ${BRAND_PLAIN} &middot; &copy; ${year} ${BRAND_PLAIN}.<br/>
       ${esc(disclaimer)}
     </td></tr>
   </table>`;
@@ -647,23 +648,23 @@ function policyAcksBlock(pa) {
 
 const DISCLAIMERS = {
   status:
-    "This status report was generated automatically from your ShieldAI data. It reflects the information on file at the time of generation and is intended for internal awareness, not as a formal attestation.",
+    "This status report was generated automatically from your ShieldAI vCISO data. It reflects the information on file at the time of generation and is intended for internal awareness, not as a formal attestation.",
   update:
-    "This update report was generated automatically from your ShieldAI data for the period shown. It is intended for internal awareness of changes, not as a formal attestation.",
+    "This update report was generated automatically from your ShieldAI vCISO data for the period shown. It is intended for internal awareness of changes, not as a formal attestation.",
   compliance:
-    "This compliance report is generated from the client's self-reported assessment answers and ShieldAI's deterministic control-mapping engines. It is a readiness aid, not a certified audit. Framework percentages are computed over assessed controls only. This document does not constitute an audit opinion and should be reviewed by a qualified assessor before being relied upon for certification or regulatory submission.",
+    "This compliance report is generated from the client's self-reported assessment answers and ShieldAI vCISO's deterministic control-mapping engines. It is a readiness aid, not a certified audit. Framework percentages are computed over assessed controls only. This document does not constitute an audit opinion and should be reviewed by a qualified assessor before being relied upon for certification or regulatory submission.",
   insurance:
-    "This report summarizes security controls for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers and endpoint data on file; they are not independently verified by ShieldAI. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
+    "This report summarizes security controls for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers and endpoint data on file; they are not independently verified by ShieldAI vCISO. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
   legal:
-    "This report is a record of activity within ShieldAI: what was assessed, what was recommended, and actions taken. ShieldAI provides advisory output; decisions and actions are made by the client and its personnel. This document is not legal advice and does not constitute a legal opinion. It should be reviewed by a licensed attorney before being relied upon in any legal or contractual matter.",
+    "This report is a record of activity within ShieldAI vCISO: what was assessed, what was recommended, and actions taken. ShieldAI vCISO provides advisory output; decisions and actions are made by the client and its personnel. This document is not legal advice and does not constitute a legal opinion. It should be reviewed by a licensed attorney before being relied upon in any legal or contractual matter.",
   training:
-    "This training-completion report reflects learner records and assignment status on file within ShieldAI as of the generation date. Completion and quiz scores are self-reported by the learner at the time each module was marked complete and are not independently proctored or verified. This document is a readiness aid for compliance, insurance, or legal review — not a certified attestation — and should be verified against your own personnel records before submission to a third party.",
+    "This training-completion report reflects learner records and assignment status on file within ShieldAI vCISO as of the generation date. Completion and quiz scores are self-reported by the learner at the time each module was marked complete and are not independently proctored or verified. This document is a readiness aid for compliance, insurance, or legal review — not a certified attestation — and should be verified against your own personnel records before submission to a third party.",
   remediation:
-    "This remediation plan is generated from the client's self-reported assessment answers and ShieldAI's deterministic control-mapping engines. Gaps and conflicts reflect the information on file at the time of generation. The remediation steps are AI-drafted advisory guidance produced by ShieldAI Mastermind, not a certification path or an audit opinion. Effort estimates and tooling suggestions are indicative only. Verify each step against your own environment and have a qualified assessor review before relying on this for certification or regulatory submission.",
+    "This remediation plan is generated from the client's self-reported assessment answers and ShieldAI vCISO's deterministic control-mapping engines. Gaps and conflicts reflect the information on file at the time of generation. The remediation steps are AI-drafted advisory guidance produced by ShieldAI vCISO Mastermind, not a certification path or an audit opinion. Effort estimates and tooling suggestions are indicative only. Verify each step against your own environment and have a qualified assessor review before relying on this for certification or regulatory submission.",
   frameworkPacketInsurance:
-    "This packet summarizes control status, remediation history, and evidence for the framework named above, for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI; they are not independently audited or verified by ShieldAI. Until a ShieldAI analyst has reviewed and finalized this packet, treat it as a draft. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
+    "This packet summarizes control status, remediation history, and evidence for the framework named above, for the purpose of a cyber-insurance application or renewal. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI vCISO; they are not independently audited or verified by ShieldAI vCISO. Until a ShieldAI vCISO analyst has reviewed and finalized this packet, treat it as a draft. The applicant remains responsible for the accuracy of any representation made to an insurer. Review with your broker or counsel before submission.",
   frameworkPacketRegulatory:
-    "This packet summarizes control status, remediation history, and evidence for the framework named above, for regulatory or audit submission. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI; they are not a certified audit or a formal attestation. Until a ShieldAI analyst has reviewed and finalized this packet, treat it as a draft. Have a qualified assessor or regulator's own reviewer confirm this before relying on it for certification or a regulatory filing.",
+    "This packet summarizes control status, remediation history, and evidence for the framework named above, for regulatory or audit submission. Statements are derived from the client's assessment answers, remediation attestations, and evidence on file within ShieldAI vCISO; they are not a certified audit or a formal attestation. Until a ShieldAI vCISO analyst has reviewed and finalized this packet, treat it as a draft. Have a qualified assessor or regulator's own reviewer confirm this before relying on it for certification or a regulatory filing.",
 };
 
 function frameworksTable(frameworks) {
@@ -751,7 +752,7 @@ function buildStatusReport(d) {
 
   <h2>What to focus on next</h2>
   ${openTasksTable(d, 15)}
-  <div class="note">This is your current, plain-language snapshot. For a control-by-control compliance breakdown or an insurance/legal report, contact your ShieldAI analyst.</div>`;
+  <div class="note">This is your current, plain-language snapshot. For a control-by-control compliance breakdown or an insurance/legal report, contact your ShieldAI vCISO analyst.</div>`;
 
   return {
     filename: `ShieldAI_Status_${slug(d.client.name)}_${dateStamp()}.doc`,
@@ -907,7 +908,7 @@ function buildInsuranceReport(d) {
   ${postureBlock(d)}
 
   <h2>Control summary</h2>
-  <p class="meta">The following reflects controls evidenced within ShieldAI as of ${fmtDate(
+  <p class="meta">The following reflects controls evidenced within ShieldAI vCISO as of ${fmtDate(
     d.generatedAt,
   )}. "Not established" means the platform does not hold data establishing the control — it is not an assertion that the control is absent.</p>
   <table class="content">
@@ -968,7 +969,7 @@ function buildLegalReport(d) {
     ${kpi(aiActions, "AI advisory events")}
     ${kpi(humanActions, "Human decisions/actions")}
   </div>
-  <p class="meta">ShieldAI's AI produces advisory output only; decisions and actions are recorded against the human or role that took them. This separation is reflected in the "By" column below.</p>
+  <p class="meta">ShieldAI vCISO's AI produces advisory output only; decisions and actions are recorded against the human or role that took them. This separation is reflected in the "By" column below.</p>
 
   <h2>Chronological activity record</h2>
   <table class="content">
@@ -1135,7 +1136,7 @@ function buildRemediationReport(d) {
     ${kpi(c.fixes ?? "—", "Distinct fixes")}
     ${kpi(c.conflicts ?? "—", "Open conflicts")}
   </div>
-  <p class="meta">Covers the frameworks selected for ${esc(d.client.name)} as of ${fmtDate(d.generatedAt)}. Remediation steps prepared by ShieldAI Mastermind.</p>
+  <p class="meta">Covers the frameworks selected for ${esc(d.client.name)} as of ${fmtDate(d.generatedAt)}. Remediation steps prepared by ShieldAI vCISO Mastermind.</p>
 
   <h2>Framework readiness</h2>
   ${frameworksTable(d.frameworks)}
@@ -1212,7 +1213,7 @@ function buildFrameworkPacketReport(d, purpose) {
     <tr><th>ID</th><th>Requirement</th><th>Status</th><th>Remediation</th><th>Evidence</th></tr>
     ${rows}
   </table>
-  <p class="meta">"Remediation" reflects a client attestation that a gap was fixed — "Verified" means a ShieldAI analyst confirmed it against the attached evidence; "Pending verification" means the client attested but an analyst hasn't reviewed it yet.</p>
+  <p class="meta">"Remediation" reflects a client attestation that a gap was fixed — "Verified" means a ShieldAI vCISO analyst confirmed it against the attached evidence; "Pending verification" means the client attested but an analyst hasn't reviewed it yet.</p>
 
   <h2>Evidence on file</h2>
   ${evidenceRows ? `<table class="content"><tr><th>Item</th><th>Requirement</th><th>Uploaded</th></tr>${evidenceRows}</table>` : `<div class="note">No evidence has been attached to this framework yet.</div>`}
@@ -1236,7 +1237,7 @@ function labelActor(role) {
       client_admin: "Client",
       analyst: "Analyst",
       admin: "Admin",
-      ai: "ShieldAI (advisory)",
+      ai: "ShieldAI vCISO (advisory)",
       system: "System",
     }[role] || role || "System"
   );
@@ -1351,7 +1352,7 @@ export function registerReportRoutes(app, {
       if (!isStaff(actor)) {
         return res.status(403).json({
           error:
-            "Compliance, insurance, and legal reports are produced by ShieldAI staff. Your analyst can prepare and deliver one to you.",
+            "Compliance, insurance, and legal reports are produced by ShieldAI vCISO staff. Your analyst can prepare and deliver one to you.",
           code: "STAFF_ONLY",
         });
       }
@@ -1662,7 +1663,7 @@ export function registerReportRoutes(app, {
   // serve time and disappears the instant finalizedAt is set, with nothing to
   // regenerate.
   function withDraftBanner(html) {
-    const banner = `<div style="background:#FFF4E5;border:2px solid ${BRAND.amber};border-radius:8px;padding:10px 14px;margin-bottom:16pt;font-weight:700;color:#7A4A00;">⚠ DRAFT — not yet reviewed by a ShieldAI analyst. Do not submit to an insurer or regulator until this has been finalized.</div>`;
+    const banner = `<div style="background:#FFF4E5;border:2px solid ${BRAND.amber};border-radius:8px;padding:10px 14px;margin-bottom:16pt;font-weight:700;color:#7A4A00;">⚠ DRAFT — not yet reviewed by a ShieldAI vCISO analyst. Do not submit to an insurer or regulator until this has been finalized.</div>`;
     return html.replace("<body>", `<body>${banner}`);
   }
 
@@ -1750,7 +1751,7 @@ export function registerReportRoutes(app, {
     const html = !r.finalizedAt ? withDraftBanner(r.html) : r.html;
     zip.file(r.filename, html);
 
-    const manifestLines = [`ShieldAI submission packet — ${r.filename}`, `Generated: ${r.createdAt}`, ""];
+    const manifestLines = [`ShieldAI vCISO submission packet — ${r.filename}`, `Generated: ${r.createdAt}`, ""];
     for (const evidenceId of r.evidenceIds || []) {
       const ev = (db.data.evidence || []).find((e) => e.id === evidenceId);
       if (!ev) {

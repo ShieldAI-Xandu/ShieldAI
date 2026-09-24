@@ -116,7 +116,7 @@ export function registerFrameworkAddonRoutes(app, {
       },
       // Stripe isn't live, so the client should be told what actually happens
       // when they press the button rather than being surprised by an invoice.
-      billingNote: "Framework add-ons are invoiced by your ShieldAI admin. Access is enabled as soon as you add one.",
+      billingNote: "Framework add-ons are invoiced by your ShieldAI vCISO admin. Access is enabled as soon as you add one.",
     });
   });
 
@@ -231,7 +231,7 @@ export function registerFrameworkAddonRoutes(app, {
       entitlement: publicEntitlement(rec),
       charged: true,
       reused: false,
-      message: `${frameworkName} is enabled now. Your ShieldAI admin will invoice the ${addonPriceLabel(FRAMEWORK_ADDON_ID)} add-on.`,
+      message: `${frameworkName} is enabled now. Your ShieldAI vCISO admin will invoice the ${addonPriceLabel(FRAMEWORK_ADDON_ID)} add-on.`,
     });
   });
 
@@ -265,7 +265,7 @@ export function registerFrameworkAddonRoutes(app, {
     // deliberate decision that belongs to a human who meant to make it.
     res.json({
       entitlement: publicEntitlement(rec),
-      message: `${was} removed. You keep this ${addonPriceLabel(FRAMEWORK_ADDON_ID)} slot and can apply it to a different framework at no extra cost — contact your ShieldAI admin to stop the charge entirely.`,
+      message: `${was} removed. You keep this ${addonPriceLabel(FRAMEWORK_ADDON_ID)} slot and can apply it to a different framework at no extra cost — contact your ShieldAI vCISO admin to stop the charge entirely.`,
     });
   });
 

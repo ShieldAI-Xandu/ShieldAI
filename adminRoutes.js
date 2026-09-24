@@ -375,7 +375,7 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
       type: "framework_addon_granted",
       title: frameworkName ? `${frameworkName} added to your plan` : "A framework add-on slot was added to your plan",
       body: status === "comped"
-        ? "Added by your ShieldAI team at no charge."
+        ? "Added by your ShieldAI vCISO team at no charge."
         : `Billed at ${addonPriceLabel(FRAMEWORK_ADDON_ID)}.`,
       link: "/compliance",
       actorRole: "admin",

@@ -253,7 +253,7 @@ export const TIERS = {
     priceCents: 195000,            // $1,950/mo
     interval: "month",
     stripePriceId: null,
-    description: "A ShieldAI engineer runs the security program end-to-end — unlimited endpoints, full agent access, client-facing Mastermind Q&A, and full engineer support. Still below human-only vCISO retainers.",
+    description: "A ShieldAI vCISO engineer runs the security program end-to-end — unlimited endpoints, full agent access, client-facing Mastermind Q&A, and full engineer support. Still below human-only vCISO retainers.",
     limits: {
       endpoints: null,
       policies: null,

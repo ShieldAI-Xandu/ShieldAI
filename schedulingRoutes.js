@@ -256,7 +256,7 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClient
 
       const adapter = SCHEDULING_PROVIDERS[c.provider];
       const meeting = await adapter.create(refreshed.access_token, {
-        topic: topic || "ShieldAI call", startTime, durationMinutes: durationMinutes || 30,
+        topic: topic || "ShieldAI vCISO call", startTime, durationMinutes: durationMinutes || 30,
       });
       await db.write();
       // The one write action across every integration in this codebase had
@@ -266,7 +266,7 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClient
       if (logClientAction) logClientAction(db, {
         clientUserId: c.ownerUserId, actorUserId: req.userId, actorRole: "client_admin",
         action: "scheduling_meeting_created",
-        detail: `${c.label} — "${topic || "ShieldAI call"}" at ${startTime}.`,
+        detail: `${c.label} — "${topic || "ShieldAI vCISO call"}" at ${startTime}.`,
       });
       res.json({ ok: true, meeting });
     } catch (err) {

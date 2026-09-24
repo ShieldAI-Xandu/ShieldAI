@@ -545,7 +545,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
     },
     {
       name: "get_branding",
-      description: "Read white-label branding across the platform: which analysts/MSPs have their own brand, how many clients each brand covers, and how many clients are still on the default ShieldAI brand. Optionally pass a client id/email to see exactly which brand that client sees. Read-only.",
+      description: "Read white-label branding across the platform: which analysts/MSPs have their own brand, how many clients each brand covers, and how many clients are still on the default ShieldAI vCISO brand. Optionally pass a client id/email to see exactly which brand that client sees. Read-only.",
       input_schema: { type: "object", properties: {
         clientIdOrEmail: { type: "string", description: "Optional. If given, returns the branding this specific client currently sees." },
       }, required: [] },
@@ -1024,7 +1024,7 @@ export function registerMastermindRoutes(app, { db, requireAdmin, requireAuth, c
 
     const useDepth = depth === "full" ? "full" : "summary";
     const snapshot = includeContext ? portfolioSnapshot(db, useDepth) : null;
-    const system = `You are ShieldAI Mastermind, the central virtual-CISO intelligence for the entire ShieldAI platform, assisting a ShieldAI ADMIN.
+    const system = `You are ShieldAI vCISO Mastermind, the central virtual-CISO intelligence for the entire ShieldAI vCISO platform, assisting a ShieldAI vCISO ADMIN.
 
 You have read-only situational awareness of the whole platform: every account (admins, analysts, clients), every monitored endpoint and its security posture, analyst↔client assignments, the full recommendation lifecycle, billing/subscription status, security events, and the client action log. Each client also carries a cveExposure object — known CVE vulnerabilities (with CVSS severity and score) matched from the live NIST National Vulnerability Database against the software that client's agents and assessment report — a darkWebExposure object — real breach/credential exposure for the client's domain from Have I Been Pwned (statusLevel, breached account count, and the named breaches) — an attackSurfaceExposure object — subdomains and live-host software discovered via certificate-transparency lookup and HTTP banner probing of a domain the client has verified ownership of, which also feeds cveExposure — and a supportActivity object (open support-chat count, how many are awaiting a human). Use this to answer ANY question about the state of the platform and to diagnose and prioritize cybersecurity and operational issues across all clients. When relevant, reference specific CVE IDs and their severity, and named breaches. Remember CVE matches depend on reported software, and dark-web/attack-surface monitoring depend on a verified domain — a "Not monitored", "Not active", or "Not checked" status is a data/coverage gap, NOT a clean bill of health.
 
@@ -1090,7 +1090,7 @@ ${snapshot ? `Read-only platform snapshot (${useDepth}, current):\n${JSON.string
     };
     const snapshot = scopedSnapshot();
 
-    const system = `You are ShieldAI Mastermind, assisting a ShieldAI ANALYST.
+    const system = `You are ShieldAI vCISO Mastermind, assisting a ShieldAI vCISO ANALYST.
 
 You have read-only situational awareness of ONLY this analyst's assigned clients — not the whole platform. If asked about a client that isn't assigned to them, say so plainly rather than guessing; you genuinely cannot see that client's data, by design, the same way the analyst console itself can't. Each client carries a cveExposure object (real NVD-matched CVEs), a darkWebExposure object (real HIBP breach data), an attackSurfaceExposure object (subdomains/live-host software discovered from a verified domain, which also feeds cveExposure), and a supportActivity object. A "Not monitored" or "Not checked" status is a coverage gap, not a clean bill of health.
 
@@ -1192,7 +1192,7 @@ ${snapshot ? `Read-only snapshot of this analyst's assigned clients (current):\n
       return res.json({ summary: "No report data is available for this scope yet.", findings: [], recommendations: [] });
     }
 
-    const system = `You are ShieldAI Mastermind, a senior virtual CISO. Analyze the endpoint posture below for ${owner?.companyName || "the client"} and produce a prioritized assessment.
+    const system = `You are ShieldAI vCISO Mastermind, a senior virtual CISO. Analyze the endpoint posture below for ${owner?.companyName || "the client"} and produce a prioritized assessment.
 
 ADVISORY ONLY — recommend actions for a human to take; never claim to act.
 
@@ -1580,7 +1580,7 @@ Limit findings to 6 and recommendations to 5.`;
     // ISOLATION: only this client's own data is ever placed in context, and only
     // for the features their tier includes (see clientSnapshot).
     const snap = clientSnapshot(db, req.userId);
-    const system = `You are ShieldAI Mastermind, a virtual-CISO assistant helping ONE client understand and improve THEIR OWN security posture.
+    const system = `You are ShieldAI vCISO Mastermind, a virtual-CISO assistant helping ONE client understand and improve THEIR OWN security posture.
 
 ISOLATION — non-negotiable:
 - You can see ONLY this client's own data, provided below. You have NO knowledge of any other client, the platform as a whole, or other accounts, and must never speculate about them. If asked about anything outside this client's own security program, say you can only help with their own.
@@ -1592,7 +1592,7 @@ TIER SCOPING — this is critical:
 - Example: a Starter client asks about dark-web breach monitoring → "Breach monitoring isn't part of your Starter plan yet. It scans known data breaches for your company's exposed credentials and alerts you. It's included when you upgrade to Growth ($349/mo) — I'd be glad to explain what it covers."
 
 ADVISORY ONLY:
-- You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
+- You never perform actions on any system or account and never claim to have changed anything. Explain issues and recommend concrete steps the client can take themselves or ask their ShieldAI vCISO analyst about. For coverage gaps in features they DO have (e.g. "Not monitored", "Not checked", no endpoints reporting), treat them as gaps to close, not a clean bill of health.
 
 PROPOSING A SPECIFIC ACTION — the one exception to "advisory only" being purely descriptive: if fixing something means one concrete edit, create, or delete on one record, you may end your reply with EXACTLY ONE fenced block in this form:
 \`\`\`proposed_edit
@@ -1614,9 +1614,9 @@ Never fabricate an id for any of these — if the data below doesn't contain a r
 
 Be clear, practical, and encouraging. Use the client's real data below to answer thoroughly.
 
-TALKING TO A PERSON: if the client explicitly asks for a human, or you can't resolve something yourself, call request_human_support with a short reason — this notifies ShieldAI staff and they'll join a conversation with you shortly. You have no other way to connect them to a person.
+TALKING TO A PERSON: if the client explicitly asks for a human, or you can't resolve something yourself, call request_human_support with a short reason — this notifies ShieldAI vCISO staff and they'll join a conversation with you shortly. You have no other way to connect them to a person.
 
-HOW-TO KNOWLEDGE — the ShieldAI user manual. When a client asks how to use a feature ("how do I install the agent," "how do employees acknowledge a policy," "how do I run a phishing test"), answer from this manual rather than guessing at UI details. Don't invent steps, buttons, or menus that aren't described here.
+HOW-TO KNOWLEDGE — the ShieldAI vCISO user manual. When a client asks how to use a feature ("how do I install the agent," "how do employees acknowledge a policy," "how do I run a phishing test"), answer from this manual rather than guessing at UI details. Don't invent steps, buttons, or menus that aren't described here.
 ${manualAsText()}${contextLine}
 
 This client's data and feature access (the only data you have):
@@ -1634,7 +1634,7 @@ ${JSON.stringify(snap)}`;
           system, messages: clean, max_tokens: 1200, maxTurns: 3,
           tools: [{
             name: "request_human_support",
-            description: "Connect this client with a human ShieldAI admin/analyst — call this when they ask for a person or you can't resolve their issue.",
+            description: "Connect this client with a human ShieldAI vCISO admin/analyst — call this when they ask for a person or you can't resolve their issue.",
             input_schema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
           }],
           runTool: async (name, input) => {

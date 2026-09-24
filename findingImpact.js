@@ -98,7 +98,7 @@ in plain language a non-technical business owner would understand. Requirements:
 
     try {
       const text = await callClaudeText({
-        system: "You are ShieldAI Mastermind, a precise virtual-CISO advisor. You state only what the provided " +
+        system: "You are ShieldAI vCISO Mastermind, a precise virtual-CISO advisor. You state only what the provided " +
           "vulnerability facts support. You never invent details about a specific business or a specific exploit.",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 350,

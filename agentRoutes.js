@@ -317,7 +317,7 @@ async function aiEnrichDrafts({ drafts, report, agent, owner, callClaudeText, ex
     inventory: report?.inventory || {},
   };
 
-  const system = `You are ShieldAI Mastermind, a senior virtual CISO. You turn raw endpoint security findings into clear, prioritized remediation recommendations for a small/medium business.
+  const system = `You are ShieldAI vCISO Mastermind, a senior virtual CISO. You turn raw endpoint security findings into clear, prioritized remediation recommendations for a small/medium business.
 
 You ONLY produce written recommendations for a human (the client's admin or their analyst) to act on. You never perform actions yourself. Be specific, practical, and concise; assume a non-expert reader.
 

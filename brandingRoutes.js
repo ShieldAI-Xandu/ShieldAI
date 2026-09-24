@@ -21,13 +21,17 @@
 // Mastermind knows which clients are white-labelled and by whom. Read-only —
 // Mastermind never mutates branding (advisory-only boundary preserved).
 
+import { BRAND_PLAIN } from "./brand.js";
+
 const nowIso = () => new Date().toISOString();
 
 // ── Defaults ──────────────────────────────────────────────────
 export const DEFAULT_BRANDING = Object.freeze({
   ownerUserId: null,
-  productName: "ShieldAI",
-  companyName: "ShieldAI",
+  // Plain-text form of the name (UI draws it as "ShieldAI" + a small "vCISO"
+  // subscript). Same value as BRAND_PLAIN / DEFAULT_BRAND in src/App.jsx.
+  productName: BRAND_PLAIN,
+  companyName: BRAND_PLAIN,
   tagline: "Virtual CISO Platform",
   logoUrl: null,            // data URI or https URL; null → render wordmark
   primaryColor: "#2E5EAA",

@@ -402,7 +402,7 @@ export function registerComplianceRoutes(app, {
     const company = a.data?.company || {};
     const failing = ctx.controls.filter(c => !c.meets);
 
-    const prompt = `You are ShieldAI Mastermind advising a virtual CISO.
+    const prompt = `You are ShieldAI vCISO Mastermind advising a virtual CISO.
 
 CLIENT: ${company.name || "the client"}${company.industry ? ` · ${company.industry}` : ""}${company.employees ? ` · ${company.employees} employees` : ""}
 
@@ -428,7 +428,7 @@ Write remediation steps to close this gap. Requirements for your answer:
     try {
       if (callClaudeText) {
         guidance = await callClaudeText({
-          system: "You are ShieldAI Mastermind, a precise virtual-CISO advisor. You state only what the provided facts support. You never invent details about a client.",
+          system: "You are ShieldAI vCISO Mastermind, a precise virtual-CISO advisor. You state only what the provided facts support. You never invent details about a client.",
           messages: [{ role: "user", content: prompt }],
           max_tokens: 700,
         });
@@ -604,7 +604,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   app.post("/api/compliance/remediation/:id/verify", requireAuth, async (req, res) => {
     const actor = userById(req.userId);
     if (!actor || (!actor.isAdmin && !actor.isAnalyst)) {
-      return res.status(403).json({ error: "Only ShieldAI staff can verify a remediation." });
+      return res.status(403).json({ error: "Only ShieldAI vCISO staff can verify a remediation." });
     }
     const rec = (db.data.remediationAttestations || []).find(r => r.id === req.params.id);
     if (!rec) return res.status(404).json({ error: "Remediation not found." });
@@ -631,7 +631,7 @@ Write remediation steps to close this gap. Requirements for your answer:
   app.post("/api/compliance/remediation/:id/reject", requireAuth, async (req, res) => {
     const actor = userById(req.userId);
     if (!actor || (!actor.isAdmin && !actor.isAnalyst)) {
-      return res.status(403).json({ error: "Only ShieldAI staff can reject a remediation." });
+      return res.status(403).json({ error: "Only ShieldAI vCISO staff can reject a remediation." });
     }
     const { reason } = req.body || {};
     if (!String(reason || "").trim()) {

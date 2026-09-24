@@ -74,7 +74,7 @@ export const FTC_SAFEGUARDS_ELEMENTS = [
     description:
       "Designate a single qualified individual responsible for overseeing, implementing, and enforcing your information security program. This person can be an employee, an affiliate, or a service provider — but if you use an outside provider, you keep responsibility for compliance, you must name a senior person internally to direct and oversee them, and you must require the provider to maintain a program that protects you under this Rule.",
     smbNote:
-      "This is the element ShieldAI's managed tier directly satisfies: we serve as the Qualified Individual, and you designate a senior person to oversee us.",
+      "This is the element ShieldAI vCISO's managed tier directly satisfies: we serve as the Qualified Individual, and you designate a senior person to oversee us.",
     nistFunctions: ["Identify", "Govern"],
     evidence: ["itManagement", "documentedPolicies"],
     required: true,
@@ -89,7 +89,7 @@ export const FTC_SAFEGUARDS_ELEMENTS = [
     description:
       "Base your program on a risk assessment that identifies reasonably foreseeable internal and external risks to the security, confidentiality, and integrity of customer information, and evaluates whether your existing safeguards control those risks. It must be written and must state: the criteria you use to evaluate and categorize risks, the criteria for assessing confidentiality, integrity, and availability of your systems, and how identified risks will be mitigated or accepted.",
     smbNote:
-      "The written requirement is where most small businesses fail — they have opinions about their risks, not a document. ShieldAI's assessment produces this artifact.",
+      "The written requirement is where most small businesses fail — they have opinions about their risks, not a document. ShieldAI vCISO's assessment produces this artifact.",
     nistFunctions: ["Identify"],
     evidence: ["priorAudit", "dataInventory"],
     required: true,
@@ -130,7 +130,7 @@ export const FTC_SAFEGUARDS_ELEMENTS = [
     description:
       "Regularly test or otherwise monitor how effective your safeguards actually are. You have two routes: implement continuous monitoring of your systems, or perform annual penetration testing plus vulnerability assessments at least every six months and whenever there is a material change to your operations.",
     smbNote:
-      "Continuous monitoring is the cheaper route for a small business — this is precisely what ShieldAI's read-only endpoint agent is for.",
+      "Continuous monitoring is the cheaper route for a small business — this is precisely what ShieldAI vCISO's read-only endpoint agent is for.",
     nistFunctions: ["Detect", "Identify"],
     evidence: ["monitoring", "priorAudit"],
     required: true,

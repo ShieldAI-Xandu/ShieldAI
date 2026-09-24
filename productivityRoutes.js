@@ -155,7 +155,7 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
         // Prove it works before storing it — same "validate before saving a
         // pasted credential" discipline the Okta connect route uses.
         const check = await sendTeamsMessage({
-          webhookUrl, title: "ShieldAI connected", severity: "info", actionable: false,
+          webhookUrl, title: "ShieldAI vCISO connected", severity: "info", actionable: false,
           detail: "You'll get notifications here for the events you enable.",
         }).catch(err => ({ __error: err.message }));
         if (check?.__error) {
@@ -389,7 +389,7 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
       });
     } catch (err) {
       console.warn("Slack interactivity action not applied:", err.message);
-      await respondToSlack({ responseUrl: payload.response_url, text: `⚠️ Couldn't apply that action (${err.message}). Check ShieldAI directly.` });
+      await respondToSlack({ responseUrl: payload.response_url, text: `⚠️ Couldn't apply that action (${err.message}). Check ShieldAI vCISO directly.` });
     }
 
     res.status(200).send("");

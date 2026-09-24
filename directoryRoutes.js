@@ -192,7 +192,7 @@ async function aiEnrichPostureDrafts({ drafts, connection, owner, callClaudeText
   if (!callClaudeText || !extractJson || drafts.length === 0) return null;
 
   const items = drafts.map(d => ({ key: d.dedupeKey, title: d.title, severity: d.severity, detail: d.detail }));
-  const system = `You are ShieldAI Mastermind, a senior virtual CISO. You turn raw directory security-posture facts (from Microsoft 365/Entra ID, Google Workspace, or Okta) into clear, prioritized remediation recommendations for a small/medium business.
+  const system = `You are ShieldAI vCISO Mastermind, a senior virtual CISO. You turn raw directory security-posture facts (from Microsoft 365/Entra ID, Google Workspace, or Okta) into clear, prioritized remediation recommendations for a small/medium business.
 
 You ONLY produce written recommendations for a human (the client's admin or their analyst) to act on. You never perform actions yourself. Be specific, practical, and concise; assume a non-expert reader.
 

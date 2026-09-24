@@ -147,7 +147,7 @@ export async function addDomain(db, userId, rawDomain, actorEmail = "") {
   // another's breach exposure. Refuse.
   if (rows.some(r => r.domain === domain && r.userId !== userId)) {
     throw Object.assign(new Error(
-      "That domain is already registered to another ShieldAI account. Contact support if this is your domain."
+      "That domain is already registered to another ShieldAI vCISO account. Contact support if this is your domain."
     ), { status: 409 });
   }
 
@@ -325,7 +325,7 @@ export function clientView(record, { hibpConfigured = true } = {}) {
       ...base,
       state: "service_inactive",
       headline: "Breach monitoring isn't active yet",
-      detail: "Your domain is verified. Breach monitoring is not currently enabled on this ShieldAI deployment.",
+      detail: "Your domain is verified. Breach monitoring is not currently enabled on this ShieldAI vCISO deployment.",
       monitored: false,
       nextStep: "contact_shieldai",
       ownershipVerifiedAt: record.ownershipVerifiedAt,
@@ -358,7 +358,7 @@ export function clientView(record, { hibpConfigured = true } = {}) {
         ...base,
         state: "rejected",
         headline: "Monitoring couldn't be enabled",
-        detail: record.hibpNote || "Our breach-intelligence provider couldn't enable monitoring for this domain. Contact ShieldAI support.",
+        detail: record.hibpNote || "Our breach-intelligence provider couldn't enable monitoring for this domain. Contact ShieldAI vCISO support.",
         monitored: false,
         nextStep: "contact_shieldai",
       };
