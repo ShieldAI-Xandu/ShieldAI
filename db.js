@@ -47,7 +47,8 @@ function freshDefaults() {
     agentVulnerabilities: [], // { id, agentId, ownerUserId, dedupeKey, kind, severity, title, detail, host, firstSeenAt, lastSeenAt, status: open|resolved, resolvedAt }
     recommendations: [], // { id, ownerUserId, agentId?, integrationId?, findingId?, dedupeKey?, origin, title, detail, severity, status, history[] }
     subscriptions: [], // { id, userId, tier, status, stripeCustomerId, stripeSubscriptionId, currentPeriodEnd, updatedAt }
-    transactions: [],  // { id, userId, stripeInvoiceId, amountCents, currency, status, description, createdAt }
+    transactions: [],  // { id, userId, stripeInvoiceId, amountCents, currency, status: paid|failed|open|void|uncollectible|refunded|disputed, description, number?, hostedInvoiceUrl?, invoicePdf?, livemode?, createdAt }
+    stripeEvents: [],  // { id (Stripe event id), type, receivedAt, processedAt } — webhook dedupe, pruned after ~30 days
     adminAudit: [],    // { id, actorUserId, actorEmail, action, targetUserId, detail, at }
     assignments: [],   // { id, analystUserId, clientUserId, assignedBy, assignedAt }
     clientActions: [], // { id, clientUserId, actorUserId, actorRole, action, detail, recommendationId, at }

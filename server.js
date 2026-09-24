@@ -177,7 +177,9 @@ app.use(cors({
 // global JSON parser. Everything else parses JSON.
 const RAW_BODY_PATHS = new Set(["/api/billing/webhook", "/api/productivity/slack/interactivity"]);
 app.use((req, res, next) => {
-  if (RAW_BODY_PATHS.has(req.originalUrl)) return next();
+  // Match on the path only: a query string on the webhook URL (?x=1) must not
+  // route it into the JSON parser, which would break signature verification.
+  if (RAW_BODY_PATHS.has(req.originalUrl.split("?")[0])) return next();
   return express.json({ limit: "5mb" })(req, res, next);
 });
 

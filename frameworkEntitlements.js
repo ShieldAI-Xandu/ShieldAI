@@ -435,6 +435,36 @@ export function cancelEntitlement(rec, note = "") {
  * earned revenue and money owed, directly contradicting billingRoutes.js's
  * own "never folded into mrrCents" comment.
  */
+/**
+ * Move an add-on through its invoice lifecycle from a Stripe invoice event or
+ * an admin-triggered Stripe invoice. Mirrors the rules of the manual admin
+ * PATCH (paid promotes pending_billing -> active) but is safe to call twice:
+ * it returns { changed:false } when the record is already in that state, so a
+ * replayed webhook does nothing. Caller awaits db.write().
+ *   state: "invoiced" | "paid" | "void"
+ */
+export function setInvoiceState(rec, state, { ref = null, url = null, at = nowIso() } = {}) {
+  if (!rec || !INVOICE_STATES.includes(state)) return { changed: false };
+  rec.billing ||= {};
+  const b = rec.billing;
+  if (ref) b.lastInvoiceRef = String(ref).slice(0, 120);
+  if (url) b.invoiceUrl = String(url).slice(0, 500);
+  // A paid invoice is final: never let a late "invoiced"/"void" event undo it.
+  if (b.invoiceState === "paid" && state !== "paid") return { changed: false };
+  if (b.invoiceState === state) return { changed: false };
+  b.invoiceState = state;
+  if (state === "invoiced" && !b.invoicedAt) b.invoicedAt = at;
+  if (state === "paid") {
+    b.paidAt = at;
+    if (rec.status === "pending_billing") {
+      rec.status = "active";
+      rec.activatedAt ||= at;
+    }
+  }
+  rec.updatedAt = at;
+  return { changed: true };
+}
+
 export function monthlyCentsFor(db, userId) {
   return entitlementsFor(db, userId)
     .filter(e => ENTITLING_STATUSES.has(e.status) && e.status !== "comped")
