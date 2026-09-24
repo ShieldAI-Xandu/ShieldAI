@@ -9694,7 +9694,7 @@ function PolicyLibrarySection({ assessment }) {
 //   ExecReportSection are UNCHANGED — keep your existing versions of those)
 // ─────────────────────────────────────────────────────────────
 function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, onExecReportRegenerated, onSectionsRegenerated }) {
-  const [section, setSection] = useState("overview");
+  const [section, setSection] = useState(BILLING_RETURN ? "billing" : "overview");
   // Set by the Overview compliance slideshow's click-through, read by
   // ComplianceWorkspace to jump straight to that framework. `seq` changes on
   // every click (even re-clicking the same framework) so ComplianceWorkspace
@@ -14456,6 +14456,10 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
   const [fwGrantBusy, setFwGrantBusy] = useState(false);
   const [fwCancel, setFwCancel] = useState(null);        // { id, userId, name }
   const [fwAddonErr, setFwAddonErr] = useState(null);
+  // Stripe invoicing: two-step (click, then confirm) instead of a browser dialog —
+  // sending an invoice emails the client and can't be unsent, only voided.
+  const [fwInvoiceConfirm, setFwInvoiceConfirm] = useState(null);   // add-on id awaiting confirmation
+  const [fwInvoiceBusy, setFwInvoiceBusy] = useState(null);         // add-on id being sent
   // Dedicated invoicing worklist (GET /api/admin/billing/framework-addons) —
   // every framework add-on that's live but not yet invoiced, oldest-owed
   // first, across ALL clients. Previously the only UI for this was the
@@ -14598,6 +14602,19 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
       if (!res.ok) { setFwAddonErr(data.error || "Couldn't update that add-on."); return; }
       await refreshAfterAddonChange(userId);
     } catch { setFwAddonErr("Couldn't reach the server."); }
+  }
+
+  // Creates and emails a real Stripe invoice (a human clicks; nothing automatic).
+  async function sendStripeInvoice(userId, id) {
+    setFwAddonErr(null); setFwInvoiceBusy(id);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/billing/framework-addons/${id}/invoice`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setFwAddonErr(data.error || "Couldn't create the invoice."); return; }
+      setFwInvoiceConfirm(null);
+      await refreshAfterAddonChange(userId);
+    } catch { setFwAddonErr("Couldn't reach the server."); }
+    finally { setFwInvoiceBusy(null); }
   }
 
   async function confirmCancelFrameworkAddon() {
@@ -15806,6 +15823,23 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
                                 billing card: not_invoiced -> invoiced -> paid.
                                 A row leaves this worklist once paid moves its
                                 status off pending_billing (server-side). */}
+                            {/* With Stripe invoicing available, a real invoice is
+                                the primary action; the manual path stays as a fallback. */}
+                            {e.billing?.invoiceState === "not_invoiced" && invoiceWorklist.canInvoiceViaStripe && (
+                              fwInvoiceConfirm === e.id ? (
+                                <>
+                                  <button onClick={()=>sendStripeInvoice(e.userId,e.id)} disabled={fwInvoiceBusy===e.id}
+                                    style={miniAdminBtn(C.green)}>{fwInvoiceBusy===e.id ? "Sending…" : `Confirm: email ${money(e.priceCents)} invoice`}</button>
+                                  <button onClick={()=>setFwInvoiceConfirm(null)} style={miniAdminBtn(C.textMut)}>Cancel</button>
+                                </>
+                              ) : (
+                                <button onClick={()=>setFwInvoiceConfirm(e.id)} style={miniAdminBtn(C.green)}>Send Stripe invoice</button>
+                              )
+                            )}
+                            {e.billing?.invoiceUrl && (
+                              <a href={e.billing.invoiceUrl} target="_blank" rel="noreferrer"
+                                style={{...miniAdminBtn(C.accent),textDecoration:"none"}}>View invoice</a>
+                            )}
                             {e.billing?.invoiceState === "not_invoiced" && (
                               <button onClick={()=>patchFrameworkAddon(e.userId,e.id,{invoiceState:"invoiced"})}
                                 style={miniAdminBtn(C.accent)}>Mark invoiced</button>
@@ -23671,7 +23705,38 @@ function ForcePasswordChange({ user, onDone, onSignOut }) {
 //  configured (needStripe() on the backend returns 503) — nothing here
 //  requires Stripe to be live to be useful; it just won't complete checkout.
 // ─────────────────────────────────────────────────────────────
+// Stripe sends people back to /?billing=success|addon-success|cancelled|portal_return
+// (see billingRoutes.js). Capture it once at load — before sign-in restore or any
+// other screen can lose it — and clean the address bar. Dashboard opens on the
+// Billing tab when this is set; PlanBillingSection shows the banner.
+const BILLING_RETURN = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get("billing");
+    if (!v) return null;
+    params.delete("billing"); params.delete("session_id");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
+    return ["success", "addon-success", "cancelled", "portal_return"].includes(v) ? v : null;
+  } catch { return null; }
+})();
+let billingReturnHandled = false;        // show/poll once per page load, even if the tab remounts
+
+const fmtMoney = (cents, cur = "usd") => {
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency: String(cur).toUpperCase() }).format((cents || 0) / 100); }
+  catch { return `$${((cents || 0) / 100).toFixed(2)}`; }
+};
+const INVOICE_STATUS = {
+  paid: { label: "Paid", tone: "green" }, open: { label: "Awaiting payment", tone: "amber" },
+  failed: { label: "Failed", tone: "red" }, void: { label: "Void", tone: "mut" },
+  uncollectible: { label: "Uncollectible", tone: "mut" }, refunded: { label: "Refunded", tone: "mut" },
+  disputed: { label: "Disputed", tone: "red" },
+};
+
 function PlanBillingSection() {
+  const [invoices, setInvoices] = useState([]);
+  const [ret, setRet] = useState(() => (BILLING_RETURN && !billingReturnHandled
+    ? { kind: BILLING_RETURN, phase: (BILLING_RETURN === "cancelled" || BILLING_RETURN === "portal_return") ? "done" : "checking" } : null));
   const [plans, setPlans] = useState([]);
   const [addons, setAddons] = useState([]);
   const [configured, setConfigured] = useState(false);
@@ -23696,10 +23761,42 @@ function PlanBillingSection() {
       setAddons(plansData.addons || []);
       setConfigured(!!plansData.configured);
       setMe(meData);
+      try {
+        const invRes = await authFetch(`${API_BASE}/api/billing/invoices`);
+        if (invRes.ok) setInvoices((await invRes.json()).invoices || []);
+      } catch { /* invoices are a convenience; never block the screen */ }
+      return meData;
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      const baseline = await load();
+      if (!live || !ret || billingReturnHandled) return;
+      billingReturnHandled = true;
+      if (ret.phase === "done") return;
+      // Returning from checkout: the plan is granted by Stripe's webhook, which can land
+      // a moment after the redirect. Poll briefly, then say plainly what is happening.
+      const sig = (m) => `${m?.tier}|${(m?.addons || []).slice().sort().join(",")}|${m?.subscription?.status}`;
+      const start = sig(baseline);
+      for (let i = 0; i < 15 && live; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const r = await authFetch(`${API_BASE}/api/billing/me`);
+          if (!r.ok) continue;
+          const m = await r.json();
+          if (sig(m) !== start) {
+            if (live) { setMe(m); setRet({ kind: ret.kind, phase: "confirmed" }); load(); }
+            return;
+          }
+        } catch { /* keep polling */ }
+      }
+      if (live) setRet({ kind: ret.kind, phase: "pending" });
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function upgrade(tierId) {
     setBusy(tierId); setMsg(null);
@@ -23767,6 +23864,36 @@ function PlanBillingSection() {
           {msg}
         </div>
       )}
+      {ret && (
+        <div role="status" style={{padding:"10px 14px",borderRadius:8,fontSize:12.5,marginBottom:16,lineHeight:1.5,
+          background: ret.phase==="confirmed" ? `${C.green}15` : `${C.accent}12`,
+          border:`1px solid ${ret.phase==="confirmed" ? C.green+"44" : C.accent+"44"}`,
+          color: ret.phase==="confirmed" ? C.greenText : C.text}}>
+          {ret.kind === "cancelled" && "Checkout was cancelled — you haven't been charged."}
+          {ret.kind === "portal_return" && "Billing details updated."}
+          {(ret.kind === "success" || ret.kind === "addon-success") && ret.phase === "checking" && "Thanks! Confirming your payment with Stripe…"}
+          {(ret.kind === "success" || ret.kind === "addon-success") && ret.phase === "confirmed" &&
+            `✓ Payment confirmed — your plan is now ${(plans.find(p => p.id === me?.tier)?.name) || me?.tier}.`}
+          {(ret.kind === "success" || ret.kind === "addon-success") && ret.phase === "pending" &&
+            "We've received your checkout. Your plan updates as soon as Stripe confirms the payment — bank (ACH) payments can take a few business days. You don't need to do anything else."}
+          <button onClick={() => setRet(null)} aria-label="Dismiss"
+            style={{marginLeft:10,background:"none",border:"none",color:C.textMut,cursor:"pointer",fontSize:13}}>✕</button>
+        </div>
+      )}
+      {me?.subscription?.pastDue && (
+        <div role="alert" style={{padding:"10px 14px",background:`${C.red}12`,border:`1px solid ${C.red}44`,
+          borderRadius:8,color:C.redText,fontSize:12.5,marginBottom:16,lineHeight:1.5}}>
+          Your latest payment didn't go through. Update your payment method under Manage Billing
+          {me.subscription.pastDue.graceEndsAt ? ` by ${new Date(me.subscription.pastDue.graceEndsAt).toLocaleDateString()}` : ""} to keep your plan active.
+        </div>
+      )}
+      {me?.subscription?.actionRequired && (
+        <div role="alert" style={{padding:"10px 14px",background:`${C.amber}15`,border:`1px solid ${C.amber}44`,
+          borderRadius:8,color:C.amberText,fontSize:12.5,marginBottom:16,lineHeight:1.5}}>
+          A payment needs an extra confirmation from your bank or card.
+          {me.subscription.actionRequired.url && <> <a href={me.subscription.actionRequired.url} target="_blank" rel="noreferrer" style={{color:C.accentText}}>Complete it here →</a></>}
+        </div>
+      )}
 
       {/* Current plan summary */}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px",marginBottom:24}}>
@@ -23784,8 +23911,10 @@ function PlanBillingSection() {
           </div>
         </div>
         {me?.subscription?.currentPeriodEnd && (
-          <div style={{fontSize:12,color:C.textMut}}>
-            Renews {new Date(me.subscription.currentPeriodEnd).toLocaleDateString()}
+          <div style={{fontSize:12,color: me.subscription.cancelAtPeriodEnd ? C.amberText : C.textMut}}>
+            {me.subscription.cancelAtPeriodEnd
+              ? `Ends ${new Date(me.subscription.currentPeriodEnd).toLocaleDateString()} — you'll move to the Free plan`
+              : `Renews ${new Date(me.subscription.currentPeriodEnd).toLocaleDateString()}`}
           </div>
         )}
         {me?.addons?.includes("training_delivery") && (
@@ -23828,6 +23957,35 @@ function PlanBillingSection() {
           </button>
         )}
       </div>
+
+      {/* Invoices & payments (from our own records; only shown once there are some) */}
+      {invoices.length > 0 && (
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 20px",marginBottom:24}}>
+          <div style={{color:C.textMut,fontSize:11,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Invoices &amp; payments</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5}}>
+              <tbody>
+                {invoices.map(inv => {
+                  const st = INVOICE_STATUS[inv.status] || { label: inv.status, tone: "mut" };
+                  const tone = { green: C.greenText, amber: C.amberText, red: C.redText, mut: C.textMut }[st.tone];
+                  return (
+                    <tr key={inv.id} style={{borderTop:`1px solid ${C.border}`}}>
+                      <td style={{padding:"8px 8px 8px 0",color:C.textSec,whiteSpace:"nowrap"}}>{new Date(inv.createdAt).toLocaleDateString()}</td>
+                      <td style={{padding:"8px",color:C.text}}>{safeText(inv.description)}{inv.number ? <span style={{color:C.textMut}}> · {safeText(inv.number)}</span> : null}</td>
+                      <td style={{padding:"8px",color:C.text,whiteSpace:"nowrap"}}>{fmtMoney(inv.amountCents, inv.currency)}</td>
+                      <td style={{padding:"8px",color:tone,fontWeight:600,whiteSpace:"nowrap"}}>{st.label}</td>
+                      <td style={{padding:"8px 0 8px 8px",whiteSpace:"nowrap",textAlign:"right"}}>
+                        {inv.hostedInvoiceUrl && <a href={inv.hostedInvoiceUrl} target="_blank" rel="noreferrer" style={{color:C.accentText}}>{inv.status === "open" ? "Pay" : "View"}</a>}
+                        {inv.invoicePdf && <> · <a href={inv.invoicePdf} target="_blank" rel="noreferrer" style={{color:C.accentText}}>PDF</a></>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Plan comparison */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:12,marginBottom:28}}>
