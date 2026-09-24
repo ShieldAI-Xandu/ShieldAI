@@ -1,5 +1,5 @@
 // agentRoutes.js
-// ShieldAI monitoring-agent backend: enrollment, report ingestion, fleet views,
+// ShieldAI vCISO monitoring-agent backend: enrollment, report ingestion, fleet views,
 // and the recommendation lifecycle.
 //
 // BOUNDARY (enforced here): the agent and the AI never perform actions. These
@@ -69,7 +69,7 @@ const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 chars
 
-// The latest agent version ShieldAI ships, PER OS — the three collectors are
+// The latest agent version ShieldAI vCISO ships, PER OS — the three collectors are
 // released independently (a Windows-only change must not flag every Linux and
 // macOS agent as outdated). Surfaced to agents (so they can note staleness) and
 // used by the human-gated upgrade flow. Bump ONLY the OS whose collector/runner
@@ -1213,5 +1213,5 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     res.json(rec);
   });
 
-  console.log("ShieldAI agent routes registered.");
+  console.log("ShieldAI vCISO agent routes registered.");
 }

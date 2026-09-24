@@ -7,7 +7,7 @@
 // severity scales. Rather than making every client hand-write a field
 // mapping, each adapter here recognizes that vendor's native JSON shape (as
 // produced by a client's own forwarding script/SOAR workflow) and normalizes
-// it into ShieldAI's internal finding shape:
+// it into ShieldAI vCISO's internal finding shape:
 //   { externalId, title, severity, category, host, cve, message, raw }
 // where severity is one of: critical | high | medium | low | info.
 //

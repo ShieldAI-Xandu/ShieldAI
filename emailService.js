@@ -1,11 +1,11 @@
 // emailService.js
-// ShieldAI outbound email — the first real email-sending capability in the
+// ShieldAI vCISO outbound email — the first real email-sending capability in the
 // product. Everything that currently needs to reach someone by email
 // (learner training links, phishing simulation emails, eventually password
 // resets) has so far been distributed out-of-band, by a human copying a
 // link. This is the shared, provider-agnostic sender everything else builds on.
 //
-// SECURITY / ABUSE: this module can only send email ShieldAI itself
+// SECURITY / ABUSE: this module can only send email ShieldAI vCISO itself
 // constructs (phishing-simulation content, training assignment notices).
 // It is never handed arbitrary caller-supplied HTML to relay, and every
 // call site is expected to pass a fixed, reviewed template — this is not a
@@ -27,7 +27,7 @@
 // realistic-but-clearly-distinct sender identity (e.g. "IT Help Desk
 // <it-helpdesk@simulate.shieldai.io>"), NOT from the client's own domain.
 // This is deliberate, not a limitation: spoofing a client's exact domain
-// would require every client to authorize ShieldAI in their own SPF/DKIM
+// would require every client to authorize ShieldAI vCISO in their own SPF/DKIM
 // records (a heavy per-client setup burden) and risks their real domain's
 // sending reputation if a simulation email is ever misfiled as spam. Sending
 // from a ShieldAI-controlled domain with good reputation, using a believable
@@ -73,9 +73,9 @@ if (PROVIDER === "resend") {
       if (!res.ok) throw new Error(data?.message || `Resend API error (${res.status})`);
       return { id: data.id || null };
     };
-    console.log("ShieldAI email: Resend configured.");
+    console.log("ShieldAI vCISO email: Resend configured.");
   } else {
-    console.warn("ShieldAI email: EMAIL_PROVIDER=resend but RESEND_API_KEY is not set — sends return \"not configured\" until you set it.");
+    console.warn("ShieldAI vCISO email: EMAIL_PROVIDER=resend but RESEND_API_KEY is not set — sends return \"not configured\" until you set it.");
   }
 }
 
@@ -110,7 +110,7 @@ if (PROVIDER === "mailgun") {
   if (!process.env.EMAIL_FROM_DOMAIN) {
     FROM_DOMAIN = MAILGUN_DOMAIN;
   } else if (MAILGUN_DOMAIN !== FROM_DOMAIN) {
-    console.warn(`ShieldAI email: EMAIL_FROM_DOMAIN ("${FROM_DOMAIN}") differs from MAILGUN_DOMAIN ("${MAILGUN_DOMAIN}") — outbound mail will claim to be from ${FROM_DOMAIN} while authenticating against Mailgun's ${MAILGUN_DOMAIN} account. This is only valid if ${FROM_DOMAIN} is also verified in that same Mailgun account; otherwise sends will be rejected. If that's not intentional, unset EMAIL_FROM_DOMAIN and let it default to MAILGUN_DOMAIN.`);
+    console.warn(`ShieldAI vCISO email: EMAIL_FROM_DOMAIN ("${FROM_DOMAIN}") differs from MAILGUN_DOMAIN ("${MAILGUN_DOMAIN}") — outbound mail will claim to be from ${FROM_DOMAIN} while authenticating against Mailgun's ${MAILGUN_DOMAIN} account. This is only valid if ${FROM_DOMAIN} is also verified in that same Mailgun account; otherwise sends will be rejected. If that's not intentional, unset EMAIL_FROM_DOMAIN and let it default to MAILGUN_DOMAIN.`);
   }
   if (MAILGUN_API_KEY) {
     configured = true;
@@ -136,14 +136,14 @@ if (PROVIDER === "mailgun") {
       if (!res.ok) throw new Error(data?.message || `Mailgun API error (${res.status})`);
       return { id: data.id || null };
     };
-    console.log(`ShieldAI email: Mailgun configured (${MAILGUN_REGION.toUpperCase()} region, domain ${MAILGUN_DOMAIN}, sending as @${FROM_DOMAIN}).`);
+    console.log(`ShieldAI vCISO email: Mailgun configured (${MAILGUN_REGION.toUpperCase()} region, domain ${MAILGUN_DOMAIN}, sending as @${FROM_DOMAIN}).`);
   } else {
-    console.warn("ShieldAI email: EMAIL_PROVIDER=mailgun but MAILGUN_API_KEY is not set — sends return \"not configured\" until you set it.");
+    console.warn("ShieldAI vCISO email: EMAIL_PROVIDER=mailgun but MAILGUN_API_KEY is not set — sends return \"not configured\" until you set it.");
   }
 }
 
 if (!["resend", "mailgun"].includes(PROVIDER)) {
-  console.warn(`ShieldAI email: unknown EMAIL_PROVIDER "${PROVIDER}" — expected "resend" or "mailgun". Sends will return "not configured".`);
+  console.warn(`ShieldAI vCISO email: unknown EMAIL_PROVIDER "${PROVIDER}" — expected "resend" or "mailgun". Sends will return "not configured".`);
 }
 
 export function emailConfigured() {
@@ -195,7 +195,7 @@ export async function sendEmail({ to, subject, html, text, fromName, fromLocal, 
 
 /**
  * Send a batch, sequentially with a small delay — simple and safe at
- * ShieldAI's current scale (dozens of learners per campaign, not thousands).
+ * ShieldAI vCISO's current scale (dozens of learners per campaign, not thousands).
  * Returns per-recipient results so a campaign can report partial failures
  * rather than treating the whole send as one atomic pass/fail.
  */

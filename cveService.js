@@ -1,5 +1,5 @@
 // cveService.js
-// ShieldAI vulnerability-intelligence service.
+// ShieldAI vCISO vulnerability-intelligence service.
 //
 // Queries the REAL NIST National Vulnerability Database (NVD) CVE API 2.0 —
 // the canonical, machine-readable source for CVE records published by MITRE

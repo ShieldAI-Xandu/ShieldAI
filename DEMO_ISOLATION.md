@@ -1,4 +1,4 @@
-# ShieldAI — Demo / Production Isolation
+# ShieldAI vCISO — Demo / Production Isolation
 
 The demo is a **separate database file on the same server**, reached through a
 public gateway that requires no credentials. Demo and production data cannot

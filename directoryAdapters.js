@@ -9,7 +9,7 @@
 // SDK's non-readonly variants, or an Okta token with anything beyond read
 // access). That's not a style preference — it's what keeps a pull-based
 // connector consistent with the "AI advises, humans act" boundary CLAUDE.md
-// documents for the monitoring agent: ShieldAI never gets a channel that can
+// documents for the monitoring agent: ShieldAI vCISO never gets a channel that can
 // change anything in a client's directory, only read it.
 //
 // Severity is computed HERE, deterministically, from facts the vendor API

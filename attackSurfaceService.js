@@ -1,5 +1,5 @@
 // attackSurfaceService.js
-// ShieldAI external attack-surface discovery — subdomain enumeration via
+// ShieldAI vCISO external attack-surface discovery — subdomain enumeration via
 // public certificate-transparency logs, plus lightweight HTTP header
 // probing of whatever's actually live.
 //

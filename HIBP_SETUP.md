@@ -8,7 +8,7 @@ it at https://haveibeenpwned.com/DomainSearch and completes HIBP's own
 verification.
 
 So per-client domain verification is an **operational workflow**, not code that
-can be fully automated. ShieldAI now manages that workflow end to end.
+can be fully automated. ShieldAI vCISO now manages that workflow end to end.
 
 ## Two independent gates
 
@@ -16,10 +16,10 @@ Monitoring only goes live when **both** are green:
 
 | Gate | Who does it | How |
 |---|---|---|
-| **Ownership** | Client | Publishes a DNS TXT record; ShieldAI verifies it automatically |
-| **HIBP enrollment** | You (admin) | Adds the domain in the HIBP dashboard, records the result in ShieldAI |
+| **Ownership** | Client | Publishes a DNS TXT record; ShieldAI vCISO verifies it automatically |
+| **HIBP enrollment** | You (admin) | Adds the domain in the HIBP dashboard, records the result in ShieldAI vCISO |
 
-The ownership gate isn't ceremony. Without it, a client could point ShieldAI at
+The ownership gate isn't ceremony. Without it, a client could point ShieldAI vCISO at
 a domain they don't own and read a third party's breach exposure. The system
 **refuses** (HTTP 409) to mark HIBP monitoring live until ownership passes.
 
@@ -41,12 +41,12 @@ fabricated all-clear.
    - Public email domains (gmail, outlook, …) are **rejected** — you can't prove
      ownership of them and querying them exposes unrelated people's data
    - A domain already registered to another account is **rejected** (409)
-2. ShieldAI returns a DNS TXT record to publish:
+2. ShieldAI vCISO returns a DNS TXT record to publish:
    ```
    Type: TXT   Host: @   Value: shieldai-domain-verification=<token>
    ```
 3. Client publishes it, then hits **Verify** (`POST /api/client/domain/verify`)
-4. ShieldAI resolves the TXT record itself. Pass → ownership verified.
+4. ShieldAI vCISO resolves the TXT record itself. Pass → ownership verified.
 
 Changing the domain **resets both gates**. Prior proof doesn't transfer.
 

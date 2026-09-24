@@ -1,11 +1,11 @@
 // trainingProgramRoutes.js
-// ShieldAI STANDALONE TRAINING PRODUCT.
+// ShieldAI vCISO STANDALONE TRAINING PRODUCT.
 //
 // This is deliberately self-contained and does NOT overlap with the monitoring
 // agent, CVE, evidence, or remediation systems. It has its own vertical:
 //
 //   learners       — lightweight employee records under a client account. They
-//                    are NOT ShieldAI logins; they complete training via a
+//                    are NOT ShieldAI vCISO logins; they complete training via a
 //                    personal tokenized link. (Confirmed design: "lightweight
 //                    learners, no full login.")
 //   assignments    — a program (or subset of modules) assigned to a learner,

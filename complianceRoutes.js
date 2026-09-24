@@ -1,5 +1,5 @@
 // complianceRoutes.js
-// ShieldAI compliance walkthrough + REAL portfolio data.
+// ShieldAI vCISO compliance walkthrough + REAL portfolio data.
 //
 // TWO JOBS
 // --------
@@ -1162,5 +1162,5 @@ Write remediation steps to close this gap. Requirements for your answer:
     });
   });
 
-  console.log("ShieldAI compliance + portfolio routes registered.");
+  console.log("ShieldAI vCISO compliance + portfolio routes registered.");
 }

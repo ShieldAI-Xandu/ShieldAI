@@ -1,6 +1,6 @@
 // notificationDispatch.js
 // Central "something happened, tell the client's team" dispatcher — the
-// piece that didn't exist anywhere in ShieldAI before this. Every existing
+// piece that didn't exist anywhere in ShieldAI vCISO before this. Every existing
 // "send something" call site (policyAcknowledgmentRoutes.js's Remind,
 // phishingRoutes.js's send) builds its own message inline and calls
 // emailService.js's sendEmail() directly; there was nothing to subscribe

@@ -111,5 +111,5 @@ export function registerExtendedAssessmentRoutes(app, { db, requireAuth, gate })
     });
   });
 
-  console.log("ShieldAI extended assessment routes registered.");
+  console.log("ShieldAI vCISO extended assessment routes registered.");
 }

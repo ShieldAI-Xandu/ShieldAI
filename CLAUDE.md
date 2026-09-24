@@ -1,7 +1,7 @@
-# ShieldAI — Claude Code Project Guide
+# ShieldAI vCISO — Claude Code Project Guide
 
 ## What this is
-ShieldAI is a full-stack virtual CISO (vCISO) SaaS platform for small and mid-sized
+ShieldAI vCISO is a full-stack virtual CISO (vCISO) SaaS platform for small and mid-sized
 businesses, sold direct — not through MSPs. Founder/CEO: Derrick Brooks, Xandu Limited LLC.
 
 - Production: https://shieldai-production-627e.up.railway.app (Railway)

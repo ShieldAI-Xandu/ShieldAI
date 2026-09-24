@@ -60,7 +60,7 @@ To build a test copy pointed at your local dev backend instead of production:
    enrollment token for this Mac..." with a text field.
 4. They paste the token from your dashboard's **Endpoints → Add Endpoint**
    page and click **Continue**.
-5. A macOS notification confirms: "This Mac is now connected to ShieldAI."
+5. A macOS notification confirms: "This Mac is now connected to ShieldAI vCISO."
 6. Endpoint shows up on your Endpoints page within about a minute.
 
 If they cancel or leave it blank, the installer still finishes (the files are

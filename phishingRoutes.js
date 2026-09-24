@@ -341,5 +341,5 @@ export function registerPhishingRoutes(app, { db, requireAuth, gate, analystOwns
     });
   });
 
-  console.log("ShieldAI phishing simulation routes registered.");
+  console.log("ShieldAI vCISO phishing simulation routes registered.");
 }

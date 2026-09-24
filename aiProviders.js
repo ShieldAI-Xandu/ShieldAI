@@ -1,5 +1,5 @@
 // aiProviders.js
-// Unified AI provider layer for ShieldAI.
+// Unified AI provider layer for ShieldAI vCISO.
 //
 // One entry point — callAI({ provider, system, messages, max_tokens }) — that
 // dispatches to Claude (Anthropic), Gemini (Google), or GPT (OpenAI), each

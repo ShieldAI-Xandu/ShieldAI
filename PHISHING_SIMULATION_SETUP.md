@@ -1,4 +1,4 @@
-# ShieldAI Phishing Simulation — Setup
+# ShieldAI vCISO Phishing Simulation — Setup
 
 The phishing simulation feature is fully built: scenario catalog, campaign
 creation, per-learner tracking, click-rate reporting, and a real-time-safe
@@ -13,7 +13,7 @@ scratch) or **Mailgun** (if you already have an account, or prefer its
 longer track record).
 
 ## Why this needed new infrastructure
-ShieldAI had no outbound email capability at all before this feature —
+ShieldAI vCISO had no outbound email capability at all before this feature —
 learner training links have always been distributed out-of-band (copied and
 sent manually). Phishing simulation is the first thing that actually
 requires sending real email, so this introduces `emailService.js`, a small
@@ -61,11 +61,11 @@ password reset) can build on later without re-doing this work.
 ## 2. Restart the backend
 You should see, depending on which provider you configured:
 ```
-ShieldAI email: Resend configured.
+ShieldAI vCISO email: Resend configured.
 ```
 or
 ```
-ShieldAI email: Mailgun configured (US region, domain simulate.yourdomain.com).
+ShieldAI vCISO email: Mailgun configured (US region, domain simulate.yourdomain.com).
 ```
 followed by `ShieldAI phishing simulation routes registered.` If you only
 see the routes line and not the provider line, the relevant API key isn't
@@ -77,7 +77,7 @@ with a realistic-but-distinguishable sender identity (e.g. "IT Help Desk
 <it-helpdesk@simulate.shieldai.io>"), never from a client's own domain.
 This is deliberate:
 - Sending "as" a client's exact domain would require every client to
-  authorize ShieldAI in their own SPF/DKIM records — a heavy per-client
+  authorize ShieldAI vCISO in their own SPF/DKIM records — a heavy per-client
   setup burden that doesn't scale.
 - If a simulation email is ever misfiled as spam or reported by a mail
   provider, you want that risk isolated to a dedicated sending domain, not

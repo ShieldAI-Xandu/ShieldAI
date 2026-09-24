@@ -7,7 +7,7 @@
 // This structure follows the widely-used enterprise/university policy
 // convention (Purpose, Scope, Definitions, Policy Statement,
 // Responsibilities, Compliance/Enforcement, Exceptions, Related
-// Documents, Revision History) — ShieldAI's own template built to that
+// Documents, Revision History) — ShieldAI vCISO's own template built to that
 // professional standard.
 
 // Universal sections every policy includes, in order.

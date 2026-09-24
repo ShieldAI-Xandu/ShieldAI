@@ -1,14 +1,14 @@
 // taskTrackerRoutes.js
 // Task-tracker connections: Jira (Atlassian OAuth 2.0 / 3LO), Asana (OAuth2),
 // Trello (paste-in API key + token, same model as Okta's directory
-// connection). Lets a client sync a ShieldAI remediation task to an
+// connection). Lets a client sync a ShieldAI vCISO remediation task to an
 // external ticket and pull its status back on demand.
 //
 // BOUNDARY: creating a ticket is the only write this file ever performs on
 // a connected tracker. Pulling status is read-only and purely informational
-// — it never drives a ShieldAI task through the real completion flow
+// — it never drives a ShieldAI vCISO task through the real completion flow
 // (taskRoutes.js's /complete, which has posture-scoring side effects). A
-// human still clicks "Mark done" in ShieldAI itself to actually complete a
+// human still clicks "Mark done" in ShieldAI vCISO itself to actually complete a
 // task, exactly like the productivity-notification buttons never
 // auto-complete one either. No inbound webhooks (see
 // taskTrackerAdapters.js's header for why) — status changes are pulled on
@@ -452,5 +452,5 @@ export function registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClien
     res.json({ ok: true, id: c.id });
   });
 
-  console.log("ShieldAI task tracker integration routes registered.");
+  console.log("ShieldAI vCISO task tracker integration routes registered.");
 }

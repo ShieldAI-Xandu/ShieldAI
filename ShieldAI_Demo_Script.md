@@ -1,4 +1,4 @@
-# ShieldAI — Investor Demo Script
+# ShieldAI vCISO — Investor Demo Script
 ### 12–18 minutes · Mixed audience (business + technical) · Live or screen-share
 ### Updated for the current access-code demo sandbox (endpoints, tasks, vendor risk, training delivery, phishing simulation, compliance calendar, white-label branding, real CVE/dark-web exposure, and a genuinely live analyst console)
 
@@ -25,7 +25,7 @@
 ## The arc (what you're proving)
 
 1. There's a large, underserved market: small businesses that need a CISO but can't afford one.
-2. ShieldAI delivers a real, defensible security program today — not AI guesswork.
+2. ShieldAI vCISO delivers a real, defensible security program today — not AI guesswork.
 3. The analyst console is a **working platform today**, not a vision — one engineer, amplified by AI, running a whole portfolio.
 4. Real data everywhere it's claimed as real: real NVD CVE records, real breach-database structure (clearly flagged as simulated for a fictional company), a deterministic scoring engine, and an agent that catches clients being wrong about their own environment.
 5. This is a business, not a feature.
@@ -40,7 +40,7 @@ Spend ~2 min on problem, ~4 min on the client product, ~7 min on the analyst pla
 
 "Every business today is a target. But there's a massive gap in the market: a full-time Chief Information Security Officer costs $200,000 to $400,000 a year. A small or mid-sized business can't afford that. Yet those same businesses are increasingly *required* to have a real security program — by cyber-insurance providers, by their larger customers' vendor questionnaires, and by regulations like HIPAA and CMMC.
 
-So they're stuck. Too big to ignore security, too small to afford expertise. ShieldAI closes that gap: a continuously-managed virtual CISO, powered by AI, overseen by real security engineers, at a price a small business can actually pay."
+So they're stuck. Too big to ignore security, too small to afford expertise. ShieldAI vCISO closes that gap: a continuously-managed virtual CISO, powered by AI, overseen by real security engineers, at a price a small business can actually pay."
 
 **Transition:** "Let me show you what a business gets — then I'll show you how we run it."
 
@@ -49,7 +49,7 @@ So they're stuck. Too big to ignore security, too small to afford expertise. Shi
 ## PART 2 — The Client Product (4–5 min)
 
 > *Screen on. Go to the site → click Investors → Enter with a code → redeem your investor code.*
-> You'll land in the analyst console (this is what an investor code does). Click **🖥️ View as Client →** on the one seeded client, "ShieldAI Demo Workspace," to enter the client experience.
+> You'll land in the analyst console (this is what an investor code does). Click **🖥️ View as Client →** on the one seeded client, "ShieldAI vCISO Demo Workspace," to enter the client experience.
 
 ### Beat 1 — Pick a company, land on the posture score
 - Inside the client view, open the **Apex Manufacturing** assessment/program (the weakest of the three seeded companies — the most dramatic, most useful one to open with).
@@ -154,4 +154,4 @@ So they're stuck. Too big to ignore security, too small to afford expertise. Shi
 
 ## One-line summary to open or close with
 
-> "A full-time CISO costs a quarter-million dollars a year. ShieldAI gives a small business that same protection — real threat intelligence, a deterministic score, expert-reviewed recommendations — for the price of a software subscription. And what you just watched wasn't a pitch for a platform — it's the platform, live, today."
+> "A full-time CISO costs a quarter-million dollars a year. ShieldAI vCISO gives a small business that same protection — real threat intelligence, a deterministic score, expert-reviewed recommendations — for the price of a software subscription. And what you just watched wasn't a pitch for a platform — it's the platform, live, today."

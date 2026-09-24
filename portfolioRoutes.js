@@ -986,5 +986,5 @@ export function registerPortfolioRoutes(
     res.json({ ok: true, marked: count });
   });
 
-  console.log("ShieldAI portfolio routes registered.");
+  console.log("ShieldAI vCISO portfolio routes registered.");
 }

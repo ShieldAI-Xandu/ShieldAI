@@ -19,7 +19,7 @@
 // credential instead. This mirrors directoryAdapters.js's Okta path exactly
 // (`kind: "token"`), not its OAuth path. A cross-account IAM-role-assumption
 // model (AWS) or a broader delegated-admin model (Azure) would remove the
-// long-lived-key trade-off, but requires ShieldAI to operate its own trusted
+// long-lived-key trade-off, but requires ShieldAI vCISO to operate its own trusted
 // cloud principal — a real future iteration, not v1.
 //
 // Severity is computed HERE, deterministically, from facts the vendor API

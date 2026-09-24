@@ -1,5 +1,5 @@
 // helpManual.js
-// The ShieldAI client user manual — single source of truth for two consumers:
+// The ShieldAI vCISO client user manual — single source of truth for two consumers:
 //   1. The in-app Help Center (src/App.jsx, HelpCenterScreen) renders HELP_MANUAL.
 //   2. Mastermind's client chat system prompt (mastermindRoutes.js) includes
 //      manualAsText() so it can answer "how do I..." questions grounded in the

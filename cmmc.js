@@ -29,7 +29,7 @@
 // paused new Phase 2 solicitation requirements while that review runs
 // (RFI responses were due 14 August 2026). This is a pause for review, not
 // a repeal, and could as easily end in reinstating 10 November 2026 as in
-// changing it. Per direction (2026-07-24): ShieldAI keeps 10 November 2026
+// changing it. Per direction (2026-07-24): ShieldAI vCISO keeps 10 November 2026
 // as the operative deadline clients plan against, rather than leading with
 // "suspended" — a client who stops preparing over a paused-not-cancelled
 // review is worse off than one who kept going. Re-verify as the date nears.
@@ -40,7 +40,7 @@
 // brand the department as the "Department of War," following an executive
 // order and a House NDAA amendment. Renaming an executive department is a
 // legislative act, and only Congress can do it. Per direction (2026-07-24),
-// ShieldAI refers to it as the Department of Defense in all product content
+// ShieldAI vCISO refers to it as the Department of Defense in all product content
 // until that legislation is actually enacted, regardless of the
 // department's current self-branding.
 //

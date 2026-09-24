@@ -1,5 +1,5 @@
 // darkwebService.js
-// ShieldAI breach / dark-web exposure service, backed by Have I Been Pwned (HIBP).
+// ShieldAI vCISO breach / dark-web exposure service, backed by Have I Been Pwned (HIBP).
 //
 // HONESTY NOTES (by design):
 //  - There is NO free, public "dark web" API. Real breach/credential exposure

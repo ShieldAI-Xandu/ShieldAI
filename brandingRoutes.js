@@ -1,15 +1,15 @@
 // brandingRoutes.js
-// ShieldAI white-label branding.
+// ShieldAI vCISO white-label branding.
 //
-// Lets an MSP/analyst (or admin, on behalf of one) present ShieldAI under their
+// Lets an MSP/analyst (or admin, on behalf of one) present ShieldAI vCISO under their
 // own brand: company display name, logo, accent colour, product name, and
 // support contact. Clients assigned to that analyst see the analyst's brand
-// instead of ShieldAI's default.
+// instead of ShieldAI vCISO's default.
 //
 // Resolution order for a given client:
 //   1. Branding of the analyst assigned to that client (first assignment wins)
 //   2. Platform default branding (admin-owned, brandingId "platform")
-//   3. Hard-coded ShieldAI defaults
+//   3. Hard-coded ShieldAI vCISO defaults
 //
 // Staff (admin/analyst) always see their own brand when they have one.
 //
@@ -296,5 +296,5 @@ export function registerBrandingRoutes(app, { db, requireAuth, requireAdmin }) {
     });
   });
 
-  console.log("ShieldAI branding (white-label) routes registered.");
+  console.log("ShieldAI vCISO branding (white-label) routes registered.");
 }

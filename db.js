@@ -1,7 +1,7 @@
 // db.js
 // Dual-store JSON database using lowdb.
 //
-// ShieldAI runs TWO fully separate data stores on the same server:
+// ShieldAI vCISO runs TWO fully separate data stores on the same server:
 //   • production  → db.json        (real clients, real analysts, real data)
 //   • demo        → demo-db.json   (sandbox; investor/prospect demos)
 //

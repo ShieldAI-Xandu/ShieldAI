@@ -2,7 +2,7 @@
 // Shared HMAC verification for inbound webhooks that sign their payload
 // (Slack's interactivity callback now; Asana/Trello-style providers later —
 // see INTEGRATIONS_SETUP.md's productivity-integrations roadmap). Nothing
-// like this existed anywhere in ShieldAI before — the only other verified
+// like this existed anywhere in ShieldAI vCISO before — the only other verified
 // webhook (Stripe, in billingRoutes.js) delegates entirely to the Stripe
 // SDK's own constructEvent(), which doesn't help for a provider with no SDK.
 //

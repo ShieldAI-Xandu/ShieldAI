@@ -10,12 +10,12 @@
 // M365_SCOPES/GOOGLE_WORKSPACE_SCOPES) is read-only, and the Okta token is
 // validated against a read-only call before being stored. This file never
 // requests a write/management scope and never calls a write endpoint on any
-// provider. That's what keeps a pull-based connector — ShieldAI's server
+// provider. That's what keeps a pull-based connector — ShieldAI vCISO's server
 // calling INTO a client's own directory tenant — consistent with the
 // "AI advises, humans act" / no-inbound-command boundary CLAUDE.md
 // documents for the monitoring agent (agentRoutes.js): this is a different
 // relationship (SaaS-to-SaaS delegated-consent API read) but the same
-// underlying rule — ShieldAI can observe a client's environment, never
+// underlying rule — ShieldAI vCISO can observe a client's environment, never
 // change it.
 //
 // riskEngine.js note: none of this feeds the posture SCORE. That engine is
@@ -547,5 +547,5 @@ export function registerDirectoryRoutes(app, { db, requireAuth, gate, callClaude
     res.json({ ok: true, id: connection.id });
   });
 
-  console.log("ShieldAI directory integration routes registered.");
+  console.log("ShieldAI vCISO directory integration routes registered.");
 }

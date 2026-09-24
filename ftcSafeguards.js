@@ -3,14 +3,14 @@
 // Information," as amended (the 2021 final rule, effective June 2023, plus the
 // 2023 breach-notification amendment at § 314.5).
 //
-// WHY THIS FRAMEWORK MATTERS FOR ShieldAI'S SEGMENT
+// WHY THIS FRAMEWORK MATTERS FOR ShieldAI vCISO'S SEGMENT
 // -------------------------------------------------
 // The Rule applies to "financial institutions" under FTC jurisdiction, which is
 // far broader than banks: auto dealers, mortgage brokers and lenders, tax
 // preparers, accountants, collection agencies, payday lenders, real-estate
 // appraisers, and finders. These are small businesses with no security staff,
 // a hard federal obligation, and almost no vendor marketing to them. It is the
-// clearest example of the SMB compliance gap ShieldAI exists to close.
+// clearest example of the SMB compliance gap ShieldAI vCISO exists to close.
 //
 // HOW THIS IS BUILT (and why it isn't AI-generated)
 // -------------------------------------------------

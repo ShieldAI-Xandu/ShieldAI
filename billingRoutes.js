@@ -1,5 +1,5 @@
 // billingRoutes.js
-// ShieldAI Stripe billing backend.
+// ShieldAI vCISO Stripe billing backend.
 //
 // SECURITY / PCI: No card data ever touches this server. All card entry happens
 // in Stripe-hosted Checkout and the Stripe Billing Portal. We only create
@@ -59,12 +59,12 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
     try {
       const Stripe = (await import("stripe")).default;
       stripe = new Stripe(SECRET);
-      console.log("ShieldAI billing: Stripe configured.");
+      console.log("ShieldAI vCISO billing: Stripe configured.");
     } catch (err) {
-      console.warn("ShieldAI billing: stripe package not available —", err.message);
+      console.warn("ShieldAI vCISO billing: stripe package not available —", err.message);
     }
   } else {
-    console.warn("ShieldAI billing: STRIPE_SECRET_KEY not set — billing routes return 503 until configured.");
+    console.warn("ShieldAI vCISO billing: STRIPE_SECRET_KEY not set — billing routes return 503 until configured.");
   }
 
   // Guard used by every route that needs a live Stripe client.
@@ -123,7 +123,7 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
       } else {
         // No webhook secret set: accept unverified (dev only). Parse the raw body.
         event = JSON.parse(req.body.toString("utf8"));
-        console.warn("ShieldAI billing: webhook received WITHOUT signature verification (set STRIPE_WEBHOOK_SECRET).");
+        console.warn("ShieldAI vCISO billing: webhook received WITHOUT signature verification (set STRIPE_WEBHOOK_SECRET).");
       }
     } catch (err) {
       console.error("Webhook signature verification failed:", err.message);
@@ -485,5 +485,5 @@ export async function registerBillingRoutes(app, { db, requireAuth, requireAdmin
     });
   });
 
-  console.log("ShieldAI billing routes registered.");
+  console.log("ShieldAI vCISO billing routes registered.");
 }

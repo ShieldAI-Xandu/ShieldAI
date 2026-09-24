@@ -1,5 +1,5 @@
 // tiers.js
-// Single source of truth for ShieldAI subscription tiers and their limits.
+// Single source of truth for ShieldAI vCISO subscription tiers and their limits.
 // Used by the backend to enforce limits and by the admin UI to display/move
 // clients between tiers. Prices are in USD cents (Stripe convention).
 //

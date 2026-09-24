@@ -1,5 +1,5 @@
 // server.js
-// ShieldAI backend: auth + AI proxy + database persistence + program pipeline.
+// ShieldAI vCISO backend: auth + AI proxy + database persistence + program pipeline.
 
 // MUST be the first import. ES module imports are evaluated in source order
 // before any other top-level code in this file runs — including the
@@ -1131,7 +1131,7 @@ app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, r
 // ─────────────────────────────────────────────────────────────
 //  SHIELDAI MASTERMIND — product name & roadmap (2026-07-23)
 //
-//  "Mastermind" is the client-facing brand for ShieldAI's AI system —
+//  "Mastermind" is the client-facing brand for ShieldAI vCISO's AI system —
 //  covers both this generation pipeline (below) and the separate interactive
 //  advisory chat (mastermindRoutes.js). Today, Mastermind is fully dependent
 //  on three third-party models, routed by task via STEP_PROVIDER:
@@ -1141,7 +1141,7 @@ app.post("/api/staff/clients/:cid/programs/generate", requireAuth, async (req, r
 //    - GPT-4o (OpenAI)     — tool recommendations, training content, exec
 //      reports.
 //  ROADMAP: the long-term goal is for Mastermind to become an independent
-//  agent — not a router across three vendors' APIs, but ShieldAI's own model/
+//  agent — not a router across three vendors' APIs, but ShieldAI vCISO's own model/
 //  agent doing the work directly. That is NOT built yet. Every "Mastermind"
 //  badge and marketing claim today describes this three-provider pipeline,
 //  honestly disclosed (see AI_MODELS in App.jsx and the "Meet Mastermind"
@@ -2559,7 +2559,7 @@ if (fs.existsSync(DIST_DIR)) {
   app.get(/^\/(?!api\/|health$).*/, (req, res) => {
     res.sendFile(path.join(DIST_DIR, "index.html"));
   });
-  console.log("ShieldAI static frontend served from ./dist");
+  console.log("ShieldAI vCISO static frontend served from ./dist");
 } else {
   console.warn("⚠️  ./dist not found — frontend not served. Run `npm run build`.");
 }
@@ -2601,7 +2601,7 @@ try {
 }
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`✅ ShieldAI backend listening on ${HOST}:${PORT}`);
+  console.log(`✅ ShieldAI vCISO backend listening on ${HOST}:${PORT}`);
   console.log(`   Auth enabled · max ${MAX_USERS} testing accounts`);
   console.log(`   Admin: ${process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL : "(set ADMIN_EMAIL in .env)"}`);
 

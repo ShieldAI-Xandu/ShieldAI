@@ -1,5 +1,5 @@
 // cveRoutes.js
-// Routes exposing ShieldAI's vulnerability intelligence (NVD/CVE) and the
+// Routes exposing ShieldAI vCISO's vulnerability intelligence (NVD/CVE) and the
 // authoritative reference links. Read-only; no action is ever taken on a
 // client system from here.
 

@@ -13,7 +13,7 @@ the monitored system.
 ## Before you install (all platforms)
 - [ ] In the **client admin account → Endpoints → Add Endpoint**, generate a
       one-time **enrollment token** (valid ~60 min, single use).
-- [ ] Confirm the endpoint can reach the ShieldAI server URL over HTTPS
+- [ ] Confirm the endpoint can reach the ShieldAI vCISO server URL over HTTPS
       (in production) — e.g. `curl https://app.shieldai.example/` succeeds.
 - [ ] Copy the correct OS folder to the endpoint (`windows\`, `linux/`, or
       `macos/`). Each needs its `collect.*` and `install.*`; the Unix installers
@@ -92,7 +92,7 @@ sudo ./install.sh --server-url "https://app.shieldai.example" \
 
 ## Threat intelligence integrations (server-side, optional but recommended)
 
-ShieldAI's threat intelligence draws on two live external sources. Both are
+ShieldAI vCISO's threat intelligence draws on two live external sources. Both are
 configured once on the **server** (not per endpoint) via environment variables,
 and both fail **honestly** — if a source isn't configured or a domain isn't
 verified, the UI says so rather than showing a fake "all clear."
@@ -131,7 +131,7 @@ verified, the UI says so rather than showing a fake "all clear."
       add the client's domain and complete HIBP's domain-control verification
       (DNS TXT record, file upload, or email to a domain mailbox — HIBP guides
       you through it). This proves you're authorized to search that domain.
-- [ ] Confirm ShieldAI has the right domain on file for the client — it's taken
+- [ ] Confirm ShieldAI vCISO has the right domain on file for the client — it's taken
       from the assessment's company website/domain, falling back to the admin
       email's domain. Fix the assessment if the wrong domain is being checked.
 - [ ] Verify states (open **Threat Intel** panel or the admin **CVE Exposure**

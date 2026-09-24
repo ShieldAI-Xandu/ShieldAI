@@ -12,7 +12,7 @@
 //      re-check those capabilities, it just reads whatever's already there,
 //      so the calendar naturally reflects what a client actually has access
 //      to without needing to know about tiers itself.
-//   2. CUSTOM entries the client types in for things ShieldAI has no way to
+//   2. CUSTOM entries the client types in for things ShieldAI vCISO has no way to
 //      know automatically — insurance renewal, business license, a signed
 //      audit date, a contract renewal. This is the catch-all layer.
 //
@@ -505,5 +505,5 @@ export function registerComplianceCalendarRoutes(app, { db, requireAuth, gate, a
     res.send(ics);
   });
 
-  console.log("ShieldAI compliance-calendar routes registered.");
+  console.log("ShieldAI vCISO compliance-calendar routes registered.");
 }

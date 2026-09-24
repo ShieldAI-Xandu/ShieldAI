@@ -1,5 +1,5 @@
 // mastermindRoutes.js
-// ShieldAI "Mastermind" admin console backend.
+// ShieldAI vCISO "Mastermind" admin console backend.
 //
 // Gives admins three capabilities, all ADVISORY (the AI analyzes and advises;
 // it never performs actions on any system — humans act, per the platform
@@ -1654,5 +1654,5 @@ ${JSON.stringify(snap)}`;
     }
   });
 
-  console.log("ShieldAI Mastermind admin routes registered.");
+  console.log("ShieldAI vCISO Mastermind admin routes registered.");
 }

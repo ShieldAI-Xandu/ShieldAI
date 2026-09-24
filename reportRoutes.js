@@ -1,6 +1,6 @@
 // reportRoutes.js
 // ─────────────────────────────────────────────────────────────────────────────
-//  ShieldAI reporting
+//  ShieldAI vCISO reporting
 //
 //  Produces five kinds of report, each as a self-contained, branded HTML
 //  document that opens in Microsoft Word (served with a .doc filename) and
@@ -22,7 +22,7 @@
 //  to the client until a staff member explicitly delivers it.
 //
 //  IMPORTANT: every report carries a review disclaimer. These documents are
-//  generated from the client's own data and ShieldAI's deterministic engines;
+//  generated from the client's own data and ShieldAI vCISO's deterministic engines;
 //  they are not a substitute for a licensed auditor, a qualified attorney, or a
 //  signed attestation. That line is not decorative — it is what keeps the
 //  compliance/insurance/legal outputs honest for their audiences.
@@ -1563,7 +1563,7 @@ export function registerReportRoutes(app, {
   // The client can already see and download their own draft the moment they
   // generate it (see above) — finalizing doesn't change that. It just removes
   // the DRAFT banner from the downloaded document and flips the badge the
-  // client sees, certifying a ShieldAI analyst reviewed it first.
+  // client sees, certifying a ShieldAI vCISO analyst reviewed it first.
   app.post("/api/reports/:id/finalize", requireAuth, gate.capability("reportsAccess"), async (req, res) => {
     const actor = uById(req.userId);
     if (!isStaff(actor)) return res.status(403).json({ error: "Only staff can finalize a submission packet." });
@@ -1720,7 +1720,7 @@ export function registerReportRoutes(app, {
 
   // ── Download a submission packet's evidence ZIP ──
   // The report document above never reproduces evidence file contents (no
-  // outside recipient has a ShieldAI login to fetch them by link) — this is
+  // outside recipient has a ShieldAI vCISO login to fetch them by link) — this is
   // where the actual files travel, bundled with the report doc itself and a
   // manifest, ready to attach to one application or filing.
   app.get("/api/reports/:id/bundle.zip", requireAuth, reportsOrCompliance, async (req, res) => {

@@ -1,7 +1,7 @@
 // credentialCrypto.js
 // At-rest encryption for per-client third-party credentials (OAuth refresh
 // tokens, API tokens) stored in directoryRoutes.js's directoryConnections
-// collection. Nothing else in ShieldAI stores a reversible secret like this —
+// collection. Nothing else in ShieldAI vCISO stores a reversible secret like this —
 // every existing secret is either a global env var (see SECRETS_RUNBOOK.md)
 // or a one-way hash we only ever compare against (integrations.tokenHash) —
 // so this is a new primitive, not a reuse of an existing helper.

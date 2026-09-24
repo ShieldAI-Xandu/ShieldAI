@@ -1,5 +1,5 @@
 // frameworks.js
-// The single registry of every compliance framework ShieldAI offers, and — the
+// The single registry of every compliance framework ShieldAI vCISO offers, and — the
 // part that matters — an honest statement of how deeply each one is actually
 // implemented.
 //

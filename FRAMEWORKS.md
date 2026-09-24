@@ -1,4 +1,4 @@
-# ShieldAI — Compliance Framework Coverage
+# ShieldAI vCISO — Compliance Framework Coverage
 
 ## The honest claim
 
@@ -257,9 +257,9 @@ doesn't get re-litigated:
    any part of the HITRUST CSF... in which the HITRUST CSF may be recast or
    adapted."* A control-mapped implementation is exactly that.
 
-2. **ShieldAI likely can't be a licensee at all.** Licensees must be HITRUST
+2. **ShieldAI vCISO likely can't be a licensee at all.** Licensees must be HITRUST
    Qualified Organizations, and *security service providers, consultants, and
-   vendors are explicitly prohibited* — which describes ShieldAI.
+   vendors are explicitly prohibited* — which describes ShieldAI vCISO.
 
 3. **A commercial GRC vendor already reached this conclusion.** SimpleRisk does
    not implement HITRUST CSF in their GRC tool, citing these licensing terms.

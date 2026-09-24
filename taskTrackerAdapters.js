@@ -1,6 +1,6 @@
 // taskTrackerAdapters.js
 // Per-provider calls for Jira, Asana, and Trello: creating a ticket from a
-// ShieldAI task and pulling its current status/priority back. Pull-based
+// ShieldAI vCISO task and pulling its current status/priority back. Pull-based
 // ("Sync status" button), not inbound webhooks — each provider signs
 // webhooks differently (or, for Jira Cloud, not at all by default), which
 // is real per-provider complexity for marginal benefit over a manual

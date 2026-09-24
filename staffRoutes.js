@@ -479,5 +479,5 @@ export function registerStaffRoutes(app, { db, requireAuth, logClientAction, ana
     res.json({ token, user: publicUser(req.client) });
   });
 
-  console.log("ShieldAI staff client-workspace routes registered.");
+  console.log("ShieldAI vCISO staff client-workspace routes registered.");
 }

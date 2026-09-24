@@ -1,5 +1,5 @@
 // integrationRoutes.js
-// ShieldAI security-tool integration backend: connection management and
+// ShieldAI vCISO security-tool integration backend: connection management and
 // webhook ingestion for third-party scanners/EDR/SIEM findings.
 //
 // BOUNDARY (enforced here): this layer only RECEIVES findings from an
@@ -358,5 +358,5 @@ export function registerIntegrationRoutes(app, { db, requireAuth, gate, callClau
     }
   });
 
-  console.log("ShieldAI integration routes registered.");
+  console.log("ShieldAI vCISO integration routes registered.");
 }

@@ -1,5 +1,5 @@
 // customFrameworks.js
-// Lets ShieldAI support compliance frameworks that aren't built in. An admin
+// Lets ShieldAI vCISO support compliance frameworks that aren't built in. An admin
 // (or analyst) can register a framework by name, description, and its controls;
 // clients can then select it in an assessment, and the compliance gap-analysis
 // step assesses against its real controls — not invented ones.

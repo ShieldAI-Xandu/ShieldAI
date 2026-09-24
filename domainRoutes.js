@@ -250,5 +250,5 @@ export function registerDomainRoutes(app, { db, requireAuth, requireAdmin, analy
     });
   });
 
-  console.log("ShieldAI domain-verification routes registered.");
+  console.log("ShieldAI vCISO domain-verification routes registered.");
 }

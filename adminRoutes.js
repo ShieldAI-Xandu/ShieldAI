@@ -1,5 +1,5 @@
 // adminRoutes.js
-// ShieldAI admin account-control backend. Adds capabilities the base admin
+// ShieldAI vCISO admin account-control backend. Adds capabilities the base admin
 // routes don't cover: role elevation/demotion, subscription-tier changes,
 // account repair/reset actions, a richer account profile, and an audit log.
 //
@@ -575,5 +575,5 @@ export function registerAdminRoutes(app, { db, requireAdmin, registerUser }) {
     });
   });
 
-  console.log("ShieldAI admin account-control routes registered.");
+  console.log("ShieldAI vCISO admin account-control routes registered.");
 }

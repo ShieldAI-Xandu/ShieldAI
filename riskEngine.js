@@ -1,5 +1,5 @@
 // riskEngine.js
-// ShieldAI deterministic security posture scoring engine (v2).
+// ShieldAI vCISO deterministic security posture scoring engine (v2).
 //
 // PRIMARY MODE: scores directly from the structured security checklist
 // answers (precise, unambiguous).

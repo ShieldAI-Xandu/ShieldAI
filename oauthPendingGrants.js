@@ -14,11 +14,11 @@
 // login.microsoftonline.com link), and sends that URL to a victim admin.
 // The victim authenticates with the real provider and grants real
 // permissions — the domain in their address bar is legitimate, so this is a
-// highly convincing phish. Provider redirects back to ShieldAI's /callback
+// highly convincing phish. Provider redirects back to ShieldAI vCISO's /callback
 // with the attacker's `state`. Under the old flow, the resulting credential
 // (an OAuth grant into the VICTIM's own M365/Google/Slack/Jira/Zoom tenant)
 // got stored as the ATTACKER's own connection — readable, and for the
-// scheduling family, writable, through the attacker's normal ShieldAI
+// scheduling family, writable, through the attacker's normal ShieldAI vCISO
 // session.
 //
 // Fix: /callback no longer writes a connection. It exchanges the code,
@@ -27,9 +27,9 @@
 // makes an AUTHENTICATED POST to a new .../oauth/finish endpoint with the
 // pendingId — and it's THAT call's req.userId, not the original /start
 // caller, that the connection gets attributed to. A victim who was only
-// sent the raw provider consent link has no reason to ever call ShieldAI's
+// sent the raw provider consent link has no reason to ever call ShieldAI vCISO's
 // authenticated /finish with their own session (they may not even have a
-// ShieldAI account), so the pending grant simply expires unused. If the
+// ShieldAI vCISO account), so the pending grant simply expires unused. If the
 // attacker calls /finish themselves, they only ever attribute to their OWN
 // account whatever THEY themselves consented to — the victim's grant is
 // never reachable.

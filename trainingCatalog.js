@@ -1,5 +1,5 @@
 // trainingCatalog.js
-// The fixed CISA/NIST-aligned topic backbone for ShieldAI's training programs.
+// The fixed CISA/NIST-aligned topic backbone for ShieldAI vCISO's training programs.
 // AI tailors the *details* (examples, scenarios, emphasis) per company, but the
 // curriculum structure and core topics come from here — giving consistency and
 // citable credibility (CISA Cyber Guidance, NIST IR 7621, StopRansomware).

@@ -59,7 +59,7 @@ export async function fetchSlackChannels({ accessToken }) {
     if (!json.ok) throw new Error(`Slack conversations.list failed: ${json.error}`);
     // The bot only sees channels it's been invited to (or public ones, if
     // the channels:read scope alone was granted) — that's Slack's own
-    // access model, not a filter ShieldAI applies.
+    // access model, not a filter ShieldAI vCISO applies.
     channels.push(...(json.channels || []).map(c => ({ id: c.id, name: c.name })));
     cursor = json.response_metadata?.next_cursor || null;
   } while (cursor);
@@ -75,7 +75,7 @@ export async function respondToSlack({ responseUrl, text }) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ replace_original: true, text }),
-  }).catch(() => {}); // best-effort — the action already applied in ShieldAI regardless
+  }).catch(() => {}); // best-effort — the action already applied in ShieldAI vCISO regardless
 }
 
 // ── Microsoft Teams ──────────────────────────────────────────────
@@ -93,7 +93,7 @@ export async function respondToSlack({ responseUrl, text }) {
 //
 // "Two-way" for Teams works differently than Slack: there's no inbound
 // interactivity endpoint, since a bare webhook URL can't receive replies.
-// Action buttons are Action.OpenUrl deep links back into ShieldAI
+// Action buttons are Action.OpenUrl deep links back into ShieldAI vCISO
 // (`?action=...&refType=...&refId=...`), handled by a page-load effect in
 // the frontend that applies the action the same way Slack's interactivity
 // handler does — "two-way" via a page load instead of a background POST.

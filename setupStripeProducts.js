@@ -1,9 +1,9 @@
 // scripts/setupStripeProducts.js
 //
-// One-time setup script: creates the ShieldAI Products & Prices in Stripe and
+// One-time setup script: creates the ShieldAI vCISO Products & Prices in Stripe and
 // prints the exact stripePriceId values to paste into tiers.js.
 //
-// This script is NEVER run automatically by ShieldAI, and running it does
+// This script is NEVER run automatically by ShieldAI vCISO, and running it does
 // nothing until YOU execute it with YOUR OWN Stripe secret key. It's the
 // "make it active" step that's deliberately left to you — see BILLING_SETUP.md.
 //
@@ -15,7 +15,7 @@
 // prints which mode it's running in so you don't do this by accident.
 //
 // Idempotent: each product is tagged with a metadata key identifying which
-// ShieldAI tier/add-on it is. Re-running the script finds the existing
+// ShieldAI vCISO tier/add-on it is. Re-running the script finds the existing
 // product/price by that tag instead of creating a duplicate — safe to run
 // again if you tweak a price or just want to confirm nothing's missing.
 
@@ -41,10 +41,10 @@ const stripe = new Stripe(SECRET);
 // Free ($0) and Managed (contact-sales, not self-serve — see
 // SELF_SERVE_PAID_TIERS in tiers.js) intentionally have no Stripe price.
 const ITEMS = [
-  { kind: "tier",  id: "starter", name: "ShieldAI Starter",  priceCents: 15900 },
-  { kind: "tier",  id: "growth",  name: "ShieldAI Growth",   priceCents: 34900 },
-  { kind: "tier",  id: "guided",  name: "ShieldAI Guided",   priceCents: 69900 },
-  { kind: "addon", id: "training_delivery", name: "ShieldAI Training Delivery Add-on", priceCents: 4000 },
+  { kind: "tier",  id: "starter", name: "ShieldAI vCISO Starter",  priceCents: 15900 },
+  { kind: "tier",  id: "growth",  name: "ShieldAI vCISO Growth",   priceCents: 34900 },
+  { kind: "tier",  id: "guided",  name: "ShieldAI vCISO Guided",   priceCents: 69900 },
+  { kind: "addon", id: "training_delivery", name: "ShieldAI vCISO Training Delivery Add-on", priceCents: 4000 },
   // One price, bought with a QUANTITY, not one price id per framework. There
   // are 12 registry frameworks plus an unbounded number of admin-registered
   // custom ones, so per-framework price ids would grow forever and need a
@@ -52,7 +52,7 @@ const ITEMS = [
   // db.data.frameworkEntitlements and never becomes Stripe's business — that
   // separation is what lets billing go live without the client-facing flow
   // changing at all.
-  { kind: "addon", id: "compliance_framework", name: "ShieldAI Additional Compliance Framework", priceCents: 4999 },
+  { kind: "addon", id: "compliance_framework", name: "ShieldAI vCISO Additional Compliance Framework", priceCents: 4999 },
 ];
 
 async function findExistingProduct(metadataKey, id) {
@@ -111,6 +111,6 @@ for (const r of results) {
 console.log("\nConcretely: open tiers.js and set stripePriceId on each matching entry above.");
 console.log("Then set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET, once the webhook is");
 console.log('added — see BILLING_SETUP.md) in the running environment and restart the');
-console.log('backend. You should see "ShieldAI billing: Stripe configured." in the logs.');
+console.log('backend. You should see "ShieldAI vCISO billing: Stripe configured." in the logs.');
 console.log("\nNothing is live until you do that — this script only touches Stripe, never");
-console.log("your ShieldAI deployment or its environment variables.");
+console.log("your ShieldAI vCISO deployment or its environment variables.");

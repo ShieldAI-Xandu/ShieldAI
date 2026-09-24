@@ -224,7 +224,7 @@ Before that, just have a warm, professional conversation. Start by greeting them
 // ─────────────────────────────────────────────────────────────
 //  BRANDED DOCUMENT EXPORT HELPERS
 //  Word/PowerPoint open HTML saved with a .doc/.ppt extension. These
-//  helpers stamp the ShieldAI logo + brand palette onto exported docs so
+//  helpers stamp the ShieldAI vCISO logo + brand palette onto exported docs so
 //  generated policies and training decks look like a real product.
 // ─────────────────────────────────────────────────────────────
 const BRAND = {
@@ -458,7 +458,7 @@ function SectionLabel({ text }) {
 
 // Customer-facing badge. `model` is accepted for backward compatibility with
 // existing call sites but is intentionally never rendered or disclosed —
-// customers see only the unified "ShieldAI Mastermind" brand, never which
+// customers see only the unified "ShieldAI vCISO Mastermind" brand, never which
 // underlying engine (Claude/Gemini/GPT-4o) produced a given section.
 function AIChip({ model }) {
   return (
@@ -832,7 +832,7 @@ function useCapabilities() { return useContext(CapabilityContext); }
 
 // ── White-label branding store ──
 // Resolves the brand THIS user should see (their assigned analyst's brand, the
-// platform default, or ShieldAI's built-in default) from GET /api/branding.
+// platform default, or ShieldAI vCISO's built-in default) from GET /api/branding.
 // Implemented as a tiny subscribable store rather than a context provider so it
 // can re-skin every ShieldLockup without wrapping the app's many render
 // branches. Display-only; the advisory boundary is untouched.
@@ -3828,7 +3828,7 @@ async function downloadEvidenceBundle(report) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-// Download the ShieldAI monitoring-agent installer package (a small zip of
+// Download the ShieldAI vCISO monitoring-agent installer package (a small zip of
 // read-only collector scripts) for the given OS. Auth-protected like the
 // other downloads above, so fetch as a blob rather than a bare href.
 async function downloadAgentPackage(os) {
@@ -9982,7 +9982,7 @@ function Dashboard({ assessment, results, onReset, onOpenMastermind, programId, 
 //  MARKETING FRONT PAGE  (public-facing)
 // ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
-//  BRAND  — official ShieldAI logo (shield + neural node) & wordmark
+//  BRAND  — official ShieldAI vCISO logo (shield + neural node) & wordmark
 // ─────────────────────────────────────────────────────────────
 // `motion`: "none" (default — every in-app usage) | "tilt" (a slow, subtle
 // 3D tilt used only on marketing surfaces, so the badge catches light like a
@@ -10819,11 +10819,11 @@ function PhishRevealPage({ token }) {
 }
 
 // Public, shareable "trust page" — a client's own prospects/customers land
-// here with no ShieldAI login, via a link the client shares themselves. See
+// here with no ShieldAI vCISO login, via a link the client shares themselves. See
 // trustRoutes.js's header for exactly what's shown and why (deliberately
 // trimmed — overall posture score/level and per-framework readiness only,
 // never a control-level or vulnerability-specific detail). White-labeled
-// using the client's own branding, not ShieldAI's.
+// using the client's own branding, not ShieldAI vCISO's.
 function TrustPage({ token }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -11823,7 +11823,7 @@ function PolicyChecklistPreview() {
 // Shows a "PREVIEW TEST SITE" badge in the marketing header so investors and
 // previewers know this deployment is a test/preview, not the live product.
 // GO-LIVE: set to false (or delete the badge block in MarketingPage's nav)
-// when this build is served from the real ShieldAI website.
+// when this build is served from the real ShieldAI vCISO website.
 const SHOW_PREVIEW_SITE_BADGE = true;
 
 // One badge, used in the marketing header and in the logged-in app header
@@ -12411,7 +12411,7 @@ function MarketingPage({ onEnterApp, onLogin, onStartDemo, onRedeemCode, onOpenI
           Gemini, and ChatGPT works as a credibility signal (confirmed
           2026-07-24 — this is the one deliberate exception). Once someone is
           inside the actual product (intake chat, generation flow, dashboard,
-          policy library, etc.) they only ever see the unified "ShieldAI
+          policy library, etc.) they only ever see the unified "ShieldAI vCISO
           Mastermind" brand — see AIChip and MASTERMIND_ENGINES above, which
           intentionally never render a vendor name. If this marketing-page
           exception is ever reversed, the agent-role framing (Analyst/
@@ -13542,7 +13542,7 @@ function ChecklistScreen({ onComplete, onBack, frameworkLens = "nist", initialPr
 // ─────────────────────────────────────────────────────────────
 // HIBP has no API to enroll a domain: a human must add it at
 // haveibeenpwned.com/DomainSearch and complete their verification. This queue
-// is the bridge between that manual step and ShieldAI's state — it shows what
+// is the bridge between that manual step and ShieldAI vCISO's state — it shows what
 // is actionable right now and records what happened.
 //
 // The backend refuses to mark a domain "verified" until the client has proved
@@ -17708,7 +17708,7 @@ function EditAssessmentScreen({ assessmentId, onCancel, onSaved, onRegenerate })
 
 // ─────────────────────────────────────────────────────────────
 //  ANALYST CONSOLE — SOC-style command center (MOCKUP)
-//  The internal console where ShieldAI's cybersecurity engineers
+//  The internal console where ShieldAI vCISO's cybersecurity engineers
 //  run CISO programs for a portfolio of clients. Vision mockup:
 //  every panel shows what the platform makes possible, populated
 //  with believable sample data.
@@ -18820,7 +18820,7 @@ function AnalystDarkWebPanel({ clientId }) {
   );
 }
 
-// ── ShieldAI Mastermind — scripted diagnostic-AI responses ──
+// ── ShieldAI vCISO Mastermind — scripted diagnostic-AI responses ──
 // Context-aware canned exchanges for the demo. Each quick-action returns
 // an expert-sounding, structured response. Some are tailored per client.
 const MASTERMIND_QUICK = [
@@ -21188,7 +21188,7 @@ const INTEGRATION_PROVIDER_OPTIONS = [
 // Per-vendor setup guidance. Only CrowdStrike has a genuine point-and-click
 // outbound webhook among these — everyone else is a pull/REST API, so a
 // small script or SOAR/iPaaS workflow (Zapier, Tines, a scheduled job) has
-// to poll the vendor and forward results here. ShieldAI's adapter recognizes
+// to poll the vendor and forward results here. ShieldAI vCISO's adapter recognizes
 // each vendor's own native JSON shape (see integrationAdapters.js) so that
 // script doesn't need to reshape the data — just forward it as-is, JSON-encoded.
 const VENDOR_SETUP_NOTES = {
@@ -24891,7 +24891,7 @@ export default function ShieldAI() {
   // file ever called history.pushState, so from the browser's perspective
   // every screen the user saw was the SAME single history entry, and one
   // Back press (or an accidental trackpad back-swipe) dropped straight out
-  // to whatever page was open before ShieldAI loaded (e.g. a Google search).
+  // to whatever page was open before ShieldAI vCISO loaded (e.g. a Google search).
   const lastNavKeyRef = useRef(null);
 
   function snapshotNavState() {
@@ -25119,7 +25119,7 @@ export default function ShieldAI() {
   }, [restoringSession]);
 
   // Resolve the white-label brand for the logged-in user (their MSP's brand,
-  // platform default, or ShieldAI). Re-runs on login/logout and role change.
+  // platform default, or ShieldAI vCISO). Re-runs on login/logout and role change.
   useEffect(() => { refreshBrandForUser(user); }, [user?.id]);
 
   // Teams recommendation-action deep link (see productivityRoutes.js's

@@ -1,5 +1,5 @@
 // taskRoutes.js
-// ShieldAI task / remediation management.
+// ShieldAI vCISO task / remediation management.
 //
 // THE CORE IDEA
 // -------------
@@ -10,7 +10,7 @@
 // posture score therefore MOVES as work gets done — the closed loop that makes
 // the trend chart meaningful.
 //
-// This preserves ShieldAI's central design property: the score is always
+// This preserves ShieldAI vCISO's central design property: the score is always
 // computed by riskEngine.js from structured answers. Tasks never write a score
 // directly, and the AI never invents one.
 //
@@ -576,7 +576,7 @@ export function registerTaskRoutes(app, {
       // externalStatus/externalPriority are informational only — pulling a
       // status from the tracker never drives this task through the real
       // /complete endpoint (which has posture-scoring side effects); a human
-      // still clicks "Mark done" in ShieldAI to actually complete it, same
+      // still clicks "Mark done" in ShieldAI vCISO to actually complete it, same
       // as the Slack/Teams notification buttons never auto-complete a task.
       externalRef: null,
       evidence: [],
@@ -807,5 +807,5 @@ export function registerTaskRoutes(app, {
     res.json({ columns, summary: taskSummary(db) });
   });
 
-  console.log("ShieldAI task/remediation routes registered.");
+  console.log("ShieldAI vCISO task/remediation routes registered.");
 }

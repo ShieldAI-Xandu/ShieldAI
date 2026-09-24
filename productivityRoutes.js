@@ -5,7 +5,7 @@
 // actions — see the apply-action route below for why Teams' "two-way"
 // works differently than Slack's).
 //
-// BOUNDARY: outbound (notify()) only ever POSTS a message ShieldAI wrote —
+// BOUNDARY: outbound (notify()) only ever POSTS a message ShieldAI vCISO wrote —
 // it never reads a client's Slack history or anything else in their
 // workspace beyond the channel list needed to let them pick where to post.
 // Inbound (the interactivity endpoint) only ever triggers an action a human
@@ -350,7 +350,7 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
 
     const slackUser = payload.user?.username || payload.user?.id || "someone";
     try {
-      // Tenant isolation: resolve which ShieldAI account this click belongs
+      // Tenant isolation: resolve which ShieldAI vCISO account this click belongs
       // to from the Slack TEAM id on an active connection row — never from
       // anything inside the (attacker-shaped-if-signature-weren't-checked)
       // button value alone. Signature verification proves Slack sent this
@@ -433,5 +433,5 @@ export function registerProductivityRoutes(app, { db, requireAuth, gate, logClie
     }
   });
 
-  console.log("ShieldAI productivity integration routes registered.");
+  console.log("ShieldAI vCISO productivity integration routes registered.");
 }

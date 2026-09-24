@@ -1,11 +1,11 @@
 // evidenceRoutes.js
-// ShieldAI evidence collection.
+// ShieldAI vCISO evidence collection.
 //
 // WHY THIS EXISTS
 // ---------------
 // Auditors, insurers, and boards don't accept "we say we did it" — they want
 // proof. Evidence attaches a file or note to a task, a control, or an
-// assessment, with who uploaded it and when. Without this, ShieldAI can't
+// assessment, with who uploaded it and when. Without this, ShieldAI vCISO can't
 // support the three moments clients feel value most: audit, insurance
 // renewal, and board review.
 //
@@ -468,5 +468,5 @@ export function registerEvidenceRoutes(app, {
     });
   });
 
-  console.log("ShieldAI evidence routes registered.");
+  console.log("ShieldAI vCISO evidence routes registered.");
 }

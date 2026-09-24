@@ -1,4 +1,4 @@
-# ShieldAI Billing (Stripe) — Setup
+# ShieldAI vCISO Billing (Stripe) — Setup
 
 The billing backend, the tier-gate system, and the client-facing "Plan &
 Billing" UI are all **fully built and wired end-to-end**. Right now they run
@@ -8,12 +8,12 @@ views work off internal tier data. Nothing here is live until you complete
 the steps below — that's intentional, not a limitation.
 
 ## Security model (why it's safe)
-- **No card data ever touches ShieldAI.** All card entry happens on Stripe's
+- **No card data ever touches ShieldAI vCISO.** All card entry happens on Stripe's
   hosted Checkout and Billing Portal pages.
 - The **secret key lives only in an environment variable** (Railway's
   Variables tab in production, `.env` locally — see step 3), never in code
   or git.
-- ShieldAI only creates customers/sessions and **reads** subscription +
+- ShieldAI vCISO only creates customers/sessions and **reads** subscription +
   invoice data via the Stripe API.
 
 ## The real tier ladder (current, not the old 3-tier one)
@@ -41,7 +41,7 @@ STRIPE_SECRET_KEY=sk_test_xxxxxxxx node scripts/setupStripeProducts.js
 This creates (or reuses, if run again) a Stripe Product + recurring monthly
 Price for Starter, Growth, Guided, and the Training Delivery add-on, and
 prints the exact `stripePriceId` values to paste into `tiers.js`. It only
-touches Stripe — it never modifies ShieldAI's own code or environment. Use a
+touches Stripe — it never modifies ShieldAI vCISO's own code or environment. Use a
 **test** key first (`sk_test_...`); the script tells you which mode it ran in.
 
 **Option B — do it by hand** in the Stripe Dashboard (Test mode first):
@@ -84,7 +84,7 @@ Use **test** keys (`sk_test_…`) until you're ready to accept real payments.
 
 ## 4. Set up the webhook
 The backend exposes `POST /api/billing/webhook`. Stripe must call it so
-subscription/invoice changes sync into ShieldAI — this is what actually
+subscription/invoice changes sync into ShieldAI vCISO — this is what actually
 updates a client's tier after they pay.
 
 **Local testing** — use the Stripe CLI:
@@ -107,8 +107,8 @@ can't go unnoticed.
 ## 5. Restart the backend
 You should see both of these in the logs:
 ```
-ShieldAI billing: Stripe configured.
-ShieldAI billing routes registered.
+ShieldAI vCISO billing: Stripe configured.
+ShieldAI vCISO billing routes registered.
 ```
 If you only see the second line, `STRIPE_SECRET_KEY` isn't set where the
 running process can see it.
@@ -118,7 +118,7 @@ running process can see it.
   Billing** section, or from any upgrade prompt shown when a plan limit or
   locked feature is hit, the client clicks **Upgrade** → `POST
   /api/billing/checkout {tier}` → returns a Stripe Checkout URL → client pays
-  on Stripe → webhook fires → ShieldAI sets the client's tier + subscription
+  on Stripe → webhook fires → ShieldAI vCISO sets the client's tier + subscription
   status. Managed vCISO shows **Contact Sales** instead (mailto link), since
   it's never sold through self-serve checkout.
 - **Client buys the training add-on:** same pattern, `POST

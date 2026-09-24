@@ -269,5 +269,5 @@ export function registerFrameworkAddonRoutes(app, {
     });
   });
 
-  console.log("ShieldAI framework add-on routes registered.");
+  console.log("ShieldAI vCISO framework add-on routes registered.");
 }

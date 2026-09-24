@@ -1,6 +1,6 @@
-# ShieldAI admin CLI
+# ShieldAI vCISO admin CLI
 
-A local command-line tool for ShieldAI admin-category and super-admin staff.
+A local command-line tool for ShieldAI vCISO admin-category and super-admin staff.
 It gives Claude scoped access to fix code issues in this repo, plus a
 read/guarded-write assistant over live admin data. **Analysts cannot use
 this** — every privileged command re-checks the live server and refuses
@@ -27,7 +27,7 @@ anything that isn't `isAdmin === true`.
 
 ```
 npm install          # from the repo root, once
-npm run cli -- login # sign in with your ShieldAI admin account
+npm run cli -- login # sign in with your ShieldAI vCISO admin account
 ```
 
 This talks to `http://localhost:3001` by default. Point it at another
@@ -84,7 +84,7 @@ straight into a fix session.
 **GitHub Packages / container registry access.** Nothing is published
 anywhere today — no Dockerfile, `npm` is `private:true`, the only GitHub
 Actions workflow just commits a macOS installer binary to `main`. Revisit if
-ShieldAI ever starts publishing an npm package or a container image.
+ShieldAI vCISO ever starts publishing an npm package or a container image.
 
 **Claude-mediated admin writes.** `admin accounts-suspend`/`accounts-role`
 are direct flags on purpose — routing account suspension/role changes

@@ -11,7 +11,7 @@
 //
 // This is the first WRITE capability across every integration in this
 // codebase. Scoped narrowly on purpose: a human explicitly requests one
-// meeting via POST /api/scheduling/:id/create-meeting, ShieldAI creates
+// meeting via POST /api/scheduling/:id/create-meeting, ShieldAI vCISO creates
 // exactly that one meeting, nothing else — no calendar reads, no meeting
 // management, no recurring access beyond the single create call each time.
 // Not a relaxation of the "AI advises, humans act" boundary — a bounded,
@@ -179,7 +179,7 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClient
       // authenticated call to /finish below does that. Especially important
       // here: this is the one WRITE-capable integration in the codebase —
       // without this, an attacker could end up able to create meetings on a
-      // victim's own Zoom/Google Calendar account through ShieldAI.
+      // victim's own Zoom/Google Calendar account through ShieldAI vCISO.
       const pendingId = createPendingGrant("scheduling", {
         provider,
         accountLabel: String(accountLabel).slice(0, 200),
@@ -292,5 +292,5 @@ export function registerSchedulingRoutes(app, { db, requireAuth, gate, logClient
     res.json({ ok: true, id: c.id });
   });
 
-  console.log("ShieldAI scheduling routes registered.");
+  console.log("ShieldAI vCISO scheduling routes registered.");
 }

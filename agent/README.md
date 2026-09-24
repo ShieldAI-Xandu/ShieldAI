@@ -1,7 +1,7 @@
 # ShieldAI Agent
 
 A **read-only** posture collector that installs on a client's servers and
-endpoints, runs on a schedule, and reports security posture to the ShieldAI
+endpoints, runs on a schedule, and reports security posture to the ShieldAI vCISO
 backend. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design.
 
 ## Hard boundary (non-negotiable)

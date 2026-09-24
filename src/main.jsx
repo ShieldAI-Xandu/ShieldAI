@@ -14,7 +14,7 @@ class ErrorBoundary extends Component {
     return { error }
   }
   componentDidCatch(error, info) {
-    console.error('ShieldAI: uncaught render error', error, info)
+    console.error('ShieldAI vCISO: uncaught render error', error, info)
   }
   render() {
     if (!this.state.error) return this.props.children

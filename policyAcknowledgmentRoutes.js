@@ -1,6 +1,6 @@
 // policyAcknowledgmentRoutes.js
 // Policy acknowledgment & sign-off tracking — gap #4 from the 2026-07-25 audit.
-// ShieldAI generates real policy documents (policyCatalog.js / policyDocs),
+// ShieldAI vCISO generates real policy documents (policyCatalog.js / policyDocs),
 // but until now there was no way to prove an employee actually read one. This
 // turns a generated policy from "a document that exists" into "provable
 // compliance" — exactly what an insurer, auditor, or plaintiff's attorney
@@ -308,5 +308,5 @@ export function registerPolicyAcknowledgmentRoutes(app, { db, requireAuth, requi
     res.json({ ok: true, id: row.id, acknowledgedAt: row.acknowledgedAt });
   });
 
-  console.log("ShieldAI policy-acknowledgment routes registered.");
+  console.log("ShieldAI vCISO policy-acknowledgment routes registered.");
 }

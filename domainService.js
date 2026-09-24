@@ -1,5 +1,5 @@
 // domainService.js
-// Manages the company domains ShieldAI monitors for breach exposure, and the
+// Manages the company domains ShieldAI vCISO monitors for breach exposure, and the
 // proof-of-control workflow that has to happen before monitoring can start.
 //
 // WHY THIS EXISTS

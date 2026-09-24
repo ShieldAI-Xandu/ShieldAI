@@ -1,6 +1,6 @@
 // trustRoutes.js
 // Public, shareable "trust page" — a client can opt in to a read-only page
-// (no ShieldAI login) that shows a prospect or customer of THEIRS a trimmed,
+// (no ShieldAI vCISO login) that shows a prospect or customer of THEIRS a trimmed,
 // white-labeled view of their own security posture and chosen compliance
 // frameworks. The closest analog to Vanta's "Trust Center."
 //
@@ -236,5 +236,5 @@ export function registerTrustRoutes(app, { db, requireAuth, gate }) {
     }
   });
 
-  console.log("ShieldAI trust page routes registered.");
+  console.log("ShieldAI vCISO trust page routes registered.");
 }

@@ -11,7 +11,7 @@
 // policy; Azure's service principal is scoped to the built-in `Reader`
 // role. Both are read-only by the cloud provider's own design — this file
 // never calls a write/management API on either provider. Same underlying
-// rule directoryRoutes.js documents: ShieldAI can observe a client's cloud
+// rule directoryRoutes.js documents: ShieldAI vCISO can observe a client's cloud
 // environment, never change it.
 //
 // riskEngine.js note: none of this feeds the posture SCORE, same as
@@ -299,7 +299,7 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
     // Neither provider offers a client-callable revoke for a bare
     // access-key/service-principal credential — the org admin rotates or
     // deletes the key/secret directly in AWS/Azure. This just stops
-    // ShieldAI from using the stored copy.
+    // ShieldAI vCISO from using the stored copy.
     connection.status = "revoked";
     connection.revokedAt = nowIso();
     await db.write();
@@ -314,5 +314,5 @@ export function registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText
     res.json({ ok: true, id: connection.id });
   });
 
-  console.log("ShieldAI cloud integration routes registered.");
+  console.log("ShieldAI vCISO cloud integration routes registered.");
 }

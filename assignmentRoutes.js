@@ -153,5 +153,5 @@ export function registerAssignmentRoutes(app, { db, requireAuth, requireAdmin })
     res.json({ client: nameOf(clientId), actions: rows });
   });
 
-  console.log("ShieldAI assignment routes registered.");
+  console.log("ShieldAI vCISO assignment routes registered.");
 }

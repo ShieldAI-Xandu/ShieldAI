@@ -1,6 +1,6 @@
-# ShieldAI — Secrets & Key Rotation
+# ShieldAI vCISO — Secrets & Key Rotation
 
-## Every secret ShieldAI uses
+## Every secret ShieldAI vCISO uses
 
 Pulled from the code, not from memory — this is every `process.env` secret the
 app actually reads.
@@ -10,13 +10,13 @@ app actually reads.
 | `ANTHROPIC_API_KEY` | Anthropic | **Yes** | Mastermind + generation fall back or fail | https://console.anthropic.com/settings/keys |
 | `GEMINI_API_KEY` | Google AI Studio | No | Falls back to another provider | https://aistudio.google.com/apikey |
 | `OPENAI_API_KEY` | OpenAI | No | Falls back to another provider | https://platform.openai.com/api-keys |
-| `JWT_SECRET` | ShieldAI | **Yes** | Sessions use an insecure default | Generate a new random value |
-| `DEMO_JWT_SECRET` | ShieldAI | No | Derived from `JWT_SECRET` | Generate a new random value |
+| `JWT_SECRET` | ShieldAI vCISO | **Yes** | Sessions use an insecure default | Generate a new random value |
+| `DEMO_JWT_SECRET` | ShieldAI vCISO | No | Derived from `JWT_SECRET` | Generate a new random value |
 | `HIBP_API_KEY` | Have I Been Pwned | For breach monitoring | Monitoring reports "Not active" | https://haveibeenpwned.com/API/Key |
 | `NVD_API_KEY` | NIST NVD | No | CVE lookups ~78s instead of ~8s | https://nvd.nist.gov/developers/request-an-api-key |
 | `STRIPE_SECRET_KEY` | Stripe | For billing | Billing routes return 503 | https://dashboard.stripe.com/apikeys |
 | `STRIPE_WEBHOOK_SECRET` | Stripe | For billing | Webhooks rejected | https://dashboard.stripe.com/webhooks |
-| `CREDENTIAL_ENCRYPTION_KEY` | ShieldAI | For directory integrations | Connecting M365/Google Workspace/Okta fails (`directoryRoutes.js`) | Generate a new random value — see below |
+| `CREDENTIAL_ENCRYPTION_KEY` | ShieldAI vCISO | For directory integrations | Connecting M365/Google Workspace/Okta fails (`directoryRoutes.js`) | Generate a new random value — see below |
 | `MS_GRAPH_CLIENT_ID` / `MS_GRAPH_CLIENT_SECRET` | Microsoft (Azure AD app) | For M365 directory integration | "Microsoft 365 isn't configured" on connect | https://portal.azure.com — App registrations |
 | `GOOGLE_WORKSPACE_CLIENT_ID` / `GOOGLE_WORKSPACE_CLIENT_SECRET` | Google Cloud (OAuth client) | For Google Workspace directory integration | "Google Workspace isn't configured" on connect | https://console.cloud.google.com/apis/credentials |
 
@@ -64,7 +64,7 @@ that's intentional rather than an oversight:
 - **Each admin's own GitHub PAT** — stored at `~/.shieldai-cli/github-token`,
   never centrally, never committed, never one shared org-wide value. Every
   admin who uses the CLI mints their own fine-grained PAT scoped to just the
-  ShieldAI repo (Contents/Pull requests/Issues: read+write, Metadata: read —
+  ShieldAI vCISO repo (Contents/Pull requests/Issues: read+write, Metadata: read —
   deliberately no `packages` scope, see `cli/README.md`). This is a
   conscious departure from a shared secret: the CLI runs on laptops, not
   Railway, so "one secret in Railway Variables" doesn't apply, and a

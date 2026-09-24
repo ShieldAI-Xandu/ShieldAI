@@ -1,4 +1,4 @@
-# ShieldAI Integrations — Setup
+# ShieldAI vCISO Integrations — Setup
 
 This covers six integration families, all reachable from the client's
 **🔌 Integrations** screen (scheduling is the one exception, reachable from
@@ -41,7 +41,7 @@ deliberate, bounded exception rather than a relaxation of anything.
 
 ## Security model (why it's safe)
 
-- **Webhooks are one-way in.** ShieldAI never calls out to a connected tool.
+- **Webhooks are one-way in.** ShieldAI vCISO never calls out to a connected tool.
   The webhook response is just a receipt (`{ok, received, stored, ...}`) —
   no directive, no command.
 - **Directory connections are read-only.** Every OAuth scope requested is a
@@ -49,10 +49,10 @@ deliberate, bounded exception rather than a relaxation of anything.
   `Reports.Read.All`; Google `admin.directory.user.readonly`/
   `admin.reports.audit.readonly`/`admin.directory.customer.readonly`; Zoom
   `account:read:admin`). Okta's token is validated against a read-only API
-  call before it's ever stored. ShieldAI cannot change anything in a
+  call before it's ever stored. ShieldAI vCISO cannot change anything in a
   connected directory — there's no write path anywhere in `directoryAdapters.js`.
 - **Cloud connections are read-only by the cloud provider's own design**,
-  not just ShieldAI's convention. AWS's credential is scoped to AWS's
+  not just ShieldAI vCISO's convention. AWS's credential is scoped to AWS's
   managed `SecurityAudit` policy; Azure's service principal is scoped to
   the built-in `Reader` role — both are purpose-built, read-only grants the
   provider itself maintains. Every call `cloudAdapters.js` makes is a read
@@ -64,9 +64,9 @@ deliberate, bounded exception rather than a relaxation of anything.
   signed by default — real per-provider complexity for marginal benefit
   over a manual "Sync status" button, the same pattern directory
   connections' "Sync now" already established). Pulling a tracker's status
-  never drives a ShieldAI task through the real `/complete` endpoint (which
+  never drives a ShieldAI vCISO task through the real `/complete` endpoint (which
   has posture-scoring side effects) — a human still clicks "Complete &
-  Re-score" in ShieldAI itself.
+  Re-score" in ShieldAI vCISO itself.
 - **Scheduling creates exactly one meeting per request, nothing else.** No
   calendar reads, no meeting management, no recurring access. Uses a
   **separate, personal-user connection** from the org-admin directory
@@ -80,10 +80,10 @@ deliberate, bounded exception rather than a relaxation of anything.
 - **Slack/Teams notifications are outbound-only, and inbound actions replay
   through the same handlers the in-app buttons use.** Slack's interactivity
   endpoint is HMAC-signature-verified and resolves the calling workspace to
-  a specific ShieldAI account by its Slack team id — never trusted from the
+  a specific ShieldAI vCISO account by its Slack team id — never trusted from the
   button payload itself. Teams has no inbound endpoint at all (a bare
   webhook URL can't receive replies) — its buttons deep-link back into
-  ShieldAI instead, applying the action through a normal authenticated
+  ShieldAI vCISO instead, applying the action through a normal authenticated
   session, not a spoofable payload.
 
 ## Part 1 — Webhook tool integrations (live now)
@@ -117,7 +117,7 @@ No setup required. To test end-to-end:
 1. In the target Okta org (a free
    [Okta Developer Edition](https://developer.okta.com/signup/) org works
    for testing): Security → API → Tokens → **Create Token**.
-2. In ShieldAI: Integrations → **+ Connect Directory** → Okta → enter the
+2. In ShieldAI vCISO: Integrations → **+ Connect Directory** → Okta → enter the
    domain (`yourorg.okta.com`) and paste the token → Connect.
 3. Open the connection → **Sync now** → confirm posture findings appear.
 
@@ -175,7 +175,7 @@ consent flow for these APIs).
    read-only policy AWS itself maintains for exactly this use case.
 3. Create the user → copy the **Access Key ID** and **Secret Access Key**
    immediately (the secret is shown once).
-4. In ShieldAI: Integrations → **+ Connect Cloud** → AWS → paste both
+4. In ShieldAI vCISO: Integrations → **+ Connect Cloud** → AWS → paste both
    (region is optional, defaults to `us-east-1`) → Connect.
 5. Open the connection → **Sync now** → confirm posture findings appear.
 
@@ -195,7 +195,7 @@ is a later iteration.
 4. Subscriptions → (your subscription) → Access control (IAM) → Add role
    assignment → role **Reader** → assign to the app registration you just
    created → copy the **Subscription ID**.
-5. In ShieldAI: Integrations → **+ Connect Cloud** → Azure → paste Tenant
+5. In ShieldAI vCISO: Integrations → **+ Connect Cloud** → Azure → paste Tenant
    ID, Client ID, Client Secret, Subscription ID → Connect.
 6. Open the connection → **Sync now** → confirm posture findings appear.
    Unlike an OAuth app, there's no separate admin-consent wait — the Reader
@@ -225,7 +225,7 @@ the subscription — it doesn't fabricate a score.
 Paste-in webhook URL, same model as Okta/Trello. In the target Teams
 channel: ⋯ → Workflows → "Post to a channel when a webhook request is
 received" (or, on older setups, Connectors → Incoming Webhook) → copy the
-URL → paste into ShieldAI. Nothing to configure server-side. Note:
+URL → paste into ShieldAI vCISO. Nothing to configure server-side. Note:
 Microsoft has been deprecating classic Incoming Webhooks in favor of
 Workflows/Power Automate — both are URL-based so `sendTeamsMessage`'s
 POST-to-URL approach adapts to either, but verify current guidance since
@@ -237,7 +237,7 @@ this has been in flux.
 
 Paste-in API key + token, same model as Okta. At
 [trello.com/power-ups/admin](https://trello.com/power-ups/admin), grab an
-API key, then generate a token from it (scope: read + write). In ShieldAI:
+API key, then generate a token from it (scope: read + write). In ShieldAI vCISO:
 Integrations → **+ Connect Task Tracker** → Trello → paste both. After
 connecting, pick a board and which list is "default" vs. "done" — Trello
 has no universal status concept the way Jira/Asana do, so moving a card
@@ -283,7 +283,7 @@ distinct, not that a whole separate app was registered. No additional
 This is the **first write capability** across every integration in this
 codebase (webhooks receive only, directories/trackers-as-a-read-source read
 only). Deliberately bounded: a human clicks "Schedule," picks a time,
-ShieldAI creates exactly that one meeting — no calendar access, no
+ShieldAI vCISO creates exactly that one meeting — no calendar access, no
 recurring grant beyond the single create call each time.
 
 ## Environment variables
@@ -313,11 +313,11 @@ provider's client id+secret, that provider's "Connect" button returns
 
 You should see these lines in the server logs:
 ```
-ShieldAI directory integration routes registered.
-ShieldAI cloud integration routes registered.
-ShieldAI productivity integration routes registered.
-ShieldAI task tracker integration routes registered.
-ShieldAI scheduling routes registered.
+ShieldAI vCISO directory integration routes registered.
+ShieldAI vCISO cloud integration routes registered.
+ShieldAI vCISO productivity integration routes registered.
+ShieldAI vCISO task tracker integration routes registered.
+ShieldAI vCISO scheduling routes registered.
 ```
 That confirms the routes are mounted regardless of which env vars are set —
 it doesn't mean any provider is actually configured yet.
@@ -331,7 +331,7 @@ it doesn't mean any provider is actually configured yet.
 - **Task trackers:** "Sync to Jira/Asana/Trello" creates a ticket once,
   storing `task.externalRef`. "Sync status" pulls current
   status/priority back into that same field — informational only, never
-  auto-completing the ShieldAI task.
+  auto-completing the ShieldAI vCISO task.
 - **Slack/Teams (outbound):** something becomes client-visible (a
   recommendation is proposed, a task completes, a phishing campaign sends,
   a policy is assigned) → `notify(db, {...})` (`notificationDispatch.js`) →
@@ -340,7 +340,7 @@ it doesn't mean any provider is actually configured yet.
   buttons instead, since a bare webhook URL can't receive replies.
 - **Slack (inbound — button click):** signed POST to
   `/api/productivity/slack/interactivity` → signature verified → workspace
-  resolved to a ShieldAI account by Slack team id → same recommendation
+  resolved to a ShieldAI vCISO account by Slack team id → same recommendation
   decision/complete logic the in-app buttons use → Slack's message updated
   via `response_url`.
 - **Teams (inbound — deep link):** the button opens

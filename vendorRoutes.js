@@ -253,5 +253,5 @@ Return ONLY valid, minified JSON — no markdown fences, no commentary — in ex
     res.json({ queue });
   });
 
-  console.log("ShieldAI vendor-risk-management routes registered.");
+  console.log("ShieldAI vCISO vendor-risk-management routes registered.");
 }

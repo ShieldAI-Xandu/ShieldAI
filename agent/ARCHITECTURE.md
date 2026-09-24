@@ -1,11 +1,11 @@
-# ShieldAI Monitoring Agent — Architecture
+# ShieldAI vCISO Monitoring Agent — Architecture
 
 ## What it is
 A lightweight, **transparent** posture-collection agent installed on a client's
 servers and endpoints. It is built from native scripts (PowerShell on Windows,
 Bash on Linux/macOS) so a client's own IT team can read every line and know
 exactly what runs on their machines. It runs on a schedule as a native OS
-service, collects security posture, and reports to the ShieldAI backend.
+service, collects security posture, and reports to the ShieldAI vCISO backend.
 
 ## Roles & boundaries (FOUNDATIONAL — enforced, not just intended)
 This separation is a hard architectural rule. No component may be built in a way
@@ -60,7 +60,7 @@ and macOS):
   - macOS: `/Applications/*.app` bundles, versions read from each Info.plist.
   The list is capped (~200 entries) to keep report payloads reasonable.
 
-  **Why this exists:** it feeds ShieldAI's CVE matching. The backend turns each
+  **Why this exists:** it feeds ShieldAI vCISO's CVE matching. The backend turns each
   `name + version` into a descriptor and queries the live NIST NVD, so a client's
   real installed software drives their vulnerability exposure — not just the OS
   version or assessment answers. This is **read-only**: the collector only reads
@@ -99,7 +99,7 @@ and macOS):
    agent-send (curl/Invoke-RestMethod)                               │
         │  POST /api/agent/report   (Bearer = agent token)           │
         ▼                                                             │
-[ ShieldAI Backend (Express + lowdb) ]                               │
+[ ShieldAI vCISO Backend (Express + lowdb) ]                               │
    requireAgent middleware validates the agent token ◄───────────────┘
         │  stores AgentReport, updates Agent.lastSeen, computes deltas
         ▼
