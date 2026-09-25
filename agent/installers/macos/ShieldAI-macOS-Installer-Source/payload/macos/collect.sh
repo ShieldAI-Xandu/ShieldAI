@@ -20,7 +20,7 @@
 # Pure bash + built-in macOS utilities. Uses `plutil`/`python3` only if present.
 
 set -u
-AGENT_VERSION="1.3.0"
+AGENT_VERSION="1.4.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -62,7 +62,20 @@ add_event() {
   obj+="\"type\":$(json_escape "$3"),\"message\":$(json_escape "$4"),\"raw\":null}"
   EVENTS_JSON="${EVENTS_JSON:+$EVENTS_JSON,}$obj"
 }
+# Like add_event but with a stable eventKey (server drops a re-reported one),
+# the occurrence's own timestamp, and a small metadata-only raw object.
+# args: source severity type message ts eventKey raw_json
+add_event_k() {
+  local obj
+  obj="{\"ts\":$(json_escape "${5:-$NOW_UTC}"),\"eventKey\":$(json_escape "$6"),\"source\":$(json_escape "$1"),"
+  obj+="\"severity\":$(json_escape "$2"),\"type\":$(json_escape "$3"),\"message\":$(json_escape "$4"),\"raw\":${7:-null}}"
+  EVENTS_JSON="${EVENTS_JSON:+$EVENTS_JSON,}$obj"
+}
 have() { command -v "$1" >/dev/null 2>&1; }
+# Third-party AV products found on the host: their detection history is not
+# readable locally, so they feed the "unknown" verdict in section 5a.
+TP_TOOLS=""
+add_tool_tp() { add_tool "$1"; TP_TOOLS="${TP_TOOLS:+$TP_TOOLS, }$1"; }
 
 # ── host info ─────────────────────────────────────────────────
 HOSTNAME_VAL="$(scutil --get ComputerName 2>/dev/null || hostname 2>/dev/null || echo unknown)"
@@ -140,11 +153,11 @@ else
     "Could not confirm XProtect presence." "10"
 fi
 # Third-party EDR/AV detection
-if [ -d "/Applications/Falcon.app" ] || pgrep -q falcon 2>/dev/null; then add_tool "CrowdStrike Falcon"; fi
-if [ -d "/Applications/SentinelOne" ] || pgrep -q SentinelAgent 2>/dev/null; then add_tool "SentinelOne"; fi
-if [ -d "/Applications/Sophos Endpoint.app" ] || pgrep -qi "Sophos" 2>/dev/null; then add_tool "Sophos"; fi
-if [ -d "/Applications/Malwarebytes.app" ]; then add_tool "Malwarebytes"; fi
-if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon" 2>/dev/null; then add_tool "ESET"; fi
+if [ -d "/Applications/Falcon.app" ] || pgrep -q falcon 2>/dev/null; then add_tool_tp "CrowdStrike Falcon"; fi
+if [ -d "/Applications/SentinelOne" ] || pgrep -q SentinelAgent 2>/dev/null; then add_tool_tp "SentinelOne"; fi
+if [ -d "/Applications/Sophos Endpoint.app" ] || pgrep -qi "Sophos" 2>/dev/null; then add_tool_tp "Sophos"; fi
+if [ -d "/Applications/Malwarebytes.app" ]; then add_tool_tp "Malwarebytes"; fi
+if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon" 2>/dev/null; then add_tool_tp "ESET"; fi
 # Bitdefender: consumer (Bitdefender Antivirus for Mac) installs as one of a
 # few app-bundle names depending on version/edition; GravityZone Business
 # Security for Mac runs as a background agent under /Library/Bitdefender
@@ -153,7 +166,50 @@ if [ -d "/Applications/ESET Endpoint Security.app" ] || pgrep -qi "esets_daemon"
 if [ -d "/Applications/Bitdefender Antivirus for Mac.app" ] || [ -d "/Applications/Bitdefender.app" ] \
   || [ -d "/Library/Bitdefender" ] || pgrep -qi "bitdefender" 2>/dev/null \
   || pgrep -qi "epsecurityd" 2>/dev/null || pgrep -qi "bdservicehost" 2>/dev/null; then
-  add_tool "Bitdefender"
+  add_tool_tp "Bitdefender"
+fi
+
+# ── 5a. Malware detections the endpoint's AV has ALREADY logged ─
+# Read-only: reads Apple's XProtect Remediator entries from the unified log
+# (last 7 days). Never scans; only time + a checksum key leave the machine,
+# not the log text. A "none found" result is only reported as clean if the log
+# query returned XProtect activity at all (proves we are looking at the right
+# stream); otherwise the verdict is "unknown", never "pass".
+#
+# NOTE: the XProtect subsystem name and the hit patterns below are best-effort
+# and UNVERIFIED against a live Mac (this was written without one). Third-party
+# AV products (Falcon, SentinelOne, Sophos, Malwarebytes, ESET, Bitdefender)
+# expose detections only in their own console, so they are reported as
+# unreadable rather than assumed clean.
+AV_DET=0; XP_READABLE=0
+run_limited() { local secs="$1"; shift; have perl || return 127; perl -e 'alarm shift; exec @ARGV' "$secs" "$@"; }
+XP_HIT_RE='(found|detected) (a )?(threat|malware|infection)|"detected"[[:space:]]*:[[:space:]]*true|remediation (succeeded|complete)'
+if have log; then
+  XP_OUT="$(run_limited 90 log show --last 7d --style compact --predicate 'subsystem == "com.apple.XProtectFramework.PluginAPI"' 2>/dev/null)"; XP_RC=$?
+  XP_LINES="$(sanitize_int "$(printf '%s
+' "$XP_OUT" | grep -c .)")"
+  if [ "$XP_RC" -eq 0 ] && [ "$XP_LINES" -gt 1 ]; then
+    XP_READABLE=1
+    while IFS= read -r xl; do
+      [ -z "$xl" ] && continue
+      AV_DET=$((AV_DET + 1))
+      xts="$NOW_UTC"
+      xd="$(printf '%s' "$xl" | awk '{print $1" "$2}' | cut -c1-19)"
+      xe="$(date -j -f '%Y-%m-%d %H:%M:%S' "$xd" +%s 2>/dev/null)"
+      [ -n "$xe" ] && xts="$(date -u -r "$xe" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$NOW_UTC")"
+      xk="$(printf '%s' "$xl" | cksum | awk '{print $1}')"
+      add_event_k "xprotect" "medium" "malware_detected" "XProtect Remediator logged a possible malware detection"         "$xts" "av:xprotect:$xk" "{\"confidence\":\"low\"}"
+    done <<< "$(printf '%s
+' "$XP_OUT" | grep -Ei "$XP_HIT_RE" | tail -n 25)"
+  fi
+fi
+if [ "$AV_DET" -gt 0 ]; then
+  add_check "av_threats" "Detect" "Recent malware detections" "warn" "high" "$AV_DET detection(s)"     "The endpoint's antivirus has recorded recent threat detections; review the events list." "10"
+elif [ -n "$TP_TOOLS" ] || [ "$XP_READABLE" -eq 0 ]; then
+  UNREAD_WHO="${TP_TOOLS:-XProtect}"
+  add_check "av_threats" "Detect" "Recent malware detections" "unknown" "low" "Not determinable"     "The agent cannot read detection history from $UNREAD_WHO (not exposed locally, or the log could not be read). This is NOT a clean result; check that product's own console for detections." "10"
+else
+  add_check "av_threats" "Detect" "Recent malware detections" "pass" "info" "None recorded"     "No recent detections in the XProtect Remediator log." "10"
 fi
 
 # ── 5b. VPN client installed + tunnel active ──────────────────

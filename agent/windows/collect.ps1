@@ -32,7 +32,7 @@
 [CmdletBinding()]
 param(
   [string]$OutFile = "",
-  [string]$AgentVersion = "1.3.0"
+  [string]$AgentVersion = "1.4.0"
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -260,8 +260,23 @@ Try-Run {
 }
 
 # Active/quarantined threats → events
-Try-Run {
+#
+# Whether Defender's detection history is AUTHORITATIVE matters as much as what
+# is in it. When a third-party AV is primary, Defender sits in passive mode and
+# its history is empty or stale, so "no Defender detections" says nothing about
+# the machine. The av_threats check is therefore emitted once, in section 1d
+# below, after every readable detection source has had its say — an empty
+# history is only reported as clean when the active AV was actually readable.
+# Plain assignments (script scope) rather than inside Try-Run: its scriptblock
+# runs in a child scope, see the $boot note above.
+$mpStatus = $null
+try { $mpStatus = Get-MpComputerStatus -ErrorAction Stop } catch { }
+$defenderQueried = ($null -ne $mpStatus) -and [bool](Get-Command Get-MpThreatDetection -ErrorAction SilentlyContinue)
+$defenderPassive = $defenderQueried -and ($mpStatus.PSObject.Properties.Name -contains "AMRunningMode") -and ($mpStatus.AMRunningMode -ne "Normal")
+$defenderDetections = 0
+if ($defenderQueried) { Try-Run {
   $threats = Get-MpThreatDetection | Sort-Object InitialDetectionTime -Descending | Select-Object -First 25
+  $script:defenderDetections = @($threats).Count
 
   # Get-MpThreat carries what Get-MpThreatDetection doesn't: Defender's own
   # severity rating and whether the threat is still active (unremediated).
@@ -303,16 +318,7 @@ Try-Run {
         -Meta ([ordered]@{ threatId = $m.ThreatID; threatName = $n })
     }
   }
-  if ($threats -and $threats.Count -gt 0) {
-    Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
-      -Status "warn" -Severity "high" -Observed "$($threats.Count) detection(s)" `
-      -Detail "Defender has recorded recent threat detections; review the events list." -CisControl "10"
-  } else {
-    Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
-      -Status "pass" -Severity "info" -Observed "None recorded" `
-      -Detail "No recent Defender threat detections." -CisControl "10"
-  }
-}
+} }
 
 # ── 1c. Third-party EDR/AV fallback (service/process presence) ──
 # Some centrally-managed EDR products (CrowdStrike Falcon is the most common
@@ -366,6 +372,92 @@ if ($edrFound.Count -gt 0) {
 # If nothing is found here, no check is emitted — section 1a's
 # "av_registered"/av_realtime checks above already cover the "nothing
 # detected at all" case, and a third redundant warning would just be noise.
+
+# ── 1d. Third-party AV detection history + the av_threats verdict ──
+# Read-only: reads what a vendor's product has already logged to the Windows
+# event log; it never scans and never sends message bodies (only event ID,
+# time and provider leave the machine). Event-log wording varies by vendor and
+# version, so a third-party hit is reported as a low-confidence EVENT + a warn
+# on av_threats, never as an open vulnerability finding — the agent cannot tell
+# whether the vendor already remediated it (Defender's IsActive is the only
+# source that can).
+#
+# A source counts as READABLE only if its event-log provider is registered on
+# this machine. No readable source → av_threats is "unknown", never "pass":
+# absence of evidence is not evidence of a clean host.
+#
+# NOTE: provider names below are best-effort and UNVERIFIED against live
+# installs of each product (same caveat as $edrVendors above). SentinelOne and
+# CrowdStrike Falcon expose detections only in their cloud console, so they
+# have no entry here and always land in "unreadable".
+$avEventSources = @(
+  @{ Name = "Malwarebytes"; Providers = @("MBAMService","Malwarebytes") },
+  @{ Name = "ESET";         Providers = @("ESET Security","ekrn") },
+  @{ Name = "Sophos";       Providers = @("Sophos Anti-Virus","SAVService","Sophos Endpoint Defense") },
+  @{ Name = "Bitdefender";  Providers = @("Bitdefender Endpoint Security","Bitdefender") }
+)
+$avHitPattern = '(?i)(threat|malware|virus|trojan|ransomware|infect\w*).*(detect|found|block|remov|clean|quarantin)|(detect|found|blocked|quarantin\w*).*(threat|malware|virus|trojan|infect\w*)'
+$avMissPattern = '(?i)\bno (threats?|malware|viruses)\b|\b0 (threats?|malware)\b|not detected|no infect'
+$avSince = (Get-Date).AddDays(-7)
+
+# Which AV products are actually in charge on this host? (Defender only when
+# it isn't passive behind a third-party product.)
+$defenderAuthoritative = $defenderQueried -and (-not $defenderPassive)
+$activeThirdParty = New-Object System.Collections.ArrayList
+foreach ($k in $decoded.Keys) {
+  if ($decoded[$k].rtOn -and $k -ne "Windows Defender") { [void]$activeThirdParty.Add($k) }
+}
+foreach ($k in $edrFound) {
+  if (-not ($activeThirdParty | Where-Object { $_ -like "*$k*" -or $k -like "*$_*" })) { [void]$activeThirdParty.Add($k) }
+}
+
+$thirdPartyDetections = 0
+$readableThirdParty = New-Object System.Collections.ArrayList
+$unreadable = New-Object System.Collections.ArrayList
+foreach ($prod in $activeThirdParty) {
+  $src = $avEventSources | Where-Object { $prod -like "*$($_.Name)*" } | Select-Object -First 1
+  $provider = $null
+  if ($src) {
+    foreach ($pn in $src.Providers) {
+      if (Get-WinEvent -ListProvider $pn -ErrorAction SilentlyContinue) { $provider = $pn; break }
+    }
+  }
+  if (-not $provider) { [void]$unreadable.Add($prod); continue }
+  $evs = @()
+  try {
+    $evs = @(Get-WinEvent -FilterHashtable @{ LogName = "Application"; ProviderName = $provider; StartTime = $avSince } -MaxEvents 500 -ErrorAction Stop)
+  } catch {
+    if ("$($_.FullyQualifiedErrorId)" -notlike "NoMatchingEventsFound*") { [void]$unreadable.Add($prod); continue }
+  }
+  [void]$readableThirdParty.Add($prod)
+  $hits = @($evs | Where-Object { $_.Message -and ($_.Message -match $avHitPattern) -and ($_.Message -notmatch $avMissPattern) } | Select-Object -First 25)
+  foreach ($h in $hits) {
+    $thirdPartyDetections++
+    $hIso = ""
+    try { $hIso = $h.TimeCreated.ToUniversalTime().ToString("o") } catch { }
+    Add-Event -Source ($src.Name.ToLower()) -Severity "medium" -Type "malware_detected" `
+      -Message "$($src.Name) logged a possible malware detection (event $($h.Id))" `
+      -EventKey "av:$($src.Name.ToLower()):$($h.RecordId)" -Ts $hIso -Raw ([ordered]@{
+        provider = $provider; eventId = $h.Id; recordId = $h.RecordId; confidence = "low"
+      })
+  }
+}
+
+$totalDetections = $defenderDetections + $thirdPartyDetections
+if ($totalDetections -gt 0) {
+  Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
+    -Status "warn" -Severity "high" -Observed "$totalDetections detection(s)" `
+    -Detail "The endpoint's antivirus has recorded recent threat detections; review the events list." -CisControl "10"
+} elseif ($unreadable.Count -gt 0 -or (-not $defenderAuthoritative -and $readableThirdParty.Count -eq 0)) {
+  $who = if ($unreadable.Count -gt 0) { ($unreadable -join ", ") } else { "the active antivirus" }
+  Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
+    -Status "unknown" -Severity "low" -Observed "Not determinable" `
+    -Detail "The agent cannot read detection history from $who (its detections are not exposed locally, or its event log could not be read). This is NOT a clean result; check that product's own console for detections." -CisControl "10"
+} else {
+  Add-Check -Id "av_threats" -Category "Detect" -Title "Recent malware detections" `
+    -Status "pass" -Severity "info" -Observed "None recorded" `
+    -Detail "No recent detections in the history of the active antivirus." -CisControl "10"
+}
 
 # ── 2. Firewall ───────────────────────────────────────────────
 Try-Run {

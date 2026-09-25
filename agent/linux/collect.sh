@@ -17,7 +17,7 @@
 # string escaping; if absent, a built-in escaper is used.
 
 set -u
-AGENT_VERSION="1.3.0"
+AGENT_VERSION="1.4.0"
 OUTFILE=""
 
 while getopts "o:V:" opt; do
@@ -69,6 +69,16 @@ add_event() {
   EVENTS_JSON="${EVENTS_JSON:+$EVENTS_JSON,}$obj"
 }
 
+# Like add_event but with a stable eventKey (server drops a re-reported one),
+# the occurrence's own timestamp, and a small metadata-only raw object.
+# args: source severity type message ts eventKey raw_json
+add_event_k() {
+  local obj
+  obj="{\"ts\":$(json_escape "${5:-$NOW_UTC}"),\"eventKey\":$(json_escape "$6"),\"source\":$(json_escape "$1"),"
+  obj+="\"severity\":$(json_escape "$2"),\"type\":$(json_escape "$3"),\"message\":$(json_escape "$4"),\"raw\":${7:-null}}"
+  EVENTS_JSON="${EVENTS_JSON:+$EVENTS_JSON,}$obj"
+}
+
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # sanitize_int → clean single integer (defends against multi-line/locale quirks)
@@ -117,9 +127,11 @@ add_check "disk_encryption" "Protect" "Disk encryption" "$ENC_STATUS" "$ENC_SEV"
   "Disks holding sensitive data should be encrypted at rest." "3"
 
 # ── 3. Antivirus / EDR presence (ClamAV or vendor agents) ──────
-AV_TOOLS=""
-add_av() { AV_TOOLS="${AV_TOOLS:+$AV_TOOLS, }$1"; add_tool "$1"; }
-if have clamscan || have clamdscan; then add_av "ClamAV"; fi
+AV_TOOLS=""; TP_TOOLS=""; CLAMAV=0
+# TP_TOOLS = products whose detection history is not readable locally; they
+# feed the "unknown" verdict in section 3a.
+add_av() { AV_TOOLS="${AV_TOOLS:+$AV_TOOLS, }$1"; add_tool "$1"; [ "$1" = "ClamAV" ] || TP_TOOLS="${TP_TOOLS:+$TP_TOOLS, }$1"; }
+if have clamscan || have clamdscan; then add_av "ClamAV"; CLAMAV=1; fi
 if systemctl is-active --quiet falcon-sensor 2>/dev/null; then add_av "CrowdStrike Falcon"; fi
 if systemctl is-active --quiet sentinelone 2>/dev/null || have sentinelctl; then add_av "SentinelOne"; fi
 if systemctl is-active --quiet sophos-spl 2>/dev/null || have savdstatus; then add_av "Sophos"; fi
@@ -138,6 +150,60 @@ if [ -n "$AV_TOOLS" ]; then
 else
   add_check "av_present" "Protect" "Endpoint protection installed" "warn" "medium" "None detected" \
     "No endpoint protection product was detected on this host." "10"
+fi
+
+# ── 3a. Malware detections the endpoint's AV has ALREADY logged ─
+# Read-only: reads ClamAV's own daemon log / journal (last 7 days) for FOUND
+# lines. Never scans. Sends signature name, file path and time only. ClamAV is
+# readable only if a daemon log or journal was actually available (on-demand
+# clamscan leaves no history). Vendor agents (Falcon, SentinelOne, Sophos, ESET,
+# Wazuh, Bitdefender) expose detections only in their own console, so they are
+# reported as unreadable rather than assumed clean.
+#
+# NOTE: log locations/formats are the common distro defaults and UNVERIFIED
+# against every distro; an unusual setup lands in "unknown", never "pass".
+AV_DET=0; CLAM_READABLE=0
+CUTOFF=$(( $(date -u +%s) - 7*86400 ))
+if [ "$CLAMAV" -eq 1 ]; then
+  CLAM_TXT=""
+  for f in /var/log/clamav/clamav.log /var/log/clamav/clamd.log /var/log/clamd.scan; do
+    if [ -r "$f" ]; then CLAM_TXT+="$(tail -n 20000 "$f" 2>/dev/null)"$'
+'; CLAM_READABLE=1; fi
+  done
+  if have journalctl; then
+    CJ="$(journalctl -u clamav-daemon -u clamd@scan -u clamav-clamonacc --since '7 days ago' --no-pager -o short-iso 2>/dev/null)"
+    if [ -n "$CJ" ] && ! printf '%s' "$CJ" | grep -q '^-- No entries'; then CLAM_TXT+="$CJ"$'
+'; CLAM_READABLE=1; fi
+  fi
+  if [ "$CLAM_READABLE" -eq 1 ]; then
+    while IFS= read -r cl; do
+      [ -z "$cl" ] && continue
+      if printf '%s' "$cl" | grep -Eq '^[0-9]{4}-'; then cts_raw="${cl%% *}"; else cts_raw="$(printf '%s' "$cl" | awk '{print $1" "$2" "$3" "$4" "$5}')"; fi
+      cep="$(date -d "$cts_raw" +%s 2>/dev/null)"
+      if [ -n "$cep" ]; then
+        [ "$cep" -lt "$CUTOFF" ] && continue
+        cts="$(date -u -d "@$cep" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$NOW_UTC")"
+      else
+        cts="$NOW_UTC"
+      fi
+      csig="$(printf '%s' "$cl" | sed -E 's/^.*: ([^:]+) FOUND$/\1/')"
+      cpath="$(printf '%s' "$cl" | sed -nE 's/^.* -> (.*): [^:]+ FOUND$/\1/p; t; s/^.*[0-9:+]+ [^ ]+ [^ ]+: (.*): [^:]+ FOUND$/\1/p')"
+      AV_DET=$((AV_DET + 1))
+      ck="$(printf '%s' "$cl" | cksum | awk '{print $1}')"
+      add_event_k "clamav" "medium" "malware_detected" "ClamAV detection: $csig" "$cts" "av:clamav:$ck"         "{\"signature\":$(json_escape "$csig"),\"path\":$(json_escape "${cpath:0:200}"),\"confidence\":\"medium\"}"
+    done <<< "$(printf '%s
+' "$CLAM_TXT" | grep -E ' FOUND$' | tail -n 25)"
+  fi
+fi
+CLAM_UNREAD=""
+[ "$CLAMAV" -eq 1 ] && [ "$CLAM_READABLE" -eq 0 ] && CLAM_UNREAD="ClamAV (no daemon log or journal)"
+UNREAD_WHO="${TP_TOOLS}${TP_TOOLS:+${CLAM_UNREAD:+, }}${CLAM_UNREAD}"
+if [ "$AV_DET" -gt 0 ]; then
+  add_check "av_threats" "Detect" "Recent malware detections" "warn" "high" "$AV_DET detection(s)"     "The endpoint's antivirus has recorded recent threat detections; review the events list." "10"
+elif [ -n "$UNREAD_WHO" ] || [ -z "$AV_TOOLS" ]; then
+  add_check "av_threats" "Detect" "Recent malware detections" "unknown" "low" "Not determinable"     "The agent cannot read detection history from ${UNREAD_WHO:-any antivirus (none detected)} (not exposed locally, or its log could not be read). This is NOT a clean result; check that product's own console for detections." "10"
+else
+  add_check "av_threats" "Detect" "Recent malware detections" "pass" "info" "None recorded"     "No recent detections in the ClamAV log." "10"
 fi
 
 # ── 3b. VPN client installed + tunnel active ───────────────────

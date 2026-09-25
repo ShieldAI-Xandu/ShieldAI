@@ -76,11 +76,13 @@ const newToken = () => randomBytes(32).toString("base64url"); // URL-safe, ~43 c
 // (or installer) you actually released, alongside that collector's own version
 // constant: windows -> agent/windows/collect.ps1 ($AgentVersion),
 // linux -> agent/linux/collect.sh, macos -> agent/macOS/collect.sh (AGENT_VERSION).
-// 1.3.0 for linux/macos is a version-only alignment (no collector changes).
+// 1.4.0: all three collectors now read AV-logged detections read-only (Defender
+// passive-mode awareness, ClamAV, XProtect) and report av_threats as "unknown"
+// rather than a clean pass when the active AV's history is not readable.
 export const AGENT_LATEST_VERSIONS = {
-  windows: "1.3.0",
-  linux:   "1.3.0",
-  macos:   "1.3.0",
+  windows: "1.4.0",
+  linux:   "1.4.0",
+  macos:   "1.4.0",
 };
 
 /** Latest shipped version for an OS, or null if the OS is unknown (in which

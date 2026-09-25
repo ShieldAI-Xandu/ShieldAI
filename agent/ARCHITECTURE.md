@@ -214,6 +214,22 @@ and macOS):
 Each collector outputs the **same JSON schema** so the backend and AI treat all
 hosts uniformly.
 
+### AV-logged detections (agent 1.4.0+) — read what the AV found, never scan
+The agent does not scan. It reads detections the endpoint's own AV has already
+logged and reports them as `malware_detected` events plus an `av_threats` check.
+`av_threats` is **never "pass" unless the active AV's history was actually
+readable** — an unreadable source is `unknown` ("NOT a clean result"), and the
+server (`kindWasCovered`) refuses to auto-resolve findings on `unknown`.
+
+| OS | Readable source | Notes |
+|----|-----------------|-------|
+| Windows | Defender (`Get-MpThreat*`) — authoritative only when Defender is NOT in passive mode; findings opened for still-active threats | Third-party AV: event-log provider read only if registered (names unverified); low-confidence events + warn, never findings. CrowdStrike/SentinelOne: cloud console only -> `unknown` |
+| macOS | XProtect Remediator entries in the unified log (7d) | Clean only if the query returned XProtect activity; patterns unverified on a live Mac. Third-party AV -> `unknown` |
+| Linux | ClamAV daemon log / journal `FOUND` lines (7d) | On-demand `clamscan` leaves no history -> `unknown`. Vendor agents -> `unknown` |
+
+macOS/Linux report events only (no `findings[]`): they cannot tell whether the
+AV already remediated a hit, so they never open a vulnerability.
+
 ### Version-currency baseline (browsers)
 Each collector maintains its own minimum-supported-major-version table for
 Chrome/Edge/Firefox (the same static-threshold idiom already used for
