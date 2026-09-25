@@ -40,6 +40,7 @@ import { registerAgentRoutes } from "./agentRoutes.js";
 import { registerIntegrationRoutes } from "./integrationRoutes.js";
 import { registerDirectoryRoutes } from "./directoryRoutes.js";
 import { registerCloudRoutes } from "./cloudRoutes.js";
+import { registerSecurityVendorRoutes } from "./securityVendorRoutes.js";
 import { registerTrustRoutes } from "./trustRoutes.js";
 import { registerExtendedAssessmentRoutes } from "./extendedAssessmentRoutes.js";
 import { registerProductivityRoutes } from "./productivityRoutes.js";
@@ -2519,6 +2520,7 @@ registerAgentRoutes(app, { db, requireAuth, requireAdmin, callClaudeText, extrac
 registerIntegrationRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerDirectoryRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerCloudRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
+registerSecurityVendorRoutes(app, { db, requireAuth, gate, callClaudeText, extractJson });
 registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, express });
 registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
 registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction });

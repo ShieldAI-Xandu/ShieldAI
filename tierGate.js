@@ -146,7 +146,8 @@ export const counters = {
   // Counts webhook integrations, directory connections (M365/Google
   // Workspace/Okta/Zoom), productivity connections (Slack/Teams), task
   // tracker connections (Jira/Asana/Trello), scheduling connections
-  // (Zoom/Google Meet), and cloud connections (AWS/Azure) toward the same
+  // (Zoom/Google Meet), cloud connections (AWS/Azure), and security-vendor
+  // AV/EDR detection connections (CrowdStrike/SentinelOne/...) toward the same
   // "integrations" entitlement — one coherent "connect your tools" limit,
   // not six separate caps.
   integrations: (db, userId) =>
@@ -155,5 +156,6 @@ export const counters = {
     (db.data.productivityConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
     (db.data.taskTrackerConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
     (db.data.schedulingConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
-    (db.data.cloudConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length,
+    (db.data.cloudConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length +
+    (db.data.securityVendorConnections || []).filter(c => c.ownerUserId === userId && c.status !== "revoked").length,
 };

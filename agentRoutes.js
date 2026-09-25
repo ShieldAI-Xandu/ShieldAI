@@ -24,6 +24,7 @@ import { getTier, hasCapability, DEFAULT_TIER } from "./tiers.js";
 import { refreshClientExposure } from "./cveService.js";
 import { buildInstaller } from "./agentInstallerBuilder.js";
 import { notify } from "./notificationDispatch.js";
+import { avDetectionSourceFor } from "./securityVendorRoutes.js";
 
 // ── agent installer package (served from the source-of-truth agent/ dir) ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -198,6 +199,9 @@ export function syncAgentFindings(db, agent, report) {
   }
 
   for (const v of db.data.agentVulnerabilities) {
+    // Vendor-sourced findings (securityVendorRoutes.js) are owned by the vendor
+    // sync, not the agent report: a clean agent report must never close them.
+    if (v.source === "vendor") continue;
     if (v.agentId !== agent.id || v.status !== "open" || seen.has(v.dedupeKey)) continue;
     if (!kindWasCovered(v.kind, checks)) continue;
     v.status = "resolved"; v.resolvedAt = now; resolved++;
@@ -239,8 +243,9 @@ function pruneAgentEvents(db, agentId) {
 }
 
 // Public view of an agent (never leaks the token hash).
-function publicAgent(a, latest) {
+function publicAgent(a, latest, extra = null) {
   return {
+    ...(extra || {}),
     id: a.id, hostname: a.hostname, os: a.os, status: a.status,
     createdAt: a.createdAt, lastSeen: a.lastSeen, revokedAt: a.revokedAt || null,
     summary: latest ? summarizeReport(latest.report) : null,
@@ -740,6 +745,18 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
     }
   });
 
+  // When this endpoint's own AV detections are unreadable locally (av_threats
+  // "unknown") but the owner has a HEALTHY security-vendor connection, say so.
+  // Display only — it never changes the stored report, and a stale or erroring
+  // connection yields nothing (the endpoint stays "unknown"). Wording in the UI
+  // must not claim this specific device is enrolled in that vendor.
+  function avOverlay(a, latest) {
+    const check = (latest?.report?.checks || []).find(c => c.id === "av_threats");
+    if (!check || check.status !== "unknown") return null;
+    const src = avDetectionSourceFor(db, a);
+    return src ? { avDetectionSource: src } : null;
+  }
+
   // List my endpoints (with latest posture summary).
   app.get("/api/admin/endpoints", requireAuth, (req, res) => {
     const mine = (db.data.agents || []).filter(a => a.ownerUserId === req.userId);
@@ -747,7 +764,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       const latest = (db.data.agentReports || [])
         .filter(r => r.agentId === a.id)
         .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
-      return publicAgent(a, latest);
+      return publicAgent(a, latest, avOverlay(a, latest));
     });
     res.json(out);
   });
@@ -764,7 +781,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
       .sort((x, y) => new Date(y.ts) - new Date(x.ts))
       .slice(0, 100);
     res.json({
-      agent: publicAgent(agent, reports[0]),
+      agent: publicAgent(agent, reports[0], avOverlay(agent, reports[0])),
       latestReport: reports[0]?.report || null,
       history: reports.slice(0, 20).map(r => ({ receivedAt: r.receivedAt, summary: summarizeReport(r.report) })),
       events,
@@ -929,7 +946,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
   // also returns resolved ones.
   function publicVuln(v) {
     return {
-      id: v.id, agentId: v.agentId, kind: v.kind, severity: v.severity, title: v.title,
+      id: v.id, agentId: v.agentId, kind: v.kind, source: v.source || "agent", severity: v.severity, title: v.title,
       detail: v.detail, host: v.host, meta: v.meta || null, status: v.status,
       firstSeenAt: v.firstSeenAt, lastSeenAt: v.lastSeenAt, resolvedAt: v.resolvedAt || null,
       // The value a remediation task's findingRef.sourceId uses (endpoint-vuln).
@@ -971,7 +988,7 @@ export function registerAgentRoutes(app, { db, requireAuth, requireAdmin, callCl
           .sort((x, y) => new Date(y.receivedAt) - new Date(x.receivedAt))[0];
         const owner = (db.data.users || []).find(u => u.id === a.ownerUserId);
         return {
-          ...publicAgent(a, latest),
+          ...publicAgent(a, latest, avOverlay(a, latest)),
           owner: owner ? { id: owner.id, email: owner.email, companyName: owner.companyName } : null,
         };
       });

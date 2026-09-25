@@ -21052,6 +21052,13 @@ function EndpointDetail({ endpointId, onBack, isAnalystView }) {
                   {safeText(c.title)} {c.cisControl && <span style={{color:C.textMut,fontWeight:400,fontSize:11}}>· CIS {c.cisControl}</span>}
                 </div>
                 <div style={{color:C.textSec,fontSize:12,marginTop:3}}>{safeText(c.detail)}</div>
+                {c.id === "av_threats" && a.avDetectionSource && (
+                  <div style={{color:C.accentText,fontSize:12,marginTop:4,lineHeight:1.5}}>
+                    Your {a.avDetectionSource.vendorLabel} connection is monitoring detections for your account
+                    (last synced {timeAgo(a.avDetectionSource.lastSyncOkAt)}). Its open detections appear under
+                    vulnerabilities. Make sure this device is enrolled in {a.avDetectionSource.vendorLabel}.
+                  </div>
+                )}
                 {c.observed && <div style={{color:C.textMut,fontSize:11,marginTop:2}}>Observed: {c.observed}</div>}
               </div>
             </div>
@@ -21213,6 +21220,7 @@ const INTEGRATION_PROVIDER_OPTIONS = [
   { id: "rapid7", label: "Rapid7 InsightVM" },
   { id: "msdefender", label: "Microsoft Defender" },
   { id: "crowdstrike", label: "CrowdStrike" },
+  { id: "bitdefender", label: "Bitdefender GravityZone" },
   { id: "wazuh", label: "Wazuh" },
   { id: "splunk", label: "Splunk" },
   { id: "sarif", label: "Code scanning (SARIF)" },
@@ -21231,6 +21239,7 @@ const VENDOR_SETUP_NOTES = {
   rapid7: "No simple native webhook — InsightVM's webhook feature is experimental and requires pairing with InsightConnect. Join the vulnerability-definition and asset API calls in your script (host isn't included in the definition call alone) and POST the joined objects here.",
   msdefender: "Pull-only API — poll Microsoft Defender's SoftwareVulnerabilitiesByMachine export on a schedule and forward new rows here as-is.",
   crowdstrike: "CrowdStrike Falcon Fusion SOAR can POST here directly: create a workflow triggered on \"Detection,\" add a \"Call webhook\" action, and point it at this URL — no script needed. Falcon Spotlight vulnerability data (CVE-based) is pull-only and needs a script like the others.",
+  bitdefender: "GravityZone can push malware events here directly, no script needed and no API key stored with us. In GravityZone, call setPushEventSettings (Public API) with serviceType \"jsonRPC\", the webhook URL shown after you connect, and authorization set to \"Bearer \" followed by the token shown after you connect (used as the Authorization header value); subscribe to the av, avc, hd and antiexploit event types. Detections are matched to your enrolled endpoints by hostname. A push feed has no heartbeat, so a quiet feed is not proof of a clean endpoint.",
   wazuh: "Wazuh's Integrator module (or a custom active-response script) can POST alerts here directly — no forwarding script needed, just point it at this URL. Both vulnerability-detector alerts and generic rule-based alerts are recognized natively.",
   splunk: "Create a Webhook alert action pointed at this URL (Settings → Alert actions, no add-on required). Splunk sends the triggering search result's own fields, so if you're not using Enterprise Security's notable-event fields (urgency, dest, cve_id, ...), alias your SPL output to those names — e.g. `| eval urgency=\"high\"` — so severity/host/CVE map correctly.",
   sarif: "Any scanner that can output SARIF 2.1.0 works here — GitHub code scanning, Semgrep, Snyk Code, Trivy, CodeQL, ESLint (--format sarif), Bandit, and most others. Add a step to your CI pipeline that POSTs the resulting .sarif.json file as the request body to this URL after each scan.",
@@ -22877,6 +22886,301 @@ function TaskTrackerConnectionDetail({ connectionId, onBack }) {
   );
 }
 
+// ── Security vendor (AV/EDR) detection connections ────────────────────
+// Read-only pull of the detections a client's own AV/EDR product has already
+// recorded (securityVendorRoutes.js). Field lists and setup notes come from the
+// server's catalog (/api/security-vendors/catalog), so a new vendor needs no
+// UI change here.
+function AddSecurityVendorModal({ onClose }) {
+  const [catalog, setCatalog] = useState(null);
+  const [vendor, setVendor] = useState(null);
+  const [label, setLabel] = useState("");
+  const [values, setValues] = useState({});
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/api/security-vendors/catalog`);
+        if (!res.ok) throw new Error("Could not load the list of supported security products.");
+        const list = await res.json();
+        if (!alive) return;
+        setCatalog(list);
+        if (list.length) setVendor(list[0].id);
+      } catch (e) { if (alive) setError(e.message); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const v = catalog?.find(x => x.id === vendor);
+
+  async function connect() {
+    if (!v) return;
+    const body = { label: label.trim() || v.label };
+    for (const f of v.fields) body[f.key] = (values[f.key] ?? (f.options ? f.options[0] : "")).trim();
+    if (v.fields.some(f => !body[f.key])) { setError("All fields are required."); return; }
+    setConnecting(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/security-vendors/connect/${vendor}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Could not connect to ${v.label}.`);
+      onClose(true);
+    } catch (e) { setError(e.message); } finally { setConnecting(false); }
+  }
+
+  const inputStyle = {width:"100%",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,
+    borderRadius:8,color:C.text,fontSize:13,boxSizing:"border-box"};
+  const labelStyle = {display:"block",color:C.textSec,fontSize:12,fontWeight:600,marginBottom:6};
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:50,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={()=>onClose(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,
+        borderRadius:14,maxWidth:560,width:"100%",padding:"24px 26px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <h2 style={{color:C.text,fontSize:19,margin:0}}>Connect Antivirus / EDR</h2>
+          <button onClick={()=>onClose(false)} style={{background:"none",border:"none",color:C.textSec,
+            fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+        <p style={{color:C.textSec,fontSize:13,lineHeight:1.6,margin:"0 0 18px"}}>
+          Read-only, always. <BrandName/> only reads the malware detections your security product has
+          already recorded, so they show up next to your endpoints. It never isolates, quarantines,
+          or changes anything in that product. Use a read-only credential.
+        </p>
+
+        {!catalog && !error && <Spinner/>}
+        {catalog && (
+          <>
+            <div style={{marginBottom:16}}>
+              <label style={labelStyle}>Product</label>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {catalog.map(p=>(
+                  <button key={p.id} onClick={()=>{ setVendor(p.id); setValues({}); setError(null); }}
+                    style={{padding:"7px 13px",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer",
+                      background:vendor===p.id?`${C.accent}22`:C.surface,
+                      border:`1px solid ${vendor===p.id?C.accent+"66":C.border}`,
+                      color:vendor===p.id?C.accentText:C.textSec}}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {v && (
+              <>
+                <div style={{marginBottom:16,padding:"10px 12px",background:`${C.accent}0f`,
+                  border:`1px solid ${C.accent}33`,borderRadius:8,color:C.textSec,fontSize:12,lineHeight:1.6}}>
+                  {v.setupNote}
+                </div>
+                <div style={{marginBottom:12}}>
+                  <label style={labelStyle}>Name</label>
+                  <input value={label} onChange={e=>setLabel(e.target.value)} placeholder={`e.g. ${v.label} (all offices)`} style={inputStyle}/>
+                </div>
+                {v.fields.map(f=>(
+                  <div key={f.key} style={{marginBottom:12}}>
+                    <label style={labelStyle}>{f.label}</label>
+                    {f.options ? (
+                      <select value={values[f.key] ?? f.options[0]} onChange={e=>setValues({ ...values, [f.key]: e.target.value })} style={inputStyle}>
+                        {f.options.map(o=><option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input type={f.secret ? "password" : "text"} value={values[f.key] || ""} autoComplete="off"
+                        onChange={e=>setValues({ ...values, [f.key]: e.target.value })} style={inputStyle}/>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        )}
+
+        {error && <div style={{margin:"4px 0 12px",color:C.redText,fontSize:13}}>{error}</div>}
+        <button onClick={connect} disabled={connecting || !v}
+          style={{padding:"11px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:"#04121F",border:"none",borderRadius:9,fontSize:13.5,fontWeight:700,
+            cursor:connecting?"wait":"pointer",opacity:v?1:0.5}}>
+          {connecting ? "Connecting…" : `Connect ${v?.label || ""}`.trim()}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const VENDOR_STATUS = {
+  active:  { label: "Connected",    color: () => C.green },
+  error:   { label: "Sync failing", color: () => C.amber },
+  revoked: { label: "Revoked",      color: () => C.textMut },
+};
+
+function SecurityVendorDetail({ connectionId, onBack }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/security-vendors/${connectionId}`);
+      if (!res.ok) throw new Error("Could not load this connection.");
+      setData(await res.json());
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, [connectionId]);
+
+  function flash(msg, tone = C.greenText) {
+    setToast({ msg, tone });
+    setTimeout(() => setToast(null), 3200);
+  }
+
+  async function sync() {
+    setBusy(true); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/api/security-vendors/${connectionId}/sync`, { method: "POST" });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Sync failed.");
+      flash(`Synced: ${result.detectionCount} detection(s) in the last 30 days, ${result.newDetections} new, ${result.draftsCreated} recommendation(s) drafted.`);
+      load();
+    } catch (e) { setError(e.message); load(); } finally { setBusy(false); }
+  }
+
+  async function revoke() {
+    setConfirmRevoke(false); setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/security-vendors/${connectionId}/revoke`, { method: "POST" });
+      if (res.ok) load(); else setError("Could not revoke the connection.");
+    } finally { setBusy(false); }
+  }
+
+  async function removeConnection() {
+    setConfirmRemove(false); setBusy(true);
+    try {
+      const res = await authFetch(`${API_BASE}/api/security-vendors/${connectionId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not remove the connection.");
+      onBack();
+    } catch (e) { setError(e.message); setBusy(false); }
+  }
+
+  if (loading && !data) return <div style={{padding:40,display:"flex",justifyContent:"center"}}><Spinner/></div>;
+  if (error && !data) return <div style={{padding:24,color:C.redText}}>{error}</div>;
+
+  const c = data;
+  const st = VENDOR_STATUS[c.status] || VENDOR_STATUS.revoked;
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{padding:"6px 14px",background:"none",
+          border:`1px solid ${C.border}`,borderRadius:6,color:C.textSec,fontSize:12,cursor:"pointer"}}>
+          ← Back to integrations
+        </button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          {c.status !== "revoked" && (
+            <button onClick={()=>setConfirmRevoke(true)} disabled={busy}
+              style={{padding:"6px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}40`,
+                borderRadius:6,color:C.amberText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+              Revoke
+            </button>
+          )}
+          <button onClick={()=>setConfirmRemove(true)} disabled={busy}
+            style={{padding:"6px 14px",background:`${C.red}12`,border:`1px solid ${C.red}40`,
+              borderRadius:6,color:C.redText,fontSize:12,fontWeight:600,cursor:busy?"wait":"pointer"}}>
+            Remove
+          </button>
+        </div>
+      </div>
+      {toast && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:`${toast.tone}18`,
+          border:`1px solid ${toast.tone}44`,borderRadius:8,color:toast.tone,fontSize:13,fontWeight:600}}>
+          {toast.msg}
+        </div>
+      )}
+      {error && <div style={{marginBottom:14,color:C.redText,fontSize:13}}>{error}</div>}
+
+      <Card style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:14,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+              <span style={{color:C.text,fontWeight:700,fontSize:18}}>{c.label}</span>
+              <Badge label={st.label} color={st.color()}/>
+            </div>
+            <div style={{color:C.textSec,fontSize:13}}>
+              {c.vendorLabel}{c.accountLabel ? ` · ${c.accountLabel}` : ""} · last successful sync {c.lastSyncOkAt ? timeAgo(c.lastSyncOkAt) : "never"} · {c.activeCount} open{c.reviewCount ? `, ${c.reviewCount} to review` : ""} detection(s)
+            </div>
+            {c.status === "error" && (
+              <div style={{color:C.amberText,fontSize:12.5,marginTop:6,lineHeight:1.5}}>
+                The last syncs failed{c.lastError ? ` (${safeText(c.lastError)})` : ""}. Until this recovers, detections
+                from {c.vendorLabel} are NOT being monitored. Check the credential is still valid, or reconnect.
+              </div>
+            )}
+          </div>
+          <button onClick={sync} disabled={busy || c.status === "revoked"}
+            style={{padding:"9px 16px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+              color:"#04121F",border:"none",borderRadius:9,fontSize:13,fontWeight:700,
+              cursor:(busy||c.status==="revoked")?"not-allowed":"pointer",opacity:c.status==="revoked"?0.5:1}}>
+            {busy ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      </Card>
+
+      <SectionLabel text="Detections (last 30 days)"/>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:18}}>
+        {c.detections?.length > 0 ? c.detections.map(d=>{
+          const sm = SEV_META[d.severity] || SEV_META.info;
+          return (
+            <Card key={d.id} style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <Badge label={sm.label} color={sm.color}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{color:C.text,fontSize:13,fontWeight:600}}>{safeText(d.title)}</div>
+                  <div style={{color:C.textSec,fontSize:12,marginTop:3}}>
+                    {d.host ? safeText(d.host) : "Unknown host"}
+                    {d.matchedEndpoint ? " · matched to an enrolled endpoint" : " · no matching enrolled endpoint"}
+                    {d.detectedAt ? ` · ${timeAgo(d.detectedAt)}` : ""}
+                    {d.action ? ` · ${safeText(d.action)}` : ""}
+                  </div>
+                </div>
+                <Badge label={d.status === "active" ? "Open" : d.status === "unknown" ? "Unknown" : "Closed"}
+                  color={d.status === "active" ? C.amber : C.textMut}/>
+              </div>
+            </Card>
+          );
+        }) : (
+          <Card style={{padding:"14px 16px",color:C.textSec,fontSize:13,lineHeight:1.6}}>
+            {c.lastSyncOkAt
+              ? `No detections reported by ${c.vendorLabel} in the last 30 days (as of the last successful sync).`
+              : "No successful sync yet, so nothing is known about this product's detections."}
+          </Card>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        onClose={()=>setConfirmRevoke(false)}
+        onConfirm={revoke}
+        title="Revoke this connection?"
+        message="ShieldAI vCISO will stop reading detections and delete its stored copy of the credential. Rotate or delete the API client in the vendor's console too."
+      />
+      <ConfirmDialog
+        open={confirmRemove}
+        onClose={()=>setConfirmRemove(false)}
+        onConfirm={removeConnection}
+        title="Remove this connection?"
+        message="This deletes the connection and the detections imported from it. It can't be undone."
+        confirmLabel="Remove"
+        danger
+      />
+    </div>
+  );
+}
+
 function IntegrationsScreen({ onBack }) {
   const [integrations, setIntegrations] = useState([]);
   const [directoryConnections, setDirectoryConnections] = useState([]);
@@ -22884,6 +23188,7 @@ function IntegrationsScreen({ onBack }) {
   const [taskTrackerConnections, setTaskTrackerConnections] = useState([]);
   const [schedulingConnections, setSchedulingConnections] = useState([]);
   const [cloudConnections, setCloudConnections] = useState([]);
+  const [vendorConnections, setVendorConnections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -22892,18 +23197,20 @@ function IntegrationsScreen({ onBack }) {
   const [showAddProductivity, setShowAddProductivity] = useState(false);
   const [showAddTaskTracker, setShowAddTaskTracker] = useState(false);
   const [showAddCloud, setShowAddCloud] = useState(false);
-  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker"|"scheduling"|"cloud", id }
+  const [showAddVendor, setShowAddVendor] = useState(false);
+  const [selected, setSelected] = useState(null); // { kind: "webhook"|"directory"|"productivity"|"tasktracker"|"scheduling"|"cloud"|"vendor", id }
 
   async function load() {
     setLoading(true); setError(null);
     try {
-      const [wRes, dRes, pRes, tRes, sRes, cRes] = await Promise.all([
+      const [wRes, dRes, pRes, tRes, sRes, cRes, vRes] = await Promise.all([
         authFetch(`${API_BASE}/api/integrations`),
         authFetch(`${API_BASE}/api/directory`),
         authFetch(`${API_BASE}/api/productivity`),
         authFetch(`${API_BASE}/api/tasktracker`),
         authFetch(`${API_BASE}/api/scheduling`),
         authFetch(`${API_BASE}/api/cloud`),
+        authFetch(`${API_BASE}/api/security-vendors`),
       ]);
       if (!wRes.ok) throw new Error("Could not load integrations.");
       setIntegrations(await wRes.json());
@@ -22915,6 +23222,7 @@ function IntegrationsScreen({ onBack }) {
       setTaskTrackerConnections(tRes.ok ? await tRes.json() : []);
       setSchedulingConnections(sRes.ok ? await sRes.json() : []);
       setCloudConnections(cRes.ok ? await cRes.json() : []);
+      setVendorConnections(vRes.ok ? await vRes.json() : []);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -23007,6 +23315,13 @@ function IntegrationsScreen({ onBack }) {
       </div>
     );
   }
+  if (selected?.kind === "vendor") {
+    return (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"24px 20px"}}>
+        <SecurityVendorDetail connectionId={selected.id} onBack={()=>{ setSelected(null); load(); }}/>
+      </div>
+    );
+  }
 
   const items = [
     ...integrations.map(i => ({ kind: "webhook", id: i.id, sortAt: i.lastEventAt || i.createdAt })),
@@ -23015,6 +23330,7 @@ function IntegrationsScreen({ onBack }) {
     ...taskTrackerConnections.map(c => ({ kind: "tasktracker", id: c.id, sortAt: c.connectedAt })),
     ...schedulingConnections.map(c => ({ kind: "scheduling", id: c.id, sortAt: c.connectedAt })),
     ...cloudConnections.map(c => ({ kind: "cloud", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
+    ...vendorConnections.map(c => ({ kind: "vendor", id: c.id, sortAt: c.lastSyncAt || c.connectedAt })),
   ].sort((a, b) => new Date(b.sortAt || 0) - new Date(a.sortAt || 0));
 
   return (
@@ -23024,6 +23340,7 @@ function IntegrationsScreen({ onBack }) {
       {showAddProductivity && <AddProductivityConnectionModal onClose={(didConnect)=>{ setShowAddProductivity(false); if (didConnect) load(); }}/>}
       {showAddTaskTracker && <AddTaskTrackerConnectionModal onClose={(didConnect)=>{ setShowAddTaskTracker(false); if (didConnect) load(); }}/>}
       {showAddCloud && <AddCloudConnectionModal onClose={(didConnect)=>{ setShowAddCloud(false); if (didConnect) load(); }}/>}
+      {showAddVendor && <AddSecurityVendorModal onClose={(didConnect)=>{ setShowAddVendor(false); if (didConnect) load(); }}/>}
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6,flexWrap:"wrap"}}>
         <h1 style={{color:C.text,fontSize:24,margin:0}}>Integrations</h1>
@@ -23042,6 +23359,11 @@ function IntegrationsScreen({ onBack }) {
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
               borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
             + Connect Cloud
+          </button>
+          <button onClick={()=>setShowAddVendor(true)}
+            style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            + Connect Antivirus/EDR
           </button>
           <button onClick={()=>setShowAddTaskTracker(true)}
             style={{padding:"9px 16px",background:C.surface,border:`1px solid ${C.border}`,
@@ -23095,6 +23417,11 @@ function IntegrationsScreen({ onBack }) {
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
                 borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
               + Connect Cloud
+            </button>
+            <button onClick={()=>setShowAddVendor(true)}
+              style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:9,color:C.text,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              + Connect Antivirus/EDR
             </button>
             <button onClick={()=>setShowAddTaskTracker(true)}
               style={{padding:"10px 20px",background:C.surface,border:`1px solid ${C.border}`,
@@ -23194,6 +23521,27 @@ function IntegrationsScreen({ onBack }) {
                       </div>
                       <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
                         {providerLabel} · connected {timeAgo(c.connectedAt)}
+                      </div>
+                    </div>
+                    <span style={{color:C.accentText,fontSize:12,fontWeight:600}}>View →</span>
+                  </div>
+                </Card>
+              );
+            }
+            if (item.kind === "vendor") {
+              const c = vendorConnections.find(x => x.id === item.id);
+              const st = VENDOR_STATUS[c.status] || VENDOR_STATUS.revoked;
+              return (
+                <Card key={`v:${c.id}`} style={{padding:"15px 18px",cursor:"pointer"}} onClick={()=>setSelected({ kind:"vendor", id:c.id })}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <span style={{fontSize:20}}>🛡️</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{color:C.text,fontWeight:600,fontSize:14}}>{c.label}</span>
+                        <Badge label={st.label} color={st.color()}/>
+                      </div>
+                      <div style={{color:C.textMut,fontSize:12,marginTop:3}}>
+                        {c.vendorLabel} · {c.activeCount} open{c.reviewCount ? `, ${c.reviewCount} to review` : ""} detection(s) · last synced {c.lastSyncOkAt ? timeAgo(c.lastSyncOkAt) : "never"}
                       </div>
                     </div>
                     <span style={{color:C.accentText,fontSize:12,fontWeight:600}}>View →</span>

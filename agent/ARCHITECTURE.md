@@ -230,6 +230,11 @@ server (`kindWasCovered`) refuses to auto-resolve findings on `unknown`.
 macOS/Linux report events only (no `findings[]`): they cannot tell whether the
 AV already remediated a hit, so they never open a vulnerability.
 
+Products that keep detections in a vendor cloud console (CrowdStrike, SentinelOne,
+Bitdefender, ESET, ...) are covered server-side by the read-only vendor connectors
+in `INTEGRATIONS_SETUP.md` Part 7. The endpoint's `av_threats` stays `unknown`;
+the endpoint view adds a note only while such a connection is healthy.
+
 ### Version-currency baseline (browsers)
 Each collector maintains its own minimum-supported-major-version table for
 Chrome/Edge/Firefox (the same static-threshold idiom already used for

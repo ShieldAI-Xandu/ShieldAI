@@ -28,7 +28,8 @@
 
 import { randomUUID, randomBytes, createHash } from "crypto";
 import { counters } from "./tierGate.js";
-import { normalizeIncomingFindings } from "./integrationAdapters.js";
+import { normalizeIncomingFindings, PUSH_DETECTION_PROVIDERS } from "./integrationAdapters.js";
+import { ingestVendorDetections } from "./securityVendorRoutes.js";
 
 const nowIso = () => new Date().toISOString();
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -225,6 +226,9 @@ export function registerIntegrationRoutes(app, { db, requireAuth, gate, callClau
     if (!integration) return res.status(404).json({ error: "Integration not found." });
     db.data.integrations = (db.data.integrations || []).filter(i => i.id !== integration.id);
     db.data.integrationFindings = (db.data.integrationFindings || []).filter(f => f.integrationId !== integration.id);
+    // Push-detection providers also mirrored onto endpoints (see the webhook handler).
+    db.data.vendorDetections = (db.data.vendorDetections || []).filter(d => d.connectionId !== integration.id);
+    db.data.agentVulnerabilities = (db.data.agentVulnerabilities || []).filter(v => !(v.source === "vendor" && String(v.dedupeKey).startsWith(`vendor:${integration.id}:`)));
     await db.write();
     res.json({ ok: true, id: integration.id });
   });
@@ -297,6 +301,22 @@ export function registerIntegrationRoutes(app, { db, requireAuth, gate, callClau
         existing.push(record);
         batchRecords.push(record);
         stored++;
+      }
+
+      // AV/EDR detection pushes (Bitdefender GravityZone) are also matched to the
+      // client's enrolled endpoints and mirrored as vendor-sourced vulnerabilities
+      // (same sink the polled vendors use). Push has no heartbeat, so this never
+      // makes an endpoint's av_threats "clean" -- a quiet feed is not evidence.
+      if (PUSH_DETECTION_PROVIDERS.has(integration.provider)) {
+        ingestVendorDetections(db, {
+          connection: { id: integration.id, ownerUserId: integration.ownerUserId, vendor: integration.provider, label: integration.name },
+          detections: batch.filter(f => f && f.externalId).map(f => ({
+            externalId: String(f.externalId), host: f.host || null, title: String(f.title || "Detection").slice(0, 300),
+            severity: f.severity, detectedAt: f.detectedAt || null, status: f.status || "unknown",
+            action: f.action || null, path: f.path || null,
+          })),
+          fullPoll: false,
+        });
       }
 
       // Mastermind auto-draft: turn actionable findings (medium+) into draft

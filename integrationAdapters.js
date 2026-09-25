@@ -35,6 +35,8 @@
 // script to have already converted that XML to its natural JSON-equivalent
 // shape (trivial in any language's standard library) before POSTing.
 
+import { createHash } from "crypto";
+
 // ── shared helpers ──────────────────────────────────────────────
 const CANON_SEVERITIES = new Set(["critical", "high", "medium", "low", "info"]);
 
@@ -438,8 +440,66 @@ function adaptSarif(body) {
   return out.length > 0 ? out : null;
 }
 
+// ── Bitdefender GravityZone (push) ────────────────────────────────
+// GravityZone's Event Push Service POSTs JSON-RPC `addEvents` to a webhook URL
+// the client configures once with setPushEventSettings (serviceType "jsonRPC",
+// `authorization` = the exact Authorization header value to send — the setup
+// note tells the client to use "Bearer <token>"). Preferred over a stored API
+// key because a GravityZone API key needs broad rights (Manage Networks/Users/
+// Company); a push needs no credential on our side at all.
+// Source: Bitdefender GravityZone Public API docs ("Push event JSON RPC
+// messages", "setPushEventSettings"), example payload from a search snippet —
+// NOT verified against a live tenant. Fields read defensively; unknown status
+// text maps to "unknown", never to "remediated".
+// Only the threat-detection modules become findings; firewall, registration,
+// task-status etc. events are ignored (returned as no findings).
+const BD_DETECTION_MODULES = {
+  "av": "Antimalware", "avc": "Advanced Threat Control", "hd": "HyperDetect",
+  "antiexploit": "Anti-Exploit", "exchange-malware": "Exchange malware",
+  "network-sandboxing": "Sandbox Analyzer", "malware-outbreak": "Malware outbreak",
+};
+const BD_REMEDIATED = /(delet|quarantin|disinfect|clean|block|remov|restor)/i;
+const BD_STILL_OPEN = /(ignor|fail|not (deleted|cleaned|removed|quarantined)|report(ed)? only|detected only|no action)/i;
+function adaptBitdefender(body) {
+  const events = body?.params?.events;
+  if (body?.method !== "addEvents" || !Array.isArray(events)) return null;   // not our shape
+  const out = [];
+  for (const e of events) {
+    const label = BD_DETECTION_MODULES[String(e?.module || "").toLowerCase()];
+    if (!label) continue;
+    const name = String(e.malware_name || e.threat_name || e.detection_name || "").trim();
+    const finalStatus = String(e.final_status || e.status || "").trim();
+    const status = BD_STILL_OPEN.test(finalStatus) ? "active" : BD_REMEDIATED.test(finalStatus) ? "remediated" : "unknown";
+    const host = String(e.computer_fqdn || e.computer_name || "").trim();
+    // Behavioural/exploit modules are higher-signal than a signature hit that
+    // was already deleted; an unremediated hit is high either way.
+    const severity = status === "active" ? "high"
+      : (e.module === "avc" || e.module === "hd" || e.module === "antiexploit") ? "high" : "medium";
+    // No timestamp in the identity: a later "deleted" event for the same threat on
+    // the same machine updates the SAME record (active -> remediated) instead of
+    // leaving the earlier "ignored" one open forever.
+    const basis = [e.module, e.computer_id || host, e.hash || e.file_path || "", name].join("|");
+    out.push({
+      externalId: `bd:${createHash("sha256").update(basis).digest("hex").slice(0, 32)}`,
+      title: name ? `${label}: ${name}` : `${label} detection`,
+      severity, category: "malware", host: host || null,
+      message: `Bitdefender GravityZone ${label} reported${name ? ` "${name}"` : " a detection"}${host ? ` on ${host}` : ""}${finalStatus ? `; final status: ${finalStatus}` : ""}.`,
+      cve: null,
+      // Extra fields for the endpoint-matching sink (securityVendorRoutes.js).
+      status, detectedAt: e.timestamp || null, action: finalStatus || null, path: e.file_path || null,
+      raw: { module: e.module, malware_type: e.malware_type || null, final_status: finalStatus || null, product_installed: e.product_installed || null },
+    });
+  }
+  return out;                                                             // may be [] (only non-detection events)
+}
+
+// Providers whose webhook findings are AV/EDR DETECTIONS that should also be
+// matched to enrolled endpoints (see integrationRoutes.js -> ingestVendorDetections).
+export const PUSH_DETECTION_PROVIDERS = new Set(["bitdefender"]);
+
 // ── dispatch ─────────────────────────────────────────────────────
 const VENDOR_ADAPTERS = {
+  bitdefender: adaptBitdefender,
   nessus: adaptTenable,
   qualys: adaptQualys,
   rapid7: adaptRapid7,

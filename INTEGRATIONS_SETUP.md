@@ -286,6 +286,67 @@ only). Deliberately bounded: a human clicks "Schedule," picks a time,
 ShieldAI vCISO creates exactly that one meeting — no calendar access, no
 recurring grant beyond the single create call each time.
 
+## Part 7 — Antivirus / EDR detections (read-only)
+
+The endpoint agent can only read what an AV/EDR product writes locally
+(Defender, ClamAV, XProtect). Products that keep detections in their cloud
+console (CrowdStrike, SentinelOne, Bitdefender, ESET, ...) would otherwise
+leave an endpoint's **Recent malware detections** check at `unknown`. This
+part connects to the vendor's console so those detections show up too.
+Growth and above (same `integrations` capability and connection limit as the
+rest of this document). Code: `securityVendorAdapters.js`,
+`securityVendorRoutes.js`; the Bitdefender push path is in
+`integrationAdapters.js` / `integrationRoutes.js`.
+
+**Read-only, enforced in code.** Every request goes through `makeClient()`,
+which refuses any method except GET plus an explicit per-vendor allow-list of
+read-only POSTs (the OAuth token endpoint and query-by-id reads). No response
+or remediation API is ever called: ShieldAI vCISO can observe, never isolate,
+quarantine or change anything. The client should still create a read-only
+credential (below) so the vendor's own permissions back that up.
+
+**What happens to a detection.** It is stored as a `vendorDetections` record
+(metadata only: host, title, severity, time, vendor status, file path). If its
+host matches (case-insensitive short hostname) an enrolled endpoint of the
+same client, and the vendor says it is still open, it becomes an open
+`av-detection` vulnerability on that endpoint (`source: "vendor"`, so an
+agent's clean report never auto-closes it). New medium+ detections also draft
+a recommendation for a human to review. The AI never triggers an action.
+
+**Honesty rules.** A failed or partial poll never resolves or clears anything,
+and never turns a check "clean". A connection that has not synced in 45
+minutes, or is in `error`, is not treated as a detection source. If a vendor
+gives no open/closed state (ESET), detections are shown "to review" and are not
+reported as vulnerabilities or as clean. Polled every 15 minutes (backoff on
+failure; a client who drops below Growth stops being polled) plus "Sync now".
+
+**All of these are built from vendor documentation and are NOT yet verified
+against a live tenant.** Verify each against a trial tenant before telling a
+client it works. Shape surprises are errors (the poll fails), not "no
+detections".
+
+| Vendor | Mode | Read-only credential the client creates |
+|--------|------|-------------------------------------------|
+| CrowdStrike Falcon | poll | API client with only the **Alerts: Read** scope (cloud us-1 / us-2 / eu-1) |
+| SentinelOne | poll | API token of a dedicated **Viewer**-role user; console URL must be `https://<tenant>.sentinelone.net` |
+| Microsoft Defender for Business | poll | Entra app with **SecurityAlert.Read.All** (application) + admin consent; Defender for Endpoint alerts only |
+| Sophos Central | poll | Tenant-level credential with the **Service Principal Read-Only** role (partner/org credentials are refused) |
+| ESET PROTECT | poll | Dedicated ESET Business Account API user, Integrations on, **read** access. Auth host names unverified; detections carry no hostname or remediation state, so they are review-only |
+| Bitdefender GravityZone | **push** | No credential stored. The client calls `setPushEventSettings` (`serviceType: jsonRPC`, our webhook URL, `authorization: "Bearer <token>"`, subscribe to `av`, `avc`, `hd`, `antiexploit`). Add it under Add Integration > Bitdefender GravityZone. A push has no heartbeat, so a quiet feed never marks an endpoint clean |
+
+Not built yet (no usable public API specification could be confirmed):
+Malwarebytes/ThreatDown Nebula, Huntress, Trend Micro Vision One, Webroot.
+Their endpoints stay `unknown`.
+
+Routes (all client-scoped, `requireAuth`): `GET /api/security-vendors/catalog`,
+`GET /api/security-vendors`, `GET /api/security-vendors/:id`,
+`POST /api/security-vendors/connect/:vendor` (Growth+, counts toward the
+integrations limit), `POST /api/security-vendors/:id/sync`,
+`POST /api/security-vendors/:id/revoke`, `DELETE /api/security-vendors/:id`.
+No new Railway variables: the credential is encrypted with the existing
+`CREDENTIAL_ENCRYPTION_KEY`. Tests: `node securityVendorAdapters.test.mjs`,
+`node securityVendorRoutes.test.mjs`, `node bitdefenderPush.test.mjs`.
+
 ## Environment variables
 
 | Variable | Required for | Notes |
