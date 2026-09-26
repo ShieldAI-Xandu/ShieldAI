@@ -15515,6 +15515,7 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
             { id:"frameworks", label:"Frameworks" },
             { id:"leads", label:`Leads${leadsLoaded ? ` (${leads.length})` : ""}` },
             { id:"chats", label:"💬 Chats" },
+            { id:"cli", label:"🖥️ CLI Console" },
             { id:"audit", label:"Audit Log" },
             { id:"health", label:"System Health" },
           ].map(t => {
@@ -15685,6 +15686,8 @@ function AdminPanel({ onClose, onOpenAnalyst, onViewClientApp, onOpenMastermind,
         )}
 
         {listTab === "chats" && <ChatsConsole viewerIsAdmin/>}
+
+        {listTab === "cli" && <CliConsole/>}
 
         {listTab === "audit" && (
           <div>
@@ -16876,6 +16879,241 @@ function ChatsConsole({ viewerIsAdmin }) {
 
       {sub === "team" && <TeamChat/>}
       {sub === "dms" && <DirectMessages/>}
+    </div>
+  );
+}
+
+// ── CLI Console — web parity for the terminal admin CLI (cli/) ────────
+// Phase 1: Ask (read-only NL assistant), Admin Ops (accounts/audit/health,
+// terminal-styled), Requests (reuses SupportRequestConsole as-is — the
+// terminal CLI's `requests` queue is the exact same backend data already
+// rendered there). The coding-agent (`code`) parity is a separate, larger
+// phase — not built here; see the founder-approved plan for the deferred
+// design (server-managed git checkout, SSE transcript streaming, web
+// confirm-gate). Admin/super-admin only, same as the terminal CLI.
+const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+
+function CliAskPanel() {
+  const [question, setQuestion] = useState("");
+  const [thread, setThread] = useState([]); // [{q, a, error}]
+  const [busy, setBusy] = useState(false);
+
+  async function ask() {
+    const q = question.trim();
+    if (!q || busy) return;
+    setQuestion(""); setBusy(true);
+    setThread(t => [...t, { q, a: null, error: null }]);
+    try {
+      const res = await authFetch(`${API_BASE}/api/admin/cli-console/ask`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "The assistant couldn't answer that.");
+      setThread(t => { const n = [...t]; n[n.length - 1] = { q, a: data.answer, error: null }; return n; });
+    } catch (e) {
+      setThread(t => { const n = [...t]; n[n.length - 1] = { q, a: null, error: e.message }; return n; });
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div>
+      <p style={{color:C.textSec,fontSize:12.5,margin:"0 0 12px"}}>
+        Read-only natural-language assistant over live admin data (accounts, audit log, system health) — the web
+        equivalent of <code style={{fontFamily:MONO}}>npm run cli -- ask "…"</code>. It cannot change anything.
+      </p>
+      <Card style={{padding:14,minHeight:160,marginBottom:12,fontFamily:MONO,fontSize:12.5}}>
+        {thread.length === 0 ? (
+          <div style={{color:C.textMut}}>Ask something, e.g. "which accounts are suspended?"</div>
+        ) : thread.map((t, i) => (
+          <div key={i} style={{marginBottom:14}}>
+            <div style={{color:C.accentText,fontWeight:700}}>$ {t.q}</div>
+            {t.a && <div style={{color:C.text,whiteSpace:"pre-wrap",marginTop:4}}>{t.a}</div>}
+            {t.error && <div style={{color:C.redText,marginTop:4}}>Error: {t.error}</div>}
+            {t.a === null && !t.error && <div style={{color:C.textMut,marginTop:4}}>Thinking…</div>}
+          </div>
+        ))}
+      </Card>
+      <div style={{display:"flex",gap:8}}>
+        <input value={question} onChange={e=>setQuestion(e.target.value)}
+          onKeyDown={e=>{ if (e.key === "Enter") ask(); }}
+          placeholder="Ask about accounts, audit log, or system health…" disabled={busy}
+          style={{flex:1,padding:"10px 12px",background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:8,color:C.text,fontSize:13,fontFamily:MONO}}/>
+        <button onClick={ask} disabled={busy || !question.trim()}
+          style={{padding:"10px 18px",background:`linear-gradient(135deg,${C.accent},${C.accentDm})`,
+            color:"#04121F",border:"none",borderRadius:8,fontSize:13,fontWeight:700,
+            cursor:busy?"wait":"pointer",opacity:question.trim()?1:0.6}}>
+          {busy ? "…" : "Ask"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CliAdminOpsPanel() {
+  const [view, setView] = useState("accounts"); // accounts | audit | health
+  const [accounts, setAccounts] = useState(null);
+  const [audit, setAudit] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [error, setError] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null); // {message, run}
+  const [busyId, setBusyId] = useState(null);
+
+  const loadAccounts = () => authFetch(`${API_BASE}/api/admin/accounts`).then(r=>r.json()).then(setAccounts).catch(e=>setError(e.message));
+  const loadAudit = () => authFetch(`${API_BASE}/api/admin/audit`).then(r=>r.json()).then(setAudit).catch(e=>setError(e.message));
+  const loadHealth = () => authFetch(`${API_BASE}/api/admin/system-health`).then(r=>r.json()).then(setHealth).catch(e=>setError(e.message));
+
+  useEffect(() => {
+    if (view === "accounts" && accounts === null) loadAccounts();
+    if (view === "audit" && audit === null) loadAudit();
+    if (view === "health" && health === null) loadHealth();
+  }, [view]);
+
+  async function runConfirmed(id, url, body, label) {
+    setBusyId(id); setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}${url}`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Could not ${label}.`);
+      await loadAccounts();
+    } catch (e) { setError(e.message); } finally { setBusyId(null); setConfirmAction(null); }
+  }
+
+  const toneFor = (v) => v ? C.redText : C.textSec;
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {[{id:"accounts",label:"accounts-list"},{id:"audit",label:"audit"},{id:"health",label:"system-health"}].map(t=>(
+          <button key={t.id} onClick={()=>setView(t.id)}
+            style={{padding:"6px 12px",borderRadius:6,fontSize:11.5,fontFamily:MONO,cursor:"pointer",fontWeight:600,
+              background: view===t.id ? `${C.accent}22` : "transparent",
+              border:`1px solid ${view===t.id ? C.accent : C.border}`,
+              color: view===t.id ? C.accent : C.textSec}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {error && <div style={{marginBottom:10,color:C.redText,fontSize:12.5,fontFamily:MONO}}>{error}</div>}
+
+      {view === "accounts" && (
+        accounts === null ? <Spinner/> : (
+          <Card style={{padding:0,overflow:"hidden"}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontFamily:MONO,fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                    {["email","category","tier","suspended",""].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"8px 10px",color:C.textMut,fontWeight:600}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {accounts.map(a => (
+                    <tr key={a.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                      <td style={{padding:"7px 10px",color:C.text}}>{a.email}</td>
+                      <td style={{padding:"7px 10px",color:C.textSec}}>{a.category}</td>
+                      <td style={{padding:"7px 10px",color:C.textSec}}>{a.tier}</td>
+                      <td style={{padding:"7px 10px",color:toneFor(a.suspended)}}>{a.suspended ? "yes" : "no"}</td>
+                      <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
+                        {a.category !== "superadmin" && (
+                          <>
+                            <button disabled={busyId===a.id} onClick={()=>setConfirmAction({
+                              message: `accounts-suspend ${a.email} ${!a.suspended}`,
+                              run: () => runConfirmed(a.id, `/api/admin/accounts/${a.id}/suspend`, { suspended: !a.suspended }, "update suspension"),
+                            })}
+                              style={{marginRight:6,padding:"4px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                                borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:MONO}}>
+                              {a.suspended ? "unsuspend" : "suspend"}
+                            </button>
+                            <button disabled={busyId===a.id} onClick={()=>setConfirmAction({
+                              message: `accounts-role ${a.email} admin ${!a.isAdmin}`,
+                              run: () => runConfirmed(a.id, `/api/admin/accounts/${a.id}/role`, { role:"admin", value: !a.isAdmin }, "change role"),
+                            })}
+                              style={{padding:"4px 9px",background:C.surface,border:`1px solid ${C.border}`,
+                                borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:MONO}}>
+                              {a.isAdmin ? "revoke-admin" : "make-admin"}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )
+      )}
+
+      {view === "audit" && (
+        audit === null ? <Spinner/> : (
+          <Card style={{padding:14,fontFamily:MONO,fontSize:11.5,maxHeight:480,overflowY:"auto"}}>
+            {audit.length === 0 ? <div style={{color:C.textMut}}>No admin actions recorded yet.</div> :
+              audit.map(r => (
+                <div key={r.id} style={{marginBottom:6,color:C.textSec}}>
+                  <span style={{color:C.textMut}}>[{r.at}]</span> {r.actorEmail} → <span style={{color:C.text}}>{r.action}</span>
+                  {r.detail ? ` — ${r.detail}` : ""}
+                </div>
+              ))}
+          </Card>
+        )
+      )}
+
+      {view === "health" && (
+        health === null ? <Spinner/> : (
+          <Card style={{padding:14}}>
+            <pre style={{margin:0,fontFamily:MONO,fontSize:11.5,color:C.textSec,whiteSpace:"pre-wrap"}}>
+              {JSON.stringify(health, null, 2)}
+            </pre>
+          </Card>
+        )
+      )}
+
+      <ConfirmDialog
+        open={!!confirmAction}
+        onClose={()=>setConfirmAction(null)}
+        onConfirm={()=>confirmAction?.run()}
+        title="Confirm admin action"
+        message={confirmAction?.message || ""}
+        confirmLabel="Run"
+        danger
+      />
+    </div>
+  );
+}
+
+function CliConsole() {
+  const [sub, setSub] = useState("ask");
+  const TABS = [
+    { id: "ask", label: "ask" },
+    { id: "ops", label: "admin" },
+    { id: "requests", label: "requests" },
+  ];
+  return (
+    <div>
+      <p style={{color:C.textSec,fontSize:12.5,margin:"0 0 14px"}}>
+        Web parity for the terminal admin CLI (<code style={{fontFamily:MONO}}>cli/</code>) — same backend, same
+        admin-only access. The coding-agent (<code style={{fontFamily:MONO}}>code</code>) session is still
+        terminal-only for now.
+      </p>
+      <div style={{display:"flex",gap:6,marginBottom:18}}>
+        {TABS.map(t => {
+          const on = sub === t.id;
+          return (
+            <button key={t.id} onClick={()=>setSub(t.id)}
+              style={{padding:"7px 14px",borderRadius:20,cursor:"pointer",fontSize:12.5,fontWeight:600,fontFamily:MONO,
+                background: on ? `${C.accent}22` : "transparent",
+                border:`1px solid ${on ? C.accent : C.border}`,
+                color: on ? C.accent : C.textSec}}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      {sub === "ask" && <CliAskPanel/>}
+      {sub === "ops" && <CliAdminOpsPanel/>}
+      {sub === "requests" && <SupportRequestConsole viewerIsAdmin/>}
     </div>
   );
 }

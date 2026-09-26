@@ -47,6 +47,7 @@ import { registerProductivityRoutes } from "./productivityRoutes.js";
 import { registerTaskTrackerRoutes } from "./taskTrackerRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import { registerAdminRoutes } from "./adminRoutes.js";
+import { registerCliConsoleRoutes } from "./cliConsoleRoutes.js";
 import { registerBillingRoutes } from "./billingRoutes.js";
 import { registerMastermindRoutes } from "./mastermindRoutes.js";
 import { registerAssignmentRoutes, logClientAction, analystClientIds, analystOwnsClient } from "./assignmentRoutes.js";
@@ -2525,6 +2526,7 @@ registerProductivityRoutes(app, { db, requireAuth, gate, logClientAction, expres
 registerTaskTrackerRoutes(app, { db, requireAuth, gate, logClientAction });
 registerSchedulingRoutes(app, { db, requireAuth, gate, logClientAction });
 registerAdminRoutes(app, { db, requireAdmin, registerUser });
+registerCliConsoleRoutes(app, { db, requireAdmin, callClaudeWithTools, aiLimiter });
 await registerBillingRoutes(app, { db, requireAuth, requireAdmin, express });
 registerMastermindRoutes(app, { db, requireAdmin, requireAuth, callClaudeText, callClaudeWithTools, callAI, extractJson, analystOwnsClient, analystClientIds, aiLimiter });
 registerAssignmentRoutes(app, { db, requireAuth, requireAdmin });

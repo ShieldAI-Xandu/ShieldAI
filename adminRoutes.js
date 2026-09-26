@@ -38,7 +38,7 @@ function userTier(user) {
 }
 
 // Public projection of a user for admin views (never includes passwordHash).
-function adminUserView(db, u) {
+export function adminUserView(db, u) {
   const subs = (db.data.subscriptions || []).find(s => s.userId === u.id) || null;
   const agentCount = (db.data.agents || []).filter(a => a.ownerUserId === u.id && a.status !== "revoked").length;
   return {
