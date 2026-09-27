@@ -28,6 +28,7 @@
 
 import { randomUUID, randomBytes } from "crypto";
 import { TRAINING_TOPICS } from "./trainingCatalog.js";
+import { buildModuleContentPrompt } from "./trainingContentPrompt.js";
 import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
 import { sendEmail, sendBatch, emailConfigured } from "./emailService.js";
 import { createEvidenceRecord } from "./evidenceRoutes.js";
@@ -156,23 +157,16 @@ export async function getOrGenerateModuleContent(db, { clientUserId, topicId, ca
   const company = companyContextFor(db, clientUserId);
   const companyText = `Company: ${company.name} | Industry: ${company.industry} | Employees: ${company.employees}`;
 
-  const sys = `You are a cybersecurity trainer creating presentable employee-training material for a small business. For the given module, produce (1) a set of teaching SLIDES and (2) a full scored QUIZ.
-
-Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly this shape:
-{"slides":[{"title":"","bullets":["point 1","point 2","point 3"],"speakerNotes":"1-2 sentences the presenter can say"}],"quiz":[{"question":"","options":["a","b","c","d"],"correct":0,"explanation":"why this is correct"}]}
-
-Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each slide has 2-4 bullets. Produce exactly 6 quiz questions, each with 4 options and a one-sentence explanation. Tailor examples to the company's industry. Keep text concise and presentation-friendly.`;
-
-  const usr = `${companyText}\n\nModule: ${topic.title}\nAudience: ${topic.audience}\nLearning objectives:\n${(topic.objectives || []).map(o => "- " + o).join("\n")}`;
+  const { sys, usr } = buildModuleContentPrompt(topic, companyText, { quizField: "quiz" });
 
   let slides, quiz, generatedBy = null;
   try {
     // 6 quiz questions (each with 4 options + an explanation) plus 5-7 slides
-    // with speaker notes is verbose enough to risk truncating mid-JSON at a
-    // tighter budget — observed in testing (Claude fallback response cut off
-    // mid-object, failing JSON parse and silently dropping to the plainer
-    // deterministic fallback below).
-    const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 4096 });
+    // whose bullets are now full explanatory sentences (not bare phrases) is
+    // a meaningfully larger payload than this prompt used to produce —
+    // budget generously so a real response never gets cut off mid-JSON and
+    // silently falls back to the plainer deterministic content below.
+    const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 8000 });
     const parsed = extractJson(text);
     if (!Array.isArray(parsed.slides) || !Array.isArray(parsed.quiz) || !parsed.slides.length || !parsed.quiz.length) {
       throw new Error("incomplete content");

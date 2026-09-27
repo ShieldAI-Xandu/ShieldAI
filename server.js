@@ -73,6 +73,7 @@ import { registerBrandingRoutes } from "./brandingRoutes.js";
 import { registerComplianceTrackingRoutes } from "./complianceTracking.js";
 import { registerCustomFrameworkRoutes, buildCustomFrameworkBlock } from "./customFrameworks.js";
 import { registerTrainingProgramRoutes } from "./trainingProgramRoutes.js";
+import { buildModuleContentPrompt } from "./trainingContentPrompt.js";
 import { applyPolicyEdit, applyPolicyDelete, restorePolicyVersion } from "./policyWriteOps.js";
 import { ensureVersionHistoryCollection, recordVersion, diffFields, listVersions, restoreVersion } from "./versionHistory.js";
 // Policy read-and-sign-off tracking — reuses the training product's employee
@@ -2320,21 +2321,16 @@ app.post("/api/training/module-content", requireAuth, gate.trainingDelivery(), a
     const company = program.companyContext || {};
     const companyText = `Company: ${company.name || "the business"} | Industry: ${company.industry || "general"} | Employees: ${company.employees || "small team"}`;
 
-    const sys = `You are a cybersecurity trainer creating presentable employee-training material for a small business. For the given module, produce (1) a set of teaching SLIDES and (2) a full scored QUIZ.
-
-Return ONLY valid, minified JSON (no markdown, no trailing commas) in exactly this shape:
-{"slides":[{"title":"","bullets":["point 1","point 2","point 3"],"speakerNotes":"1-2 sentences the presenter can say"}],"fullQuiz":[{"question":"","options":["a","b","c","d"],"correct":0,"explanation":"why this is correct"}]}
-
-Rules: produce 5-7 slides (title slide first, a summary/recap slide last). Each slide has 2-4 bullets. Produce exactly 6 quiz questions, each with 4 options and a one-sentence explanation. Tailor examples to the company's industry. Keep text concise and presentation-friendly.`;
-
-    const usr = `${companyText}\n\nModule: ${mod.title}\nAudience: ${mod.audience}\nLearning objectives:\n${(mod.objectives||[]).map(o=>"- "+o).join("\n")}\n${mod.realWorldScenario ? "Scenario: "+mod.realWorldScenario : ""}`;
+    const { sys, usr } = buildModuleContentPrompt(mod, companyText, { quizField: "fullQuiz" });
 
     let content;
     try {
-      // 6 quiz questions (4 options + explanation each) plus 5-7 slides with
-      // speaker notes risk truncating mid-JSON at a tighter budget (observed
-      // in testing: a fallback-provider response cut off mid-object).
-      const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 4096 });
+      // 6 quiz questions (4 options + explanation each) plus 5-7 slides whose
+      // bullets are now full explanatory sentences (not bare phrases) is a
+      // meaningfully larger payload than this prompt used to produce —
+      // budget generously so a real response never gets cut off mid-JSON
+      // and silently falls back to the short deterministic content below.
+      const { text, provider } = await callAI({ provider: "openai", system: sys, messages: [{ role: "user", content: usr }], max_tokens: 8000 });
       content = extractJson(text);
       content.generatedBy = provider;
       if (!Array.isArray(content.slides) || !Array.isArray(content.fullQuiz) || !content.slides.length || !content.fullQuiz.length) {
