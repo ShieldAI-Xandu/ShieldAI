@@ -28,9 +28,25 @@ console.log(`Keys present: NVD=${!!process.env.NVD_API_KEY} HIBP=${!!process.env
 console.log("\nEvery field the UI renders:");
 for (const svc of d.services) {
   for (const f of ["id","name","purpose","configured","required","envVar","keyUrl",
-                   "minIntervalMs","impact","degradesTo","cacheEntries","cacheTtlHours"])
+                   "impact","degradesTo","cacheEntries","cacheTtlHours"])
     ok(f in svc, `${svc.id}.${f}`);
 }
+// minIntervalMs only applies to sources that make live, per-item, rate-limited
+// calls (nvd/hibp/attackSurface). kev fetches one whole cached catalog — no
+// per-item rate limit to report — and epss/osv/attack are still unbuilt
+// (implemented:false), so neither has anything to rate-limit yet. Asserting
+// this field on every service would be asserting a shape those sources were
+// never meant to have.
+const RATE_LIMITED_SOURCES = ["nvd", "hibp", "attackSurface"];
+for (const id of RATE_LIMITED_SOURCES) {
+  ok("minIntervalMs" in d.services.find(x=>x.id===id), `${id}.minIntervalMs`);
+}
+for (const svc of d.services) {
+  if (!RATE_LIMITED_SOURCES.includes(svc.id)) {
+    ok(!("minIntervalMs" in svc), `${svc.id} has no per-item rate limit to report (not a per-item live call)`);
+  }
+}
+
 const nvd=d.services.find(x=>x.id==="nvd"), hibp=d.services.find(x=>x.id==="hibp");
 ok("worstCaseRefreshSec" in nvd, "nvd.worstCaseRefreshSec (the 'Full refresh' tile)");
 ok("domainsMonitored" in hibp && "domainsRegistered" in hibp, "hibp domain counts (the 'Domains live' tile)");
@@ -45,6 +61,13 @@ ok(d.summary.advisories.length===0, "no advisories → UI shows the green 'all c
 ok(nvd.minIntervalMs===700, "NVD rate limit drops to 700ms with a key");
 ok(nvd.worstCaseRefreshSec < 10, `full refresh now ~${nvd.worstCaseRefreshSec}s (was ~78s)`);
 
+// Letting the process exit naturally (via exitCode, not a forced
+// process.exit()) avoids a Windows/libuv race — undici's fetch() leaves
+// handles that are still settling when process.exit() tears everything down
+// abruptly, which can abort the process on a native assertion instead of
+// reporting the real exit code above. The unref'd fallback timer only fires
+// if something unexpectedly keeps the event loop alive.
 srv.close();
 console.log(fail?`\n${fail} FAILED`:"\nIntel status UI contract verified");
-process.exit(fail?1:0);
+process.exitCode = fail ? 1 : 0;
+setTimeout(() => process.exit(process.exitCode), 500).unref();
