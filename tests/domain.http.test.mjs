@@ -5,7 +5,6 @@ import db, { storeBinder, runInStore, PROD_STORE } from "../db.js";
 import { isDemoRequest } from "../demoGateway.js";
 import { requireAuth, requireAdmin } from "../auth.js";
 import { registerDomainRoutes } from "../domainRoutes.js";
-import { registerCveRoutes } from "../cveRoutes.js";
 import { analystOwnsClient } from "../assignmentRoutes.js";
 import { OWNERSHIP, HIBP_STATUS, getClientDomain } from "../domainService.js";
 
@@ -25,7 +24,6 @@ const app = express();
 app.use(express.json());
 app.use(storeBinder(isDemoRequest));
 registerDomainRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
-registerCveRoutes(app, { db, requireAuth, requireAdmin, analystOwnsClient });
 const srv = app.listen(4711);
 
 const tok = (id,email,extra={}) => jwt.sign({ userId:id, email, ...extra }, process.env.JWT_SECRET);
@@ -39,7 +37,7 @@ let fail=0; const ok=(c,m)=>{console.log((c?"  ✔ ":"  ✖ ")+m); if(!c)fail++;
 
 console.log("Client submits a domain:");
 let r = await j("GET","/api/client/domain",T.c1);
-ok(r.b.state==="none" && r.b.monitored===false, "no domain yet → 'none', not monitored");
+ok(Array.isArray(r.b.domains) && r.b.domains.length===0, "no domain yet → empty domains[]");
 ok(r.b.suggested==="acme.com", "suggests acme.com from email as a pre-fill hint");
 
 r = await j("POST","/api/client/domain",T.c1,{domain:"https://www.acme.com/pricing"});
@@ -47,10 +45,24 @@ ok(r.s===200 && r.b.domain==="acme.com", "accepts and normalizes");
 ok(r.b.monitored===false, "not monitored on submit");
 ok(r.b.instructions?.type==="TXT", "returns TXT instructions");
 ok(r.b.instructions?.value?.startsWith("shieldai-domain-verification="), "instruction has the token");
+const domainId1 = r.b.id;
+ok(!!domainId1, "response carries the domain record's own id (used by every route below)");
 
 console.log("\nPublic email domain refused:");
 r = await j("POST","/api/client/domain",T.c2,{domain:"gmail.com"});
 ok(r.s===400 && /public email provider/.test(r.b.error), "gmail.com rejected over HTTP");
+
+console.log("\nA client can register more than one domain:");
+r = await j("POST","/api/client/domain",T.c1,{domain:"acme.co.uk"});
+ok(r.s===200 && r.b.domain==="acme.co.uk", "second domain accepted, independent record");
+const domainId2 = r.b.id;
+ok(domainId2 !== domainId1, "gets its own id");
+r = await j("GET","/api/client/domain",T.c1);
+ok(r.b.domains.length===2, "GET now lists both domains");
+r = await j("DELETE",`/api/client/domain/${domainId2}`,T.c1);
+ok(r.s===200 && r.b.id===domainId2, "either domain can be removed independently");
+r = await j("GET","/api/client/domain",T.c1);
+ok(r.b.domains.length===1 && r.b.domains[0].id===domainId1, "removing one leaves the other untouched");
 
 console.log("\nCross-client isolation:");
 r = await j("GET","/api/client/domain?userId=c1",T.c2);
@@ -69,7 +81,7 @@ r = await j("GET","/api/admin/domains",T.c1);
 ok(r.s===403, "non-admin blocked from the queue");
 
 console.log("\nGATE: admin cannot mark monitoring live before ownership:");
-r = await j("POST","/api/admin/domains/c1/hibp-status",T.admin,{status:"verified"});
+r = await j("POST",`/api/admin/domains/${domainId1}/hibp-status`,T.admin,{status:"verified"});
 ok(r.s===409 && /hasn't proved domain ownership/.test(r.b.error), "409 — refuses over HTTP");
 
 console.log("\nAfter ownership passes (simulated):");
@@ -80,14 +92,14 @@ await runInStore(PROD_STORE, async () => {
 });
 r = await j("GET","/api/admin/domains",T.admin);
 ok(r.b.counts.readyToEnroll===1 && r.b.domains[0].actionable===true, "now flagged ready to enroll");
-r = await j("POST","/api/admin/domains/c1/hibp-status",T.admin,{status:"submitted",note:"added to dashboard"});
+r = await j("POST",`/api/admin/domains/${domainId1}/hibp-status`,T.admin,{status:"submitted",note:"added to dashboard"});
 ok(r.s===200 && r.b.hibpStatus==="submitted", "admin records 'submitted'");
 r = await j("GET","/api/client/domain",T.c1);
-ok(r.b.monitored===false && r.b.state==="awaiting_hibp", "client sees 'setup in progress' — NOT monitored");
-r = await j("POST","/api/admin/domains/c1/hibp-status",T.admin,{status:"verified"});
+ok(r.b.domains[0].monitored===false && r.b.domains[0].state==="awaiting_hibp", "client sees 'setup in progress' — NOT monitored");
+r = await j("POST",`/api/admin/domains/${domainId1}/hibp-status`,T.admin,{status:"verified"});
 ok(r.s===200, "admin marks verified once ownership proved");
 r = await j("GET","/api/client/domain",T.c1);
-ok(r.b.monitored===true && r.b.state==="monitored", "client now sees monitoring active");
+ok(r.b.domains[0].monitored===true && r.b.domains[0].state==="monitored", "client now sees monitoring active");
 
 console.log("\nAudit trail:");
 await runInStore(PROD_STORE, async () => {

@@ -122,12 +122,21 @@ demo demonstrates the real boundary, not a mock of it.
 
 ## Verification
 
-`isolation.test.mjs` and `e2e.test.mjs` cover: cross-store reads, concurrent
-requests in both stores, token forgery, request routing, write blocking, and the
-boot guard.
+- `isolation.test.mjs` — store-routing and token primitives: cross-store reads,
+  concurrent requests in both stores, token forgery, request routing, the boot
+  guard.
+- `sandbox.test.mjs` / `sandbox.http.test.mjs` — the per-visitor writable
+  sandbox itself: writes work and stay isolated per visitor, production stays
+  walled off, a hijacked/forged token can't claim someone else's sandbox, and
+  exiting destroys it.
+- `demoGuard.http.test.mjs` — the specific real-world-touching routes that
+  stay blocked even though everything else is writable (billing, admin,
+  agent enrollment), including the `/api/admin` blanket block's `except`
+  carve-outs for genuinely client-facing routes mounted under that prefix.
 
 ```bash
-DB_DIR=./testdata JWT_SECRET=test node e2e.test.mjs
+DB_DIR=./testdata JWT_SECRET=test node sandbox.http.test.mjs
+DB_DIR=./testdata JWT_SECRET=test node demoGuard.http.test.mjs
 ```
 
 ## Design notes

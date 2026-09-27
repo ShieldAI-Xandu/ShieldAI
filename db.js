@@ -82,7 +82,8 @@ async function openStore(filename) {
   } catch (err) {
     throw new Error(
       `Cannot create the database directory "${DB_DIR}" (${err.code}). ` +
-      `If this is a deployment, check that DB_DIR points at a mounted volume.`
+      `If this is a deployment, check that DB_DIR points at a mounted volume.`,
+      { cause: err }
     );
   }
 
@@ -94,7 +95,8 @@ async function openStore(filename) {
       `Cannot read the database file "${file}" (${err.code}). ` +
       (err.code === "EISDIR"
         ? "A directory exists at that path where a JSON file should be."
-        : "Check file permissions and that DB_DIR is correct.")
+        : "Check file permissions and that DB_DIR is correct."),
+      { cause: err }
     );
   }
 
@@ -108,7 +110,8 @@ async function openStore(filename) {
     throw new Error(
       `Cannot write to the database file "${file}" (${err.code}). ` +
       `DB_DIR="${DB_DIR}" must exist and be writable — on a PaaS this usually ` +
-      `means the volume isn't mounted at that path.`
+      `means the volume isn't mounted at that path.`,
+      { cause: err }
     );
   }
   return store;

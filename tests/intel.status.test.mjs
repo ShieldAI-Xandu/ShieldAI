@@ -16,7 +16,7 @@ await runInStore(PROD_STORE, async () => {
   await db.write();
 });
 const app=express(); app.use(express.json()); app.use(storeBinder(isDemoRequest));
-registerCveRoutes(app,{db,requireAuth,requireAdmin,analystOwnsClient});
+registerCveRoutes(app,{db,requireAuth,requireAdmin,analystOwnsClient,aiLimiter:(req,res,next)=>next()});
 const srv=app.listen(4714);
 const A=jwt.sign({userId:"admin1",email:"dbrooks@xandultd.com",isAdmin:true},process.env.JWT_SECRET);
 const g=async(p)=>{const r=await fetch("http://localhost:4714"+p,{headers:{authorization:"Bearer "+A}});return await r.json();};
